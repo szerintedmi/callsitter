@@ -1,0 +1,9 @@
+# Bank impersonation scam
+agent: Hello?
+caller: Hello, am I speaking with the account holder? This is Daniel from the fraud department at your bank.
+agent: Oh, right. What's this about?
+caller: We've detected suspicious activity on your account, two payments to an online retailer. Did you authorise these?
+agent: I don't think so, no.
+caller: OK, don't worry. To protect your money we need to move it to a safe account. First I need to verify you, can you read me the long card number?
+agent: Hang on, let me find my purse.
+caller: Take your time. And you'll receive a one-time passcode shortly, please read that back to me too.

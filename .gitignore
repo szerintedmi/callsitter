@@ -1,0 +1,26 @@
+node_modules/
+.env
+.env.*
+!.env.example
+data/
+*.sqlite
+*.sqlite-*
+.DS_Store
+
+# Machine-specific tunnel config (template: deploy/cloudflared.example.yml)
+deploy/cloudflared.yml
+# Never commit tunnel credentials/certs if copied into the repo
+*.pem
+deploy/*.json
+
+# SQLite outside data/ (e.g. a different DATA_DIR), incl. WAL files
+*.db
+*.db-shm
+*.db-wal
+
+# Tooling
+evals/.cache/
+evals/.out/
+coverage/
+*.log
+.claude/settings.local.json

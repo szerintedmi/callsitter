@@ -1,0 +1,31 @@
+# Cloudflare named tunnel -> 127.0.0.1:8787. Copy to deploy/cloudflared.yml (gitignored) and run
+# `bun run tunnel`.
+#   hooks.example.com  public, Telnyx/OpenAI webhooks + media only
+#   ui.example.com     UI, behind a Cloudflare Access application (the app also verifies the Access JWT)
+# Create with: cloudflared tunnel create scamsitter
+#              cloudflared tunnel route dns <tunnel-id> <hostname>   (use the ID: a default
+#              ~/.cloudflared/config.yml naming another tunnel wins over the name argument)
+# Credentials stay outside the repo.
+tunnel: <tunnel-id>
+credentials-file: /Users/you/.cloudflared/<tunnel-id>.json
+# origincert: /Users/you/.cloudflared/cert.pem   # if cert.pem isn't in the default location
+
+ingress:
+  # Public: only the Telnyx and OpenAI webhooks, media stream and health paths.
+  - hostname: hooks.example.com
+    path: ^/(telnyx/webhook|openai/webhook|media/.*|healthz)$
+    service: http://127.0.0.1:8787
+  - hostname: hooks.example.com
+    service: http_status:404
+  # UI: "/" and /ui/* only.
+  - hostname: ui.example.com
+    path: ^/(ui(/.*)?)?$
+    service: http://127.0.0.1:8787
+  - hostname: ui.example.com
+    service: http_status:404
+  - service: http_status:404
+
+# Optional: pin DNS resolvers if a local resolver (e.g. Tailscale) times out on tunnel DNS.
+# dns-resolver-addrs:
+#   - 1.1.1.1:53
+#   - 1.0.0.1:53

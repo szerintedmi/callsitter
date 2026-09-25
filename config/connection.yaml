@@ -1,0 +1,38 @@
+# How the call's audio reaches the voice agent. The carrier decides which path a call takes:
+# OpenAI SIP (the Telnyx number sends the call straight to gpt-live-1) or the Telnyx media stream
+# (Telnyx answers, and we relay the audio to and from Live).
+
+# OpenAI SIP: Telnyx sends the call straight to gpt-live-1 (sip:<project>@sip.api.openai.com)
+# and we steer it over a sideband. Needs OPENAI_PROJECT_ID + OPENAI_WEBHOOK_SECRET in .env.
+sip:
+  enabled: true          # false: reject SIP calls with reject_status
+  region: global         # global (sip.api.openai.com) | eu (sip-eu.api.openai.com)
+  record: true           # stereo 24 kHz WAV from the sideband's reflected audio
+  reject_status: 480     # SIP status when disabled (480 temporarily unavailable)
+  # Browser SIP test: Live says the greeting once the page reports its audio connected, or
+  # after this long (OpenAI answers before the browser can hear, so "Hello?" would be lost).
+  test_greeting_wait_ms: 3000
+
+# Telnyx media stream. Doesn't apply to SIP calls.
+media_stream:
+  codec: pcma          # pcmu | pcma (G.711 8k passthrough; UK PSTN is A-law) | l16 (16k)
+  # Telnyx noise suppression (BETA) on the caller's audio before Live hears it.
+  noise_suppression:
+    enabled: false
+    engine: Denoiser       # Denoiser ($0.002/min) | DeepFilterNet | AiCoustics ($0.003) | Krisp ($0.005)
+    direction: outbound    # Telnyx `outbound` = audio from the caller
+
+# Live (for OpenAI SIP: the accept plus the sideband) must connect within this long of the call
+# being answered, or the call is hung up.
+connect_timeout_ms: 10000
+# Ending a call waits this long for the carrier's hangup request before closing the session anyway.
+hangup_timeout_ms: 5000
+
+# What counts as speech (RMS dBFS per 20 ms frame), for the silence watchdog (call-flow.yaml)
+# and the recorded greeting. The watchdog listens to the audio because Live's caller transcripts
+# arrive 2-4 s after the words.
+speech_detection:
+  # Browser test calls: speech -20..-38, room noise and breaths -43..-65.
+  caller_dbfs: -40
+  # Live also sends faint -60..-80 dBFS noise between phrases.
+  agent_dbfs: -50

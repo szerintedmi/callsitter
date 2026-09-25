@@ -1,0 +1,7 @@
+# Genuine call from a dental surgery
+agent: Hello?
+caller: Hi, it's Sarah calling from Parkside Dental. I'm trying to reach Alex about his appointment tomorrow.
+agent: He's not available right now. Can I take a message?
+caller: Yes please, we need to move his appointment from ten to half eleven because the dentist is running late.
+agent: OK, and is there a number he can call you back on?
+caller: Sure, it's 020 7946 0321, just ask for Sarah at reception. Thanks so much.

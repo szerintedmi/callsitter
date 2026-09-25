@@ -1,0 +1,4 @@
+# Rough per-call cost estimate, shown on the call page and in the logs (not billing).
+live_usd_per_min: 0.05    # gpt-live-1, billed per second
+luna_usd_per_call: 0.01   # rough estimate ($0.10/$0.50 per 1M in/out tokens)
+jev_usd_per_mtok: 0.042   # input tokens; output is free
