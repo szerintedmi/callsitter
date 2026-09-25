@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { Hono } from "hono";
 import { sign } from "hono/jwt";
-import { readEnv, uiAuthFrom } from "../src/runtime/env";
-import { uiGuard, type UiAuth } from "../src/web/ui-guard";
+import { readEnv, adminAuthFrom } from "../src/runtime/env";
+import { adminGuard, type AdminAuth } from "../src/web/admin-guard";
 
 const TEAM = "myteam.cloudflareaccess.com";
 const AUD = "aud-tag-123";
-const UI = "scamsitter-ui.example.com";
+const ADMIN = "scamsitter-admin.example.com";
 
 async function rsaKey(kid: string) {
   const kp = (await crypto.subtle.generateKey(
@@ -43,26 +43,26 @@ function jwksServer(keys: object[]) {
   return s;
 }
 
-function appWith(auth: UiAuth, f?: typeof fetch) {
+function appWith(auth: AdminAuth, f?: typeof fetch) {
   const app = new Hono();
-  app.use("/ui/*", uiGuard(auth, { fetch: f }));
-  app.get("/ui", (c) => c.text("ui"));
-  app.get("/ui/ws", (c) => c.text("ws"));
+  app.use("/*", adminGuard(auth, { fetch: f }));
+  app.get("/", (c) => c.text("admin"));
+  app.get("/ws", (c) => c.text("ws"));
   return app;
 }
 
-const access: UiAuth = { mode: "access", uiHost: UI, teamDomain: TEAM, aud: AUD };
+const access: AdminAuth = { mode: "access", adminHost: ADMIN, teamDomain: TEAM, aud: AUD };
 const req = (app: Hono, path: string, headers: Record<string, string>) => app.request(`http://x${path}`, { headers });
 
-describe("UI guard: access mode", async () => {
+describe("admin guard: access mode", async () => {
   const k1 = await rsaKey("k1");
   const good = await sign(claims(), k1.priv, "RS256");
 
-  test("accepts a valid Access JWT on the UI host", async () => {
+  test("accepts a valid Access JWT on the admin host", async () => {
     const jw = jwksServer([k1.pub]);
-    const res = await req(appWith(access, jw.fetch), "/ui", { host: UI, "cf-access-jwt-assertion": good });
+    const res = await req(appWith(access, jw.fetch), "/", { host: ADMIN, "cf-access-jwt-assertion": good });
     expect(res.status).toBe(200);
-    expect(await res.text()).toBe("ui");
+    expect(await res.text()).toBe("admin");
   });
 
   test("rejects missing, forged, wrong-audience, wrong-issuer and expired tokens", async () => {
@@ -78,7 +78,7 @@ describe("UI guard: access mode", async () => {
       await sign(claims({ iat: nowS() - 7200, exp: nowS() - 3600 }), k1.priv, "RS256"),
     ];
     for (const t of cases) {
-      const res = await req(app, "/ui", { host: UI, ...(t ? { "cf-access-jwt-assertion": t } : {}) });
+      const res = await req(app, "/", { host: ADMIN, ...(t ? { "cf-access-jwt-assertion": t } : {}) });
       expect(res.status).toBe(403);
     }
   });
@@ -86,23 +86,23 @@ describe("UI guard: access mode", async () => {
   test("direct loopback and public hooks host are refused even with a valid token", async () => {
     const app = appWith(access, jwksServer([k1.pub]).fetch);
     for (const host of ["127.0.0.1:8787", "localhost", "hooks.example.com"]) {
-      expect((await req(app, "/ui", { host, "cf-access-jwt-assertion": good })).status).toBe(404);
+      expect((await req(app, "/", { host, "cf-access-jwt-assertion": good })).status).toBe(404);
     }
   });
 
   test("checks Origin: cross-site WebSocket upgrade is refused", async () => {
     const app = appWith(access, jwksServer([k1.pub]).fetch);
-    const h = { host: UI, "cf-access-jwt-assertion": good };
-    expect((await req(app, "/ui/ws", { ...h, origin: `https://${UI}` })).status).toBe(200);
-    expect((await req(app, "/ui/ws", { ...h, origin: "https://evil.example" })).status).toBe(403);
-    expect((await req(app, "/ui/ws", { ...h, origin: `http://${UI}` })).status).toBe(403);
-    expect((await req(app, "/ui/ws", { ...h, origin: "null" })).status).toBe(403);
+    const h = { host: ADMIN, "cf-access-jwt-assertion": good };
+    expect((await req(app, "/ws", { ...h, origin: `https://${ADMIN}` })).status).toBe(200);
+    expect((await req(app, "/ws", { ...h, origin: "https://evil.example" })).status).toBe(403);
+    expect((await req(app, "/ws", { ...h, origin: `http://${ADMIN}` })).status).toBe(403);
+    expect((await req(app, "/ws", { ...h, origin: "null" })).status).toBe(403);
   });
 
   test("caches JWKS and refetches on key rotation", async () => {
     const jw = jwksServer([k1.pub]);
     const app = appWith(access, jw.fetch);
-    for (let i = 0; i < 3; i++) await req(app, "/ui", { host: UI, "cf-access-jwt-assertion": good });
+    for (let i = 0; i < 3; i++) await req(app, "/", { host: ADMIN, "cf-access-jwt-assertion": good });
     expect(jw.fetches).toBe(1);
 
     // Rotation: a new kid appears. The first miss is inside the 60 s refetch guard, so it's refused
@@ -110,7 +110,7 @@ describe("UI guard: access mode", async () => {
     const k2 = await rsaKey("k2");
     jw.keys = [k1.pub, k2.pub];
     const rotated = await sign(claims(), k2.priv, "RS256");
-    expect((await req(app, "/ui", { host: UI, "cf-access-jwt-assertion": rotated })).status).toBe(403);
+    expect((await req(app, "/", { host: ADMIN, "cf-access-jwt-assertion": rotated })).status).toBe(403);
     expect(jw.fetches).toBe(1);
   });
 
@@ -119,35 +119,35 @@ describe("UI guard: access mode", async () => {
     const k2 = await rsaKey("k2");
     const jw = jwksServer([k1.pub]);
     const app = new Hono();
-    app.use("/ui/*", uiGuard(access, { fetch: jw.fetch, now: () => t }));
-    app.get("/ui", (c) => c.text("ui"));
-    await req(app, "/ui", { host: UI, "cf-access-jwt-assertion": good });
+    app.use("/*", adminGuard(access, { fetch: jw.fetch, now: () => t }));
+    app.get("/", (c) => c.text("admin"));
+    await req(app, "/", { host: ADMIN, "cf-access-jwt-assertion": good });
     jw.keys = [k1.pub, k2.pub];
     t += 61_000;
     const rotated = await sign(claims(), k2.priv, "RS256");
-    expect((await req(app, "/ui", { host: UI, "cf-access-jwt-assertion": rotated })).status).toBe(200);
+    expect((await req(app, "/", { host: ADMIN, "cf-access-jwt-assertion": rotated })).status).toBe(200);
     expect(jw.fetches).toBe(2);
   });
 });
 
-describe("UI guard: none mode (local dev)", () => {
+describe("admin guard: none mode (local dev)", () => {
   const app = appWith({ mode: "none" });
 
   test("serves loopback hosts without a token", async () => {
     for (const host of ["127.0.0.1:8787", "localhost:8787", "[::1]:8787"]) {
-      expect((await req(app, "/ui", { host })).status).toBe(200);
+      expect((await req(app, "/", { host })).status).toBe(200);
     }
   });
 
   test("refuses other hosts (DNS rebinding) and cross-site origins", async () => {
-    expect((await req(app, "/ui", { host: "rebind.evil.example" })).status).toBe(404);
-    expect((await req(app, "/ui", { host: "hooks.example.com" })).status).toBe(404);
-    expect((await req(app, "/ui/ws", { host: "127.0.0.1:8787", origin: "https://evil.example" })).status).toBe(403);
-    expect((await req(app, "/ui/ws", { host: "127.0.0.1:8787", origin: "http://127.0.0.1:8787" })).status).toBe(200);
+    expect((await req(app, "/", { host: "rebind.evil.example" })).status).toBe(404);
+    expect((await req(app, "/", { host: "hooks.example.com" })).status).toBe(404);
+    expect((await req(app, "/ws", { host: "127.0.0.1:8787", origin: "https://evil.example" })).status).toBe(403);
+    expect((await req(app, "/ws", { host: "127.0.0.1:8787", origin: "http://127.0.0.1:8787" })).status).toBe(200);
   });
 });
 
-describe("UI env", () => {
+describe("admin env", () => {
   const base = {
     PUBLIC_WS_BASE: "wss://hooks.example.com",
     TELNYX_API_KEY: "k",
@@ -159,23 +159,23 @@ describe("UI env", () => {
   };
 
   test("access mode (the default) requires host, team domain and AUD", () => {
-    expect(() => readEnv(base)).toThrow(/UI_HOST[\s\S]*CF_ACCESS_TEAM_DOMAIN[\s\S]*CF_ACCESS_AUD/);
-    const env = readEnv({ ...base, UI_HOST: UI, CF_ACCESS_TEAM_DOMAIN: TEAM, CF_ACCESS_AUD: AUD });
-    expect(uiAuthFrom(env)).toEqual(access);
+    expect(() => readEnv(base)).toThrow(/ADMIN_HOST[\s\S]*CF_ACCESS_TEAM_DOMAIN[\s\S]*CF_ACCESS_AUD/);
+    const env = readEnv({ ...base, ADMIN_HOST: ADMIN, CF_ACCESS_TEAM_DOMAIN: TEAM, CF_ACCESS_AUD: AUD });
+    expect(adminAuthFrom(env)).toEqual(access);
   });
 
-  test("UI host must differ from the public hooks host", () => {
-    expect(() => readEnv({ ...base, UI_AUTH: "none", UI_HOST: "hooks.example.com" })).toThrow(/must differ/);
+  test("admin host must differ from the public hooks host", () => {
+    expect(() => readEnv({ ...base, ADMIN_AUTH: "none", ADMIN_HOST: "hooks.example.com" })).toThrow(/must differ/);
   });
 
   test("none mode needs nothing else", () => {
-    expect(uiAuthFrom(readEnv({ ...base, UI_AUTH: "none" }))).toEqual({ mode: "none", uiHost: undefined });
+    expect(adminAuthFrom(readEnv({ ...base, ADMIN_AUTH: "none" }))).toEqual({ mode: "none", adminHost: undefined });
   });
 
   test("blank vars count as unset; SMS sender is optional", () => {
-    const env = readEnv({ ...base, UI_AUTH: "none", TELNYX_SMS_FROM: "", OWNER_NAME: "  " });
+    const env = readEnv({ ...base, ADMIN_AUTH: "none", TELNYX_SMS_FROM: "", OWNER_NAME: "  " });
     expect(env.TELNYX_SMS_FROM).toBeUndefined();
     expect(env.OWNER_NAME).toBeUndefined();
-    expect(() => readEnv({ ...base, CF_ACCESS_AUD: "" })).toThrow(/CF_ACCESS_AUD: required when UI_AUTH=access/);
+    expect(() => readEnv({ ...base, CF_ACCESS_AUD: "" })).toThrow(/CF_ACCESS_AUD: required when ADMIN_AUTH=access/);
   });
 });

@@ -109,7 +109,7 @@ beforeAll(async () => {
     bus,
     config,
     publicWsBase: "ws://127.0.0.1:0",
-    uiAuth: { mode: "none" },
+    adminAuth: { mode: "none" },
     mediaSecret: "s".repeat(32),
     upgradeWebSocket,
     clientAssets: await clientAssets({ rebuild: false }),
@@ -241,17 +241,17 @@ describe("steel thread (fake vendors)", () => {
       recording_urls: { mp3: "https://recordings.example/r.mp3" },
     });
     await until(async () => (await repo.getCall(callId))?.recordingPath != null);
-    const res = await fetch(`${base()}/ui/recordings/${callId}`);
+    const res = await fetch(`${base()}/recordings/${callId}`);
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
   });
 
-  test("UI shows the call; UI is not served on the hooks host", async () => {
-    const list = await (await fetch(`${base()}/ui`)).text();
+  test("admin UI shows the call; it is not served on the hooks host", async () => {
+    const list = await (await fetch(`${base()}/`)).text();
     expect(list).toContain("+447911123456");
-    const detail = await (await fetch(`${base()}/ui/calls/${callId}`)).text();
+    const detail = await (await fetch(`${base()}/calls/${callId}`)).text();
     expect(detail).toContain("waste_time");
     expect(detail).toContain("Bank impersonation scam");
-    const blocked = await fetch(`${base()}/ui`, { headers: { host: "hooks.example.com" } });
+    const blocked = await fetch(`${base()}/`, { headers: { host: "hooks.example.com" } });
     expect(blocked.status).toBe(404);
   });
 });
@@ -293,6 +293,19 @@ describe("telephony failures", () => {
     expect((await repo.listCalls(100)).filter((c) => c.callControlId === "v3:dup")).toHaveLength(1);
   });
 
+  test("draining → call.initiated rejected as busy, not stored or answered", async () => {
+    manager.drain(60_000);
+    try {
+      await webhook("call.initiated", { call_control_id: "v3:drain", direction: "incoming", from: "+44", to: "+44" });
+      await until(() => telnyxRequests.some((r) => r.url.includes("v3%3Adrain/actions/reject")));
+    } finally {
+      manager.resume();
+    }
+    expect(telnyxRequests.find((r) => r.url.includes("v3%3Adrain/actions/reject"))!.body).toMatchObject({ cause: "USER_BUSY" });
+    expect(telnyxRequests.some((r) => r.url.includes("v3%3Adrain/actions/answer"))).toBe(false);
+    expect(await repo.findByCallControlId("v3:drain")).toBeNull();
+  });
+
   test("orphaned open calls (no session) are reaped and hung up", async () => {
     await manager.registerIncoming({ callId: "orphan", callControlId: "v3:orphan", from: "+44", to: "+44" });
     await manager.reapOrphans(60_000, "too young"); // just created: left alone
@@ -309,11 +322,11 @@ describe("browser test call", () => {
     voice.handlers = null;
     voice.audioIn = [];
     voice.appended = [];
-    const page = await (await fetch(`${base()}/ui/test-call`)).text();
-    expect(page).toContain("/ui/assets/test-call.js");
-    expect((await fetch(`${base()}/ui/assets/test-call-worklet.js`)).headers.get("content-type")).toContain("javascript");
+    const page = await (await fetch(`${base()}/test-call`)).text();
+    expect(page).toContain("/assets/test-call.js");
+    expect((await fetch(`${base()}/assets/test-call-worklet.js`)).headers.get("content-type")).toContain("javascript");
 
-    const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ui/test-call/ws`);
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}/test-call/ws`);
     ws.binaryType = "arraybuffer";
     const text: any[] = [];
     const binary: Uint8Array[] = [];
@@ -352,7 +365,7 @@ describe("browser test call", () => {
     expect(ended.endReason).toBe("hung up in browser");
     // Browser calls are recorded as a stereo WAV (mic left, Live's audio right).
     await until(async () => (await repo.getCall(callId))?.recordingPath != null);
-    const rec = await (await fetch(`${base()}/ui/recordings/${callId}`)).arrayBuffer();
+    const rec = await (await fetch(`${base()}/recordings/${callId}`)).arrayBuffer();
     expect(new TextDecoder().decode(new Uint8Array(rec, 0, 4))).toBe("RIFF");
     expect(new DataView(rec).getUint16(22, true)).toBe(2);
     // Hanging up a browser call must not touch Telnyx.
@@ -360,7 +373,7 @@ describe("browser test call", () => {
   });
 
   test("an out-of-date test-call page is told to reload instead of failing silently", async () => {
-    const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ui/test-call/ws`);
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}/test-call/ws`);
     const text: any[] = [];
     let closed = false;
     ws.onmessage = (m) => typeof m.data === "string" && text.push(JSON.parse(m.data));

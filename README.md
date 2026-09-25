@@ -11,7 +11,7 @@ An AI call screener for a personal phone number. Divert your calls to a Telnyx n
 ```sh
 bun install
 cp .env.example .env      # fill in keys
-bun run dev               # http://127.0.0.1:8787/ui, config hot-reloads
+bun run dev               # http://127.0.0.1:8787/ (admin UI), config hot-reloads
 ```
 
 
@@ -39,7 +39,7 @@ Replay examples:
 - Options: `--kind jev|live|luna`, `--runs 3` for borderline results, `-v` to print every reply, `--config <dir>` to try a changed copy of `config/`, `--check` to validate the cases only. Results are written to `evals/.out/`.
 - It takes about a minute, since live cases run in real time. Run it after changing a prompt or `jev.yaml`, and add a case when a test call shows a new failure.
 
-**Test call from the browser** (`/ui/test-call`, linked from the call list): talk to the voice agent through the computer mic, with no phone or Telnyx involved.
+**Test call from the browser** (`/test-call`, linked from the call list): talk to the voice agent through the computer mic, with no phone or Telnyx involved.
 
 - The page streams 16 kHz PCM16 over a WebSocket as binary frames, in both directions. The server runs a normal call session on it (Live, Jev, call flow, Luna); only the phone leg is replaced (`src/web/test-call.ts`).
 - It uses the real Live, Jev and Luna APIs. Luna's tools run dry by default: no SMS is sent and Luna can't hang up.
@@ -62,10 +62,13 @@ Replay examples:
    - For SMS, use a +447 number, or an alphanumeric sender with a messaging profile (Level 2 verification).
 2. **Cloudflare tunnel:** see [deploy/cloudflared.example.yml](deploy/cloudflared.example.yml).
    - `hooks.<domain>` is public, but only the webhook and media paths are routed.
-   - `ui.<domain>` sits behind Cloudflare Access. The app verifies the Access JWT itself (`UI_AUTH=access`, with `UI_HOST`, `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`), so a direct `127.0.0.1` request to `/ui` gets 403.
-   - For offline dev, set `UI_AUTH=none`. The UI is then served on loopback only; Host and Origin are still checked.
+   - `admin.<domain>` serves the admin UI (call list, call pages, test call) at its root, behind Cloudflare Access. The app verifies the Access JWT itself (`ADMIN_AUTH=access`, with `ADMIN_HOST`, `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`), so a direct `127.0.0.1` request gets 403.
+   - The admin UI has its own hostname so it never shares a browser origin with the public host, whose root is kept for a future public UI.
+   - For offline dev, set `ADMIN_AUTH=none`. The admin UI is then served on loopback only; Host and Origin are still checked.
    - Copy it to `deploy/cloudflared.yml` (gitignored, since it has machine-specific paths and IDs) and run `bun run tunnel`.
 3. **Divert your mobile** to the Telnyx number (this is a phone setting).
+
+**Production** runs on an OVH VPS in Docker, deployed by GitHub Actions on every push to `main`: see [docs/deploy.md](docs/deploy.md).
 
 ## OpenAI SIP
 
@@ -94,12 +97,13 @@ Setup:
 ```
 src/core/       runtime-agnostic: config schema, call flow, orchestrator, call session, ports
 src/adapters/   telnyx (webhooks/REST/media), openai-live (WebSocket, SIP + sideband), jev, luna, storage (sqlite/fs), config (yaml)
-src/web/        Hono routes: /telnyx/webhook, /openai/webhook, /media/:callId/:codec/:token, /ui/*
-src/web/client/ browser TypeScript for the UI pages, compiled with Bun.build and served as /ui/assets/<page>.js
+src/web/        Hono routes: /telnyx/webhook, /openai/webhook, /media/:callId/:codec/:token; admin UI on ADMIN_HOST
+src/web/client/ browser TypeScript for the UI pages, compiled with Bun.build and served as /assets/<page>.js on the admin host
 src/runtime/    bun.ts entrypoint, env schema, client build (client-assets.ts)
 src/replay/     transcript replay harness + offline keyword classifier
 evals/          on-demand evals against the real vendors (cases.yaml, bun run eval)
 config/         see Config below
+deploy/         Compose file (production), VPS scripts (deploy/vps), dev tunnel template; docs/deploy.md
 ```
 
 ## Config

@@ -1,7 +1,7 @@
 # Cloudflare named tunnel -> 127.0.0.1:8787. Copy to deploy/cloudflared.yml (gitignored) and run
-# `bun run tunnel`.
-#   hooks.example.com  public, Telnyx/OpenAI webhooks + media only
-#   ui.example.com     UI, behind a Cloudflare Access application (the app also verifies the Access JWT)
+# `bun run tunnel`. This is for dev; production uses deploy/vps/cloudflared.yml (docs/deploy.md).
+#   hooks.example.com   public, Telnyx/OpenAI webhooks + media only
+#   admin.example.com   admin UI, behind a Cloudflare Access application (the app also verifies the Access JWT)
 # Create with: cloudflared tunnel create scamsitter
 #              cloudflared tunnel route dns <tunnel-id> <hostname>   (use the ID: a default
 #              ~/.cloudflared/config.yml naming another tunnel wins over the name argument)
@@ -17,12 +17,9 @@ ingress:
     service: http://127.0.0.1:8787
   - hostname: hooks.example.com
     service: http_status:404
-  # UI: "/" and /ui/* only.
-  - hostname: ui.example.com
-    path: ^/(ui(/.*)?)?$
+  # Admin UI (the whole host; Cloudflare Access in front).
+  - hostname: admin.example.com
     service: http://127.0.0.1:8787
-  - hostname: ui.example.com
-    service: http_status:404
   - service: http_status:404
 
 # Optional: pin DNS resolvers if a local resolver (e.g. Tailscale) times out on tunnel DNS.

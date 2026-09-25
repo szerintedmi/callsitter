@@ -9,14 +9,14 @@ import type { LogBuffer } from "./debug-log";
 /** Compiled browser script by file name ("test-call.js"), or undefined; see src/runtime/client-assets.ts. */
 export type ClientAssets = (name: string) => Promise<string | undefined>;
 
-export interface UiDeps {
+export interface AdminDeps {
   repo: Repo;
   blobs: BlobStore;
   bus: EventBus;
   upgradeWebSocket: UpgradeWebSocket;
   /** recent server log lines for the test-call debug panel */
   debugLog?: LogBuffer;
-  /** the page scripts (src/web/client), served under /ui/assets/ */
+  /** the page scripts (src/web/client), served under /assets/ */
   clientAssets: ClientAssets;
 }
 
@@ -209,7 +209,7 @@ const SipHeaders: FC<{ events: CallEvent[] }> = ({ events }) => {
 
 const js = (body: string) => new Response(body, { headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-cache" } });
 
-export function uiRoutes(d: UiDeps) {
+export function adminRoutes(d: AdminDeps) {
   const app = new Hono();
 
   app.get("/", async (c) => {
@@ -218,7 +218,7 @@ export function uiRoutes(d: UiDeps) {
       <Layout title="ScamSitter">
         <nav>
           <h1>Calls</h1>
-          <a href="/ui/test-call">Test call from this computer →</a>
+          <a href="/test-call">Test call from this computer →</a>
         </nav>
         <div class="wrap">
           <table>
@@ -237,7 +237,7 @@ export function uiRoutes(d: UiDeps) {
               {calls.map((r) => (
                 <tr>
                   <td>
-                    <a href={`/ui/calls/${r.id}`}>{fmtTime(r.startedAt)}</a>
+                    <a href={`/calls/${r.id}`}>{fmtTime(r.startedAt)}</a>
                   </td>
                   <td>
                     {r.from || "unknown"}
@@ -256,7 +256,7 @@ export function uiRoutes(d: UiDeps) {
           </table>
           {calls.length === 0 && <p class="muted">No calls yet.</p>}
         </div>
-        <script src={`/ui/assets/calls.js?v=${BUILD}`} />
+        <script src={`/assets/calls.js?v=${BUILD}`} />
       </Layout>,
     );
   });
@@ -269,21 +269,21 @@ export function uiRoutes(d: UiDeps) {
       <Layout title={`Call ${call.from || call.id}`}>
         <div data-call={call.id}>
           <p>
-            <a href="/ui">← Calls</a>
+            <a href="/">← Calls</a>
           </p>
           <h1>
             {call.from || "Unknown caller"} <Verdict v={call.verdict} />
           </h1>
           <p class="muted">{fmtTime(call.startedAt)}</p>
           {call.summary && <p>{call.summary}</p>}
-          {call.recordingPath && <audio controls preload="none" src={`/ui/recordings/${call.id}`} />}
+          {call.recordingPath && <audio controls preload="none" src={`/recordings/${call.id}`} />}
           <SipHeaders events={events} />
           <Timeline />
         </div>
         <script id="initial" type="application/json">
           {raw(safeJson(events))}
         </script>
-        <script src={`/ui/assets/call.js?v=${BUILD}`} />
+        <script src={`/assets/call.js?v=${BUILD}`} />
       </Layout>,
     );
   });
@@ -303,7 +303,7 @@ export function uiRoutes(d: UiDeps) {
     c.html(
       <Layout title="Test call">
         <p>
-          <a href="/ui">← Calls</a>
+          <a href="/">← Calls</a>
         </p>
         <h1>Test call from this computer</h1>
         <div class="controls">
@@ -339,7 +339,7 @@ export function uiRoutes(d: UiDeps) {
           <div class="debuglog" id="debuglog" />
         </details>
         <Timeline />
-        <script src={`/ui/assets/test-call.js?v=${BUILD}`} />
+        <script src={`/assets/test-call.js?v=${BUILD}`} />
       </Layout>,
     ),
   );

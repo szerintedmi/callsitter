@@ -1,0 +1,50 @@
+# Checks for every PR, and the gate before each deploy (deploy.yml calls this workflow).
+# No secrets: PR runs must never see production credentials.
+name: CI
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run check-config
+      - name: Dockerfile uses the Bun version in .bun-version
+        run: grep -q "^FROM oven/bun:$(cat .bun-version)-slim@sha256:" Dockerfile
+      - name: shellcheck VPS scripts
+        run: shellcheck deploy/vps/bootstrap.sh deploy/vps/scamsitter-deploy deploy/vps/scamsitter-deploy-ssh
+      - name: Compose file is valid
+        run: SCAMSITTER_IMAGE=scamsitter:ci SCAMSITTER_ENV_FILE=/dev/null docker compose -f deploy/compose.yaml config -q
+
+  image:
+    # On main, deploy.yml builds and pushes the image itself.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the production image (not pushed)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha

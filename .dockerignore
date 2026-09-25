@@ -1,0 +1,12 @@
+# Allow-list: only what the image copies (Dockerfile). Keeps .env*, data/, recordings, databases,
+# tunnel credentials and local caches out of the build context.
+*
+!package.json
+!bun.lock
+!tsconfig.json
+!src/
+!config/
+!drizzle/
+!scripts/control.ts
+!scripts/backup-db.ts
+!deploy/compose.yaml

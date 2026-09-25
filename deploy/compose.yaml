@@ -1,0 +1,40 @@
+# Production Compose file. It ships inside the image (/app/deploy/compose.yaml); the VPS deploy
+# script (deploy/vps/scamsitter-deploy) extracts it and sets SCAMSITTER_IMAGE to the image digest.
+# cloudflared runs on the host (systemd) and reaches the app on 127.0.0.1:8787; no public ports.
+name: scamsitter
+services:
+  scamsitter:
+    image: ${SCAMSITTER_IMAGE:?set by scamsitter-deploy}
+    pull_policy: missing
+    restart: unless-stopped
+    # Runtime secrets and settings (PUBLIC_WS_BASE, API keys, ADMIN_HOST, CF_ACCESS_*), root-only.
+    # Both paths can be overridden for a local test run (docs/deploy.md).
+    env_file: ${SCAMSITTER_ENV_FILE:-/etc/scamsitter/scamsitter.env}
+    # Fixed for the container; these win over the env file.
+    environment:
+      NODE_ENV: production
+      BIND_HOST: 0.0.0.0
+      PORT: "8787"
+      DATA_DIR: /data
+      CONFIG_DIR: /app/config
+    volumes:
+      # SQLite, recordings, greetings and backups survive container replacement.
+      - ${SCAMSITTER_DATA_DIR:-/var/lib/scamsitter}:/data
+    ports:
+      - "127.0.0.1:8787:8787"
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:8787/healthz'); process.exit(r.ok ? 0 : 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      start_interval: 2s
+      retries: 3
+    # Deploys drain calls first; this covers wrap-up (Luna summaries, recordings) on a plain stop.
+    stop_grace_period: 90s
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "5"

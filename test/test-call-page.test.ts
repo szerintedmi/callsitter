@@ -77,10 +77,10 @@ function page(opts: { tokenStatus?: number } = {}) {
   };
   el("route").value = "sip";
   el("hangup").disabled = true;
-  const document = { getElementById: el, createElement: () => new El(), head: new El(), currentScript: { src: "/ui/assets/test-call.js?v=abc" } };
+  const document = { getElementById: el, createElement: () => new El(), head: new El(), currentScript: { src: "/assets/test-call.js?v=abc" } };
   const window: any = { TelnyxWebRTC: { TelnyxRTC: FakeRtc }, addEventListener() {}, removeEventListener() {} };
   const fetch = async (url: string) => {
-    if (url === "/ui/test-call/sip") {
+    if (url === "/test-call/sip") {
       const status = opts.tokenStatus ?? 200;
       const body =
         status === 200
@@ -88,7 +88,7 @@ function page(opts: { tokenStatus?: number } = {}) {
           : { error: "no credential" };
       return { ok: status === 200, status, json: async () => body };
     }
-    if (url.startsWith("/ui/debug/log")) return { ok: true, json: async () => ({ lines: [], last: 0 }) };
+    if (url.startsWith("/debug/log")) return { ok: true, json: async () => ({ lines: [], last: 0 }) };
     return { ok: true, json: async () => ({ callId: null }) };
   };
   const timers: ReturnType<typeof setInterval>[] = [];

@@ -1,8 +1,8 @@
 import { basename, join } from "node:path";
-import type { ClientAssets } from "../web/ui";
+import type { ClientAssets } from "../web/admin";
 
 const CLIENT_DIR = join(import.meta.dir, "../web/client");
-/** One classic script per page, served as /ui/assets/<name>.js; shared modules are bundled into each. */
+/** One classic script per page, served as /assets/<name>.js; shared modules are bundled into each. */
 const ENTRIES = ["calls", "call", "test-call", "test-call-worklet"];
 
 /** Compiles the browser code in src/web/client (TypeScript) to browser JavaScript, by file name. */

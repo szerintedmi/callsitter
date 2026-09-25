@@ -1,4 +1,4 @@
-// Recent server log lines, for the debug panel on the test-call page (/ui/debug/log). The
+// Recent server log lines, for the debug panel on the test-call page (/debug/log). The
 // runtime mirrors console output into it, so the panel shows exactly what the terminal shows.
 
 export type LogLevel = "info" | "warn" | "error";

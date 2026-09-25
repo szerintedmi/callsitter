@@ -1,0 +1,7 @@
+[Unit]
+Description=ScamSitter nightly SQLite backup (/var/lib/scamsitter/backups)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/scamsitter-deploy backup

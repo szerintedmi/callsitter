@@ -57,7 +57,7 @@ function newTimeline() {
 }
 
 // Debug log: page events (Telnyx SDK, sockets, fetches) plus the server's log lines, polled
-// from /ui/debug/log. Newest last; the summary shows the error count.
+// from /debug/log. Newest last; the summary shows the error count.
 const logEl = $("debuglog"), logCount = $("debugcount");
 let errors = 0, serverSeq = 0;
 function dbg(level: Level, msg: string, at?: number, src?: string) {
@@ -74,7 +74,7 @@ function dbg(level: Level, msg: string, at?: number, src?: string) {
   }
 }
 function pollServerLog() {
-  fetch("/ui/debug/log?after=" + serverSeq)
+  fetch("/debug/log?after=" + serverSeq)
     .then((r) => (r.ok ? r.json() : { lines: [] }))
     .then((j: { lines: { seq: number; level: Level; text: string; at: number }[] }) => {
       j.lines.forEach((l) => {
@@ -85,7 +85,7 @@ function pollServerLog() {
     .catch(() => {});
 }
 // Skip lines from before the page loaded, then keep polling.
-fetch("/ui/debug/log?after=0&tail=0")
+fetch("/debug/log?after=0&tail=0")
   .then((r) => (r.ok ? r.json() : { last: 0 }))
   .then((j: { last?: number }) => {
     serverSeq = j.last || 0;
@@ -133,7 +133,7 @@ async function start() {
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     ctx = new AudioContext();
-    await ctx.audioWorklet.addModule("/ui/assets/test-call-worklet.js" + (V ? "?" + V : ""));
+    await ctx.audioWorklet.addModule("/assets/test-call-worklet.js" + (V ? "?" + V : ""));
     const src = ctx.createMediaStreamSource(stream);
     capture = new AudioWorkletNode(ctx, "capture");
     const mute = ctx.createGain();
@@ -149,7 +149,7 @@ async function start() {
 
     const tl = newTimeline();
     status("connecting…");
-    const sock = (ws = new WebSocket(wsUrl("/ui/test-call/ws")));
+    const sock = (ws = new WebSocket(wsUrl("/test-call/ws")));
     sock.binaryType = "arraybuffer";
     sock.onopen = () => {
       dbg("info", "test-call socket open");
@@ -165,7 +165,7 @@ async function start() {
       const msg = JSON.parse(m.data) as ServerMsg;
       if (msg.type === "started") {
         status("connected: talk now (use headphones)");
-        link.innerHTML = '<a href="/ui/calls/' + msg.callId + '">call record</a>';
+        link.innerHTML = '<a href="/calls/' + msg.callId + '">call record</a>';
         hangupBtn.disabled = false;
       } else if (msg.type === "event") {
         tl.on(msg.event);
@@ -273,7 +273,7 @@ function reportConnected(call: TelnyxCall, nonce: string) {
   const started = Date.now();
   const send = (how: string) => {
     dbg("info", "audio " + how + " after " + (Date.now() - started) + " ms: telling the server to greet");
-    fetch("/ui/test-call/sip/" + nonce + "/connected", { method: "POST" }).catch(() => {});
+    fetch("/test-call/sip/" + nonce + "/connected", { method: "POST" }).catch(() => {});
   };
   const check = () => {
     const pc = call.peer?.instance;
@@ -295,19 +295,19 @@ function watchCall(nonce: string, tl: Timeline) {
       status("in call, but the OpenAI webhook never matched it (see debug log)");
       return;
     }
-    fetch("/ui/test-call/sip/" + nonce)
+    fetch("/test-call/sip/" + nonce)
       .then((r) => r.json())
       .then((j: { callId?: string | null }) => {
         if (!j.callId || !pollTimer) return;
         clearInterval(pollTimer);
         pollTimer = null;
         dbg("info", "webhook matched: call " + j.callId);
-        fetch("/ui/calls/" + j.callId + "/sip-headers")
+        fetch("/calls/" + j.callId + "/sip-headers")
           .then((r) => (r.ok ? r.json() : []))
           .then((sets: SipHeadersEvent[]) => sets.forEach(logSipHeaders))
           .catch(() => {});
-        link.innerHTML = '<a href="/ui/calls/' + j.callId + '">call record</a>';
-        events = new WebSocket(wsUrl("/ui/ws?callId=" + j.callId));
+        link.innerHTML = '<a href="/calls/' + j.callId + '">call record</a>';
+        events = new WebSocket(wsUrl("/ws?callId=" + j.callId));
         events.onmessage = (m) => {
           const ev = JSON.parse(m.data) as CallEvent;
           tl.on(ev);
@@ -350,8 +350,8 @@ async function startSip() {
   try {
     const tl = newTimeline();
     status("getting a Telnyx login token…");
-    dbg("info", "POST /ui/test-call/sip");
-    const r = await fetch("/ui/test-call/sip", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dryRun: dry.checked }) });
+    dbg("info", "POST /test-call/sip");
+    const r = await fetch("/test-call/sip", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dryRun: dry.checked }) });
     const j = (await r.json().catch(() => ({}))) as { error?: string; token: string; nonce: string; header: string; dial: string; sipUri: string };
     if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
     if (!mine()) return; // hung up meanwhile

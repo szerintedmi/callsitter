@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# Deploys and operates ScamSitter on the VPS (docs/deploy.md). Installed to /usr/local/bin by
+# bootstrap.sh and run as root: by the GitHub Actions deploy key (through scamsitter-deploy-ssh and
+# sudo), by you over SSH, and by the nightly backup timer.
+#
+#   deploy <IMAGE_REPO>@sha256:<digest>   pull (registry token on stdin, optional), drain calls,
+#                                         back up the DB, replace the container, wait for healthy;
+#                                         rolls back to the previous release if it isn't
+#   rollback                              redeploy the previous release (its image is kept locally)
+#   status                                current release, container state, active calls
+#   drain | resume                        stop / restart taking calls (e.g. around host maintenance)
+#   backup                                nightly SQLite copy to /var/lib/scamsitter/backups
+#
+# Exit 75: calls didn't end within DRAIN_WAIT seconds; nothing changed, try again later.
+set -euo pipefail
+umask 077
+
+CONF=/etc/scamsitter/deploy.conf
+# shellcheck source=/dev/null
+[[ -r $CONF ]] && . "$CONF"
+: "${IMAGE_REPO:?set IMAGE_REPO in $CONF}"
+GHCR_USER=${GHCR_USER:-github-actions}
+DRAIN_WAIT=${DRAIN_WAIT:-900}
+KEEP_RELEASES=${KEEP_RELEASES:-5}
+KEEP_BACKUPS=${KEEP_BACKUPS:-10}
+
+DIR=/opt/scamsitter
+RELEASES=$DIR/releases        # image refs, oldest first; the last line is the current release
+COMPOSES=$DIR/compose.d       # each release's compose.yaml, by digest
+DRAINED=""                            # set while the old container is draining
+BACKUPS=/var/lib/scamsitter/backups   # /data/backups in the container
+APP_UID=1000                          # the image's `bun` user, which writes /data
+
+log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
+die() { log "error: $*" >&2; exit 1; }
+compose() { docker compose --project-directory "$DIR" -f "$DIR/compose.yaml" "$@"; }
+running() { [[ -f $DIR/compose.yaml && -n $(compose ps -q --status running scamsitter 2>/dev/null) ]]; }
+control() { compose exec -T scamsitter bun scripts/control.ts "$@"; }
+digest_of() { local d=${1##*@sha256:}; printf '%s' "${d:0:16}"; }
+current() { if [[ -s $RELEASES ]]; then tail -n1 "$RELEASES"; fi; }
+# The newest release before the current one (skipping repeats from earlier rollbacks).
+previous() { if [[ -s $RELEASES ]]; then tac "$RELEASES" | awk '!seen[$0]++' | sed -n 2p; fi; }
+revision() { docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1" 2>/dev/null || true; }
+
+lock() {
+  exec 9>/run/scamsitter-deploy.lock
+  flock -n 9 || die "another scamsitter-deploy is running"
+}
+
+# Points compose.yaml and .env at a release; the compose file comes from the release's image.
+activate() {
+  local ref=$1 saved
+  saved="$COMPOSES/$(digest_of "$ref").yaml"
+  if [[ ! -s $saved ]]; then
+    local cid
+    cid=$(docker create "$ref")
+    docker cp "$cid:/app/deploy/compose.yaml" "$saved.tmp" >/dev/null
+    docker rm "$cid" >/dev/null
+    mv "$saved.tmp" "$saved"
+  fi
+  install -m 0644 "$saved" "$DIR/compose.yaml"
+  printf 'SCAMSITTER_IMAGE=%s\n' "$ref" >"$DIR/.env"
+}
+
+pull() {
+  local ref=$1 token=$2 cfg
+  if docker image inspect "$ref" >/dev/null 2>&1; then return; fi
+  # Throwaway Docker config: the short-lived GITHUB_TOKEN is never stored on the VPS.
+  cfg=$(mktemp -d)
+  if [[ -n $token ]]; then
+    printf '%s' "$token" | DOCKER_CONFIG=$cfg docker login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null ||
+      { rm -rf "$cfg"; die "registry login failed"; }
+  fi
+  DOCKER_CONFIG=$cfg docker pull -q "$ref" >/dev/null || { rm -rf "$cfg"; die "pull failed: $ref"; }
+  rm -rf "$cfg"
+}
+
+prune() {
+  local keep img
+  keep=$(tac "$RELEASES" | awk '!seen[$0]++' | head -n "$KEEP_RELEASES")
+  tail -n 100 "$RELEASES" >"$RELEASES.tmp" && mv "$RELEASES.tmp" "$RELEASES"
+  while read -r img; do
+    [[ -z $img ]] || grep -qxF "$img" <<<"$keep" || docker rmi "$img" >/dev/null 2>&1 || true
+  done < <(docker image ls --digests --format '{{.Repository}}@{{.Digest}}' "$IMAGE_REPO")
+  find "$BACKUPS" -maxdepth 1 -name 'pre-deploy-*.db' -printf '%T@ %p\n' 2>/dev/null |
+    sort -rn | tail -n +"$((KEEP_BACKUPS + 1))" | cut -d' ' -f2- | xargs -r rm -f --
+}
+
+cmd_deploy() {
+  local ref=${1:-} token=""
+  [[ $ref =~ ^${IMAGE_REPO}@sha256:[0-9a-f]{64}$ ]] || die "usage: deploy ${IMAGE_REPO}@sha256:<digest>"
+  [[ -t 0 ]] || token=$(head -c 4096 || true)
+  lock
+  mkdir -p "$COMPOSES"
+  install -d -o "$APP_UID" -g "$APP_UID" -m 0750 "$BACKUPS"
+  local prev
+  prev=$(current)
+  [[ $ref == "$prev" ]] && running && { log "already running $ref"; cmd_status; return; }
+
+  log "pulling $ref"
+  pull "$ref" "$token"
+  log "revision $(revision "$ref")"
+
+  if running; then
+    log "draining: new calls are rejected until the new release is up"
+    local rc=0
+    control drain --wait "$DRAIN_WAIT" --ttl $((DRAIN_WAIT + 300)) || rc=$?
+    if ((rc == 75)); then log "deploy deferred: calls still active after ${DRAIN_WAIT}s"; exit 75; fi
+    ((rc == 0)) || die "drain failed (exit $rc)"
+    DRAINED=1
+    # If anything below fails before the switch, take calls again rather than wait for the TTL.
+    trap 'if [[ -n $DRAINED ]]; then control resume >/dev/null 2>&1 || true; fi' EXIT
+    control_backup "pre-deploy-$(date -u +%Y%m%dT%H%M%SZ)-$(digest_of "${prev:-none}").db" || die "pre-deploy backup failed"
+  fi
+
+  activate "$ref"
+  log "starting the new release"
+  if compose up -d --wait --wait-timeout 180 scamsitter; then
+    DRAINED=""
+    echo "$ref" >>"$RELEASES"
+    prune
+    log "deployed $(revision "$ref") ($ref)"
+    cmd_status
+    return
+  fi
+
+  log "the new release didn't become healthy; last log lines:"
+  compose logs --no-log-prefix --tail 40 scamsitter || true
+  if [[ -n $prev ]]; then
+    log "rolling back to $prev"
+    activate "$prev"
+    compose up -d --wait --wait-timeout 180 scamsitter || log "rollback didn't become healthy either"
+    DRAINED=""
+  fi
+  exit 1
+}
+
+control_backup() {
+  running || { log "not running: backup skipped"; return 0; }
+  compose exec -T scamsitter bun scripts/backup-db.ts "/data/backups/$1"
+}
+
+cmd_rollback() {
+  local prev
+  prev=$(previous)
+  [[ -n $prev ]] || die "no previous release recorded in $RELEASES"
+  docker image inspect "$prev" >/dev/null 2>&1 || die "image of the previous release was pruned: $prev"
+  log "rolling back to $(revision "$prev") ($prev)"
+  log "note: database migrations are not reversed (restore a pre-deploy backup if needed)"
+  cmd_deploy "$prev" </dev/null
+}
+
+cmd_status() {
+  local cur
+  cur=$(current)
+  echo "release:  ${cur:-none}"
+  [[ -n $cur ]] && echo "revision: $(revision "$cur")"
+  if [[ -f $DIR/compose.yaml ]]; then
+    compose ps --format '{{.Name}}: {{.Status}}' scamsitter
+    if running; then control status || true; fi
+  fi
+}
+
+cmd_drain() {
+  lock
+  running || die "not running"
+  control drain --wait "$DRAIN_WAIT" --ttl $((DRAIN_WAIT + 300))
+}
+
+cmd_resume() {
+  running || die "not running"
+  control resume
+}
+
+cmd_backup() {
+  install -d -o "$APP_UID" -g "$APP_UID" -m 0750 "$BACKUPS"
+  control_backup "nightly-$(date -u +%a).db"
+}
+
+case ${1:-} in
+  deploy) shift; cmd_deploy "$@" ;;
+  rollback) cmd_rollback ;;
+  status) cmd_status ;;
+  drain) cmd_drain ;;
+  resume) cmd_resume ;;
+  backup) cmd_backup ;;
+  *) die "usage: scamsitter-deploy deploy <image@sha256:…> | rollback | status | drain | resume | backup" ;;
+esac
