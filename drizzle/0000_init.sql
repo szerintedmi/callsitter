@@ -9,7 +9,6 @@ CREATE TABLE `calls` (
 	`ended_at` integer,
 	`end_reason` text,
 	`verdict` text,
-	`category` text,
 	`strategy` text,
 	`luna_calls` integer DEFAULT 0 NOT NULL,
 	`cost_usd` real,

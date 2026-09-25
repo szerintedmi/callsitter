@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "65461f1c-8332-464b-994f-2fd411178ba1",
+  "id": "69190871-144c-444d-bab6-dbc898aeeb46",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "calls": {
@@ -72,13 +72,6 @@
         },
         "verdict": {
           "name": "verdict",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "category": {
-          "name": "category",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
