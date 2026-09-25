@@ -145,4 +145,4 @@ Next:
   - Tunnel: add openai/webhook to the public path regex in deploy/cloudflared.yml, e.g.
       path: ^/(telnyx/webhook|openai/webhook|media/.*|healthz)$
     and restart the tunnel.
-  - Restart the app, open /ui/test-call and pick "SIP".`);
+  - Restart the app, open /test-call and pick "SIP".`);

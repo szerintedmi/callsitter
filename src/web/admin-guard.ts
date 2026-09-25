@@ -3,29 +3,29 @@ import { decodeHeader, verifyWithJwks } from "hono/utils/jwt/jwt";
 import type { HonoJsonWebKey } from "hono/utils/jwt/jws";
 
 /**
- * How the UI is protected.
- * - `access`: served only on `uiHost` through Cloudflare Access; every request must carry a valid
+ * How the admin UI is protected.
+ * - `access`: served only on `adminHost` through Cloudflare Access; every request must carry a valid
  *   `Cf-Access-Jwt-Assertion`, so direct 127.0.0.1 hits (and anything bypassing Access) get 403.
  * - `none`: local dev; only loopback hostnames are served.
- * Both modes pin the Host header (DNS rebinding) and the Origin header (cross-site WebSocket reads of /ui/ws).
+ * Both modes pin the Host header (DNS rebinding) and the Origin header (cross-site WebSocket reads of /ws).
  */
-export type UiAuth =
-  | { mode: "access"; uiHost: string; teamDomain: string; aud: string }
-  | { mode: "none"; uiHost?: string };
+export type AdminAuth =
+  | { mode: "access"; adminHost: string; teamDomain: string; aud: string }
+  | { mode: "none"; adminHost?: string };
 
 const LOOPBACK = ["127.0.0.1", "localhost", "[::1]"];
 const JWKS_TTL_MS = 60 * 60 * 1000;
 /** Minimum gap between refetches triggered by an unknown `kid` (key rotation), so bad tokens can't hammer Cloudflare. */
 const JWKS_MISS_REFETCH_MS = 60 * 1000;
 
-export interface UiGuardDeps {
+export interface AdminGuardDeps {
   fetch?: typeof fetch;
   now?: () => number;
 }
 
-export function uiHosts(auth: UiAuth): string[] {
-  if (auth.mode === "access") return [auth.uiHost.toLowerCase()];
-  return auth.uiHost ? [...LOOPBACK, auth.uiHost.toLowerCase()] : LOOPBACK;
+export function adminHosts(auth: AdminAuth): string[] {
+  if (auth.mode === "access") return [auth.adminHost.toLowerCase()];
+  return auth.adminHost ? [...LOOPBACK, auth.adminHost.toLowerCase()] : LOOPBACK;
 }
 
 export function hostOf(header: string | undefined): string | null {
@@ -37,8 +37,8 @@ export function hostOf(header: string | undefined): string | null {
   }
 }
 
-export function uiGuard(auth: UiAuth, deps: UiGuardDeps = {}): MiddlewareHandler {
-  const hosts = uiHosts(auth);
+export function adminGuard(auth: AdminAuth, deps: AdminGuardDeps = {}): MiddlewareHandler {
+  const hosts = adminHosts(auth);
   const doFetch = deps.fetch ?? fetch;
   const now = deps.now ?? Date.now;
   const jwks = auth.mode === "access" ? jwksCache(`https://${auth.teamDomain}/cdn-cgi/access/certs`, doFetch, now) : null;
@@ -68,7 +68,7 @@ export function uiGuard(auth: UiAuth, deps: UiGuardDeps = {}): MiddlewareHandler
   };
 }
 
-function originAllowed(origin: string, hosts: string[], mode: UiAuth["mode"]): boolean {
+function originAllowed(origin: string, hosts: string[], mode: AdminAuth["mode"]): boolean {
   let u: URL;
   try {
     u = new URL(origin);

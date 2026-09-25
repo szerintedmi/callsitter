@@ -13,7 +13,7 @@ AI call screener: Telnyx media stream ↔ OpenAI Live (gpt-live-1), TypeSafe Jev
 
 - `src/core/` must stay runtime-agnostic: no Bun, Node or `Buffer` APIs, only WebCrypto, fetch and timers. It targets a later Cloudflare Workers + Durable Object port. Bun-specific code goes in `src/adapters/*` and `src/runtime/`.
 - Vendor APIs (Live, Jev, Luna) are newer than model training data. Check `node_modules` `.d.ts` files and vendor docs before changing adapter code; don't rely on memory.
-- Browser code lives in `src/web/client/` as TypeScript modules with its own tsconfig (DOM lib, no Bun types). `src/runtime/client-assets.ts` bundles one script per page entry (`ENTRIES`) and serves them under `/ui/assets/`; outside production it rebuilds per request, so edits show on reload.
+- Browser code lives in `src/web/client/` as TypeScript modules with its own tsconfig (DOM lib, no Bun types). `src/runtime/client-assets.ts` bundles one script per page entry (`ENTRIES`) and serves them under `/assets/` on the admin host; outside production it rebuilds per request, so edits show on reload.
 - Every tunable goes in `config/*.yaml` with a Zod schema in `src/core/config.ts`.
 - DB schema: edit `src/adapters/storage/schema.ts`, then run `bun run db:generate`. Migrations run on startup.
 - Use Bun, not Node tooling (`bun test`, `bunx`, `bun:sqlite`; Bun loads `.env` automatically).

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { UiAuth } from "../web/ui-guard";
+import type { AdminAuth } from "../web/admin-guard";
 
 const Env = z.object({
   PORT: z.coerce.number().int().default(8787),
@@ -34,26 +34,26 @@ const Env = z.object({
     .enum(["true", "false"])
     .default(process.env.NODE_ENV === "production" ? "false" : "true")
     .transform((v) => v === "true"),
-  /** `access`: UI only via Cloudflare Access on UI_HOST (JWT verified). `none`: loopback only, for local dev. */
-  UI_AUTH: z.enum(["access", "none"]).default("access"),
-  /** UI hostname, e.g. ui.example.com */
-  UI_HOST: z.string().regex(/^[a-z0-9.-]+$/i, "hostname only, e.g. ui.example.com").optional(),
+  /** `access`: admin UI only via Cloudflare Access on ADMIN_HOST (JWT verified). `none`: loopback only, for local dev. */
+  ADMIN_AUTH: z.enum(["access", "none"]).default("access"),
+  /** admin UI hostname, e.g. admin.example.com */
+  ADMIN_HOST: z.string().regex(/^[a-z0-9.-]+$/i, "hostname only, e.g. admin.example.com").optional(),
   /** Zero Trust team domain, e.g. myteam.cloudflareaccess.com */
   CF_ACCESS_TEAM_DOMAIN: z.string().regex(/^[a-z0-9-]+\.cloudflareaccess\.com$/i, "e.g. myteam.cloudflareaccess.com").optional(),
   /** Access application AUD tag */
   CF_ACCESS_AUD: z.string().min(1).optional(),
 }).superRefine((e, ctx) => {
-  if (e.UI_AUTH === "access") {
-    for (const k of ["UI_HOST", "CF_ACCESS_TEAM_DOMAIN", "CF_ACCESS_AUD"] as const) {
-      if (!e[k]) ctx.addIssue({ code: "custom", path: [k], message: "required when UI_AUTH=access (or set UI_AUTH=none for local-only)" });
+  if (e.ADMIN_AUTH === "access") {
+    for (const k of ["ADMIN_HOST", "CF_ACCESS_TEAM_DOMAIN", "CF_ACCESS_AUD"] as const) {
+      if (!e[k]) ctx.addIssue({ code: "custom", path: [k], message: "required when ADMIN_AUTH=access (or set ADMIN_AUTH=none for local-only)" });
     }
   }
   if (!!e.OPENAI_PROJECT_ID !== !!e.OPENAI_WEBHOOK_SECRET) {
     ctx.addIssue({ code: "custom", path: ["OPENAI_WEBHOOK_SECRET"], message: "set both OPENAI_PROJECT_ID and OPENAI_WEBHOOK_SECRET for SIP, or neither" });
   }
   const hooksHost = hostOfWsBase(e.PUBLIC_WS_BASE);
-  if (e.UI_HOST && hooksHost && e.UI_HOST.toLowerCase() === hooksHost) {
-    ctx.addIssue({ code: "custom", path: ["UI_HOST"], message: "must differ from the public PUBLIC_WS_BASE host" });
+  if (e.ADMIN_HOST && hooksHost && e.ADMIN_HOST.toLowerCase() === hooksHost) {
+    ctx.addIssue({ code: "custom", path: ["ADMIN_HOST"], message: "must differ from the public PUBLIC_WS_BASE host" });
   }
 });
 
@@ -67,9 +67,9 @@ function hostOfWsBase(base: string): string | null {
   }
 }
 
-export function uiAuthFrom(env: Env): UiAuth {
-  if (env.UI_AUTH === "none") return { mode: "none", uiHost: env.UI_HOST };
-  return { mode: "access", uiHost: env.UI_HOST!, teamDomain: env.CF_ACCESS_TEAM_DOMAIN!, aud: env.CF_ACCESS_AUD! };
+export function adminAuthFrom(env: Env): AdminAuth {
+  if (env.ADMIN_AUTH === "none") return { mode: "none", adminHost: env.ADMIN_HOST };
+  return { mode: "access", adminHost: env.ADMIN_HOST!, teamDomain: env.CF_ACCESS_TEAM_DOMAIN!, aud: env.CF_ACCESS_AUD! };
 }
 
 export function readEnv(source: Record<string, string | undefined> = process.env): Env {

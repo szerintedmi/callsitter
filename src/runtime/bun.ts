@@ -19,7 +19,7 @@ import { LogBuffer, mirrorConsole } from "../web/debug-log";
 import { BrowserSipCalls } from "../web/openai-sip";
 import { BrowserCalls, routeTelephony, type BrowserSipDeps } from "../web/test-call";
 import { clientAssets } from "./client-assets";
-import { readEnv, uiAuthFrom } from "./env";
+import { readEnv, adminAuthFrom } from "./env";
 
 // Mirror console output into a buffer the test-call page's debug log shows.
 const debugLog = new LogBuffer();
@@ -99,7 +99,7 @@ const app = createApp({
   bus,
   config,
   publicWsBase: env.PUBLIC_WS_BASE,
-  uiAuth: uiAuthFrom(env),
+  adminAuth: adminAuthFrom(env),
   mediaSecret: env.MEDIA_TOKEN_SECRET,
   upgradeWebSocket,
   openAiSip: sip ? { sip } : undefined,
@@ -113,8 +113,8 @@ await manager.reapOrphans(0, "server restarted");
 setInterval(() => void manager.reapOrphans(60_000, "no media connected within 60 s").catch(console.error), 30_000);
 
 const server = Bun.serve({ port: env.PORT, hostname: env.BIND_HOST, fetch: app.fetch, websocket });
-const uiAt = env.UI_AUTH === "access" ? `https://${env.UI_HOST}/ui (Cloudflare Access)` : `http://${server.hostname}:${server.port}/ui`;
-console.log(`[startup] listening on http://${server.hostname}:${server.port}; UI at ${uiAt}`);
+const adminAt = env.ADMIN_AUTH === "access" ? `https://${env.ADMIN_HOST}/ (Cloudflare Access)` : `http://${server.hostname}:${server.port}/`;
+console.log(`[startup] listening on http://${server.hostname}:${server.port}; admin UI at ${adminAt}`);
 
 let shuttingDown = false;
 const shutdown = async (sig: string) => {

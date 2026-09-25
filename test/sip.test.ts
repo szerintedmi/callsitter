@@ -117,7 +117,7 @@ beforeAll(async () => {
     bus,
     config,
     publicWsBase: "ws://127.0.0.1:0",
-    uiAuth: { mode: "none" },
+    adminAuth: { mode: "none" },
     mediaSecret: "s".repeat(32),
     upgradeWebSocket,
     clientAssets: async () => undefined,
@@ -204,8 +204,8 @@ describe("OpenAI SIP (fake OpenAI)", () => {
     // Every header is kept for the call page's (collapsed) SIP headers section.
     const stored = (await repo.listEvents(call.id)).map((e) => e.event).find((e) => e.type === "sip.headers");
     expect(stored).toMatchObject({ source: "openai", mediaSecurity: "srtp", headers });
-    expect(await (await fetch(`${base()}/ui/calls/${call.id}/sip-headers`)).json()).toMatchObject([{ source: "openai", headers }]);
-    const page = await (await fetch(`${base()}/ui/calls/${call.id}`)).text();
+    expect(await (await fetch(`${base()}/calls/${call.id}/sip-headers`)).json()).toMatchObject([{ source: "openai", headers }]);
+    const page = await (await fetch(`${base()}/calls/${call.id}`)).text();
     expect(page).toMatch(/<details class="debug"><summary>SIP headers \(3\)/);
     expect(page).toContain("reason=no-answer");
   });
@@ -259,7 +259,7 @@ describe("OpenAI SIP (fake OpenAI)", () => {
   });
 
   test("browser SIP test: token + nonce from the UI, webhook with the nonce header → labelled dry-run test call", async () => {
-    const res = await fetch(`${base()}/ui/test-call/sip`, {
+    const res = await fetch(`${base()}/test-call/sip`, {
       method: "POST",
       headers: { "content-type": "application/json", origin: base() },
       body: JSON.stringify({ dryRun: true }),
@@ -290,22 +290,22 @@ describe("OpenAI SIP (fake OpenAI)", () => {
     // Test legs are never answered as phone calls (no media-stream answer).
     expect(telnyxRest.some((r) => r.path.endsWith("/actions/answer"))).toBe(false);
     expect(await repo.findByCallControlId("v3:webrtc-leg")).toBeNull();
-    expect(await (await fetch(`${base()}/ui/test-call/sip/${j.nonce}`)).json()).toEqual({ callId: null });
+    expect(await (await fetch(`${base()}/test-call/sip/${j.nonce}`)).json()).toEqual({ callId: null });
 
     await webhook("live_browser", [...headers, { name: TEST_HEADER, value: j.nonce }]);
     await until(() => sidebands.has("live_browser"));
     const call = (await repo.findByCallControlId("sip:live_browser"))!;
     expect(call).toMatchObject({ from: "browser (SIP)", to: "test call", divertedFrom: null });
-    expect(await (await fetch(`${base()}/ui/test-call/sip/${j.nonce}`)).json()).toEqual({ callId: call.id });
+    expect(await (await fetch(`${base()}/test-call/sip/${j.nonce}`)).json()).toEqual({ callId: call.id });
 
     // The greeting waits for the page to report its WebRTC audio connected.
     const greeted = () => sidebands.get("live_browser")!.sent.some((e) => String(e.content).includes("Speak first"));
     await Bun.sleep(200);
     expect(greeted()).toBe(false);
-    const connected = await fetch(`${base()}/ui/test-call/sip/${j.nonce}/connected`, { method: "POST", headers: { origin: base() } });
+    const connected = await fetch(`${base()}/test-call/sip/${j.nonce}/connected`, { method: "POST", headers: { origin: base() } });
     expect(connected.status).toBe(200);
     await until(greeted);
-    expect((await fetch(`${base()}/ui/test-call/sip/${"0".repeat(32)}/connected`, { method: "POST" })).status).toBe(404);
+    expect((await fetch(`${base()}/test-call/sip/${"0".repeat(32)}/connected`, { method: "POST" })).status).toBe(404);
 
     send("live_browser", { type: "session.closed" });
     await until(async () => (await repo.getCall(call.id))?.status === "ended");
