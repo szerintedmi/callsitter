@@ -68,6 +68,12 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
         // Redelivered (or after a restart): the call exists already, so don't answer it again.
         // Webhooks for one call run in order, so this check can't race a first delivery.
         if (await d.repo.findByCallControlId(ccid)) return;
+        // Draining for a deploy (or shutting down): the caller hears busy rather than being cut off later.
+        if (!d.manager.accepting) {
+          console.log(`[telnyx] incoming call ${ccid} rejected: not accepting calls (draining)`);
+          await d.telnyx.reject(ccid, "USER_BUSY");
+          return;
+        }
         const callId = crypto.randomUUID();
         const codec = d.config.get().connection.media_stream.codec;
         await d.manager.registerIncoming({

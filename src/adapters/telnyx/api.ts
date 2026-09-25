@@ -127,6 +127,11 @@ export class TelnyxApi implements Telephony, Notifier {
     });
   }
 
+  /** Turns away an incoming call that hasn't been answered. */
+  async reject(ccid: string, cause: "CALL_REJECTED" | "USER_BUSY") {
+    await this.action(ccid, "reject", { cause, command_id: crypto.randomUUID() });
+  }
+
   async hangup(ccid: string) {
     try {
       await this.action(ccid, "hangup", { command_id: crypto.randomUUID() });

@@ -1,0 +1,7 @@
+#!/bin/sh
+# Forced command of the GitHub Actions deploy key (authorized_keys: restrict,command="…"), so the
+# key can run nothing but scamsitter-deploy. The requested words are passed on unexpanded
+# (no globbing) and scamsitter-deploy validates them; stdin (the registry token) passes through.
+set -f
+# shellcheck disable=SC2086
+exec sudo -n /usr/local/bin/scamsitter-deploy $SSH_ORIGINAL_COMMAND

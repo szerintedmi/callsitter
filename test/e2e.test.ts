@@ -293,6 +293,19 @@ describe("telephony failures", () => {
     expect((await repo.listCalls(100)).filter((c) => c.callControlId === "v3:dup")).toHaveLength(1);
   });
 
+  test("draining → call.initiated rejected as busy, not stored or answered", async () => {
+    manager.drain(60_000);
+    try {
+      await webhook("call.initiated", { call_control_id: "v3:drain", direction: "incoming", from: "+44", to: "+44" });
+      await until(() => telnyxRequests.some((r) => r.url.includes("v3%3Adrain/actions/reject")));
+    } finally {
+      manager.resume();
+    }
+    expect(telnyxRequests.find((r) => r.url.includes("v3%3Adrain/actions/reject"))!.body).toMatchObject({ cause: "USER_BUSY" });
+    expect(telnyxRequests.some((r) => r.url.includes("v3%3Adrain/actions/answer"))).toBe(false);
+    expect(await repo.findByCallControlId("v3:drain")).toBeNull();
+  });
+
   test("orphaned open calls (no session) are reaped and hung up", async () => {
     await manager.registerIncoming({ callId: "orphan", callControlId: "v3:orphan", from: "+44", to: "+44" });
     await manager.reapOrphans(60_000, "too young"); // just created: left alone

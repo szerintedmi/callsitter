@@ -15,6 +15,7 @@ import { ConfigStore, loadConfig } from "../core/config";
 import { MemoryEventBus } from "../core/event-bus";
 import { attachPersistence } from "../core/persist";
 import { createApp } from "../web/app";
+import { controlRoutes } from "../web/control";
 import { LogBuffer, mirrorConsole } from "../web/debug-log";
 import { BrowserSipCalls } from "../web/openai-sip";
 import { BrowserCalls, routeTelephony, type BrowserSipDeps } from "../web/test-call";
@@ -113,6 +114,8 @@ await manager.reapOrphans(0, "server restarted");
 setInterval(() => void manager.reapOrphans(60_000, "no media connected within 60 s").catch(console.error), 30_000);
 
 const server = Bun.serve({ port: env.PORT, hostname: env.BIND_HOST, fetch: app.fetch, websocket });
+// Always loopback, whatever BIND_HOST is: in the container only `docker compose exec` reaches it.
+const control = Bun.serve({ port: env.CONTROL_PORT, hostname: "127.0.0.1", fetch: controlRoutes(manager).fetch });
 const adminAt = env.ADMIN_AUTH === "access" ? `https://${env.ADMIN_HOST}/ (Cloudflare Access)` : `http://${server.hostname}:${server.port}/`;
 console.log(`[startup] listening on http://${server.hostname}:${server.port}; admin UI at ${adminAt}`);
 
@@ -128,6 +131,7 @@ const shutdown = async (sig: string) => {
   await manager.stopAll("server shutting down");
   await persistence.flush();
   server.stop();
+  control.stop();
   process.exit(0);
 };
 process.on("SIGINT", () => void shutdown("SIGINT"));

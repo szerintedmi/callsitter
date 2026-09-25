@@ -68,6 +68,8 @@ Replay examples:
    - Copy it to `deploy/cloudflared.yml` (gitignored, since it has machine-specific paths and IDs) and run `bun run tunnel`.
 3. **Divert your mobile** to the Telnyx number (this is a phone setting).
 
+**Production** runs on an OVH VPS in Docker, deployed by GitHub Actions on every push to `main`: see [docs/deploy.md](docs/deploy.md).
+
 ## OpenAI SIP
 
 gpt-live-1 can answer the SIP leg itself ([voice-sip](https://developers.openai.com/api/docs/guides/voice-sip?api=live)). Telnyx sends the call to `sip:<project>@sip.api.openai.com;transport=tls` and OpenAI posts a signed `live.transport.incoming` webhook to `/openai/webhook`. The app then accepts the call with the `live.yaml` prompt and voice, and attaches a **sideband** WebSocket (`/v1/live/sessions/{id}/attach`). Everything else is the normal call session:
@@ -101,6 +103,7 @@ src/runtime/    bun.ts entrypoint, env schema, client build (client-assets.ts)
 src/replay/     transcript replay harness + offline keyword classifier
 evals/          on-demand evals against the real vendors (cases.yaml, bun run eval)
 config/         see Config below
+deploy/         Compose file (production), VPS scripts (deploy/vps), dev tunnel template; docs/deploy.md
 ```
 
 ## Config

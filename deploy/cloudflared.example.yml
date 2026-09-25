@@ -1,5 +1,5 @@
 # Cloudflare named tunnel -> 127.0.0.1:8787. Copy to deploy/cloudflared.yml (gitignored) and run
-# `bun run tunnel`.
+# `bun run tunnel`. This is for dev; production uses deploy/vps/cloudflared.yml (docs/deploy.md).
 #   hooks.example.com   public, Telnyx/OpenAI webhooks + media only
 #   admin.example.com   admin UI, behind a Cloudflare Access application (the app also verifies the Access JWT)
 # Create with: cloudflared tunnel create scamsitter

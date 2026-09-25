@@ -26,7 +26,11 @@ export class CallManager {
   private attaching = new Map<string, Promise<CallSession>>();
   /** work that outlives a call's session (its wrap-up, saving recordings); shutdown waits for it */
   private background = new Set<Promise<unknown>>();
+  /** registered calls that have no session yet (answered, media not connected) */
+  private pending = new Set<string>();
   private shuttingDown = false;
+  /** while set and in the future, new calls are turned away (a deploy waits for the rest to end) */
+  private drainUntil: number | null = null;
 
   constructor(private d: SharedDeps) {}
 
@@ -34,16 +38,44 @@ export class CallManager {
     return this.d.bus;
   }
 
+  /** False while draining or shutting down: callers reject new calls instead of registering them. */
+  get accepting(): boolean {
+    if (this.shuttingDown) return false;
+    return this.drainUntil === null || this.d.clock.now() >= this.drainUntil;
+  }
+
+  /** Turns new calls away for `ttlMs`, so a deploy that dies mid-drain can't leave it on. */
+  drain(ttlMs: number) {
+    this.drainUntil = this.d.clock.now() + ttlMs;
+  }
+
+  resume() {
+    this.drainUntil = null;
+  }
+
+  /** Calls that would be cut off by a restart: registered, connecting or live. */
+  get activeCalls(): number {
+    return new Set([...this.pending, ...this.attaching.keys(), ...this.sessions.keys()]).size;
+  }
+
   async registerIncoming(c: { callId: string; callControlId: string; from: string; to: string; divertedFrom?: string }) {
+    // Checked before the first await, so a call can't slip in after a drain reports no calls.
+    if (!this.accepting) throw new Error("not accepting calls (draining or shutting down)");
+    this.pending.add(c.callId);
     const startedAt = this.d.clock.now();
-    await this.d.repo.createCall({
-      id: c.callId,
-      callControlId: c.callControlId,
-      from: c.from,
-      to: c.to,
-      divertedFrom: c.divertedFrom ?? null,
-      startedAt,
-    });
+    try {
+      await this.d.repo.createCall({
+        id: c.callId,
+        callControlId: c.callControlId,
+        from: c.from,
+        to: c.to,
+        divertedFrom: c.divertedFrom ?? null,
+        startedAt,
+      });
+    } catch (err) {
+      this.pending.delete(c.callId);
+      throw err;
+    }
     const meta: CallMeta = { callId: c.callId, from: c.from, to: c.to, divertedFrom: c.divertedFrom, startedAt };
     this.d.bus.publish({ type: "call.started", callId: c.callId, meta });
   }
@@ -90,6 +122,7 @@ export class CallManager {
       },
     });
     this.sessions.set(callId, session);
+    this.pending.delete(callId);
     await this.d.repo.updateCall(callId, { status: "active" });
     try {
       await session.start(codec);
@@ -105,6 +138,7 @@ export class CallManager {
   }
 
   async hangup(callId: string, reason: string) {
+    this.pending.delete(callId);
     const s = this.sessions.get(callId);
     if (s) return s.stop(reason);
     const attaching = this.attaching.get(callId);

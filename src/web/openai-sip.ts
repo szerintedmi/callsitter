@@ -116,6 +116,12 @@ export function openAiSipRoutes(d: SipRoutesDeps) {
       await d.sip.reject(sessionId, sc.reject_status);
       return;
     }
+    // Draining for a deploy (or shutting down): 486 Busy Here rather than being cut off later.
+    if (!d.manager.accepting) {
+      console.log(`[sip ${sessionId}] rejected (486): not accepting calls (draining)`);
+      await d.sip.reject(sessionId, 486);
+      return;
+    }
     const callId = crypto.randomUUID();
     const test = d.browserSip.claim(sipHeader(headers, TEST_HEADER), callId);
     // Logged until the header mapping is confirmed on real calls (From/To/Diversion from Telnyx).

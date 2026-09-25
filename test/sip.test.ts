@@ -42,6 +42,7 @@ let server: ReturnType<typeof Bun.serve>;
 let repo: SqliteRepo;
 let config: ConfigStore;
 let browserSip: BrowserSipCalls;
+let manager: CallManager;
 /** Telnyx REST calls (token, transfer, hangup) */
 const telnyxRest: { path: string; body: any }[] = [];
 let telnyxSign: (msg: string) => Promise<string>;
@@ -94,7 +95,7 @@ beforeAll(async () => {
   });
   const browserCalls = new BrowserCalls();
   browserSip = new BrowserSipCalls();
-  const manager = new CallManager({
+  manager = new CallManager({
     config: () => config.get(),
     voice: { connect: () => Promise.reject(new Error("SIP calls must use the per-call agent")) },
     classifier: scripted({ verdict: "scam", confidence: 0.9 }),
@@ -256,6 +257,19 @@ describe("OpenAI SIP (fake OpenAI)", () => {
     } finally {
       config.get().connection.sip.enabled = true;
     }
+  });
+
+  test("draining → rejected with 486 and no call stored; resumed → accepted again", async () => {
+    manager.drain(60_000);
+    try {
+      await webhook("live_drain", headers);
+      await until(() => rest.some((r) => r.path === "/v1/live/sessions/live_drain/reject"));
+      expect(rest.find((r) => r.path === "/v1/live/sessions/live_drain/reject")!.body).toEqual({ status_code: 486 });
+      expect(await repo.findByCallControlId("sip:live_drain")).toBeNull();
+    } finally {
+      manager.resume();
+    }
+    expect(manager.accepting).toBe(true);
   });
 
   test("browser SIP test: token + nonce from the UI, webhook with the nonce header → labelled dry-run test call", async () => {

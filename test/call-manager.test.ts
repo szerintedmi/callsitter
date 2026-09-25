@@ -73,4 +73,24 @@ describe("call manager", () => {
     await expect(attach).rejects.toThrow("server shutting down");
     expect(r.connects()).toBe(0);
   });
+
+  test("drain turns new calls away until resumed or its TTL runs out, and counts calls until they end", async () => {
+    const r = await rig();
+    expect(r.manager.activeCalls).toBe(1); // c1: registered, media not connected yet
+    r.manager.drain(60_000);
+    expect(r.manager.accepting).toBe(false);
+    await expect(r.manager.registerIncoming({ callId: "c2", callControlId: "cc2", from: "+441", to: "+442" })).rejects.toThrow(
+      "not accepting calls",
+    );
+    expect(await r.repo.getCall("c2")).toBeNull();
+    await r.manager.attachMedia("c1", NO_MEDIA, "pcma");
+    expect(r.manager.activeCalls).toBe(1);
+    await r.manager.hangup("c1", "caller hung up");
+    expect(r.manager.activeCalls).toBe(0);
+    r.manager.resume();
+    expect(r.manager.accepting).toBe(true);
+    r.manager.drain(20);
+    await Bun.sleep(40);
+    expect(r.manager.accepting).toBe(true);
+  });
 });

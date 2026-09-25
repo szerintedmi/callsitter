@@ -4,6 +4,8 @@ import type { AdminAuth } from "../web/admin-guard";
 const Env = z.object({
   PORT: z.coerce.number().int().default(8787),
   BIND_HOST: z.string().default("127.0.0.1"),
+  /** loopback-only operator API (drain/resume/status, used by deploys via scripts/control.ts) */
+  CONTROL_PORT: z.coerce.number().int().default(8788),
   /** wss:// base Telnyx connects to for media, e.g. wss://hooks.example.com */
   PUBLIC_WS_BASE: z.string().regex(/^wss?:\/\/[^/]+$/, "e.g. wss://hooks.example.com (no trailing slash)"),
   TELNYX_API_KEY: z.string().min(1),

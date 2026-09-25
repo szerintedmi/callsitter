@@ -7,6 +7,7 @@ AI call screener: Telnyx media stream ↔ OpenAI Live (gpt-live-1), TypeSafe Jev
 - `bun test`: all tests, including `test/e2e.test.ts` (the steel thread with faked vendors)
 - `bun run typecheck`, `bun run check-config`
 - `bun run replay <transcript> --fake`: offline Jev/call-flow replay
+- Production: `Dockerfile`, `deploy/compose.yaml`, VPS scripts in `deploy/vps/`, `.github/workflows/`; runbook in `docs/deploy.md`. A deploy drains calls through the loopback control API (`src/web/control.ts`, `scripts/control.ts`) before replacing the container. Files the image needs must also be allowed in `.dockerignore`.
 - `bun run eval [names…] [--runs N]`: on-demand evals against the real vendors (`evals/cases.yaml`); run after prompt or Jev changes, not every time. Eval-only code stays in `evals/`, not in `src/`.
 
 ## Conventions
