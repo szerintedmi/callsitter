@@ -37,9 +37,9 @@ compose() { docker compose --project-directory "$DIR" -f "$DIR/compose.yaml" "$@
 running() { [[ -f $DIR/compose.yaml && -n $(compose ps -q --status running scamsitter 2>/dev/null) ]]; }
 control() { compose exec -T scamsitter bun scripts/control.ts "$@"; }
 digest_of() { local d=${1##*@sha256:}; printf '%s' "${d:0:16}"; }
-current() { [[ -s $RELEASES ]] && tail -n1 "$RELEASES" || true; }
+current() { if [[ -s $RELEASES ]]; then tail -n1 "$RELEASES"; fi; }
 # The newest release before the current one (skipping repeats from earlier rollbacks).
-previous() { [[ -s $RELEASES ]] && tac "$RELEASES" | awk '!seen[$0]++' | sed -n 2p || true; }
+previous() { if [[ -s $RELEASES ]]; then tac "$RELEASES" | awk '!seen[$0]++' | sed -n 2p; fi; }
 revision() { docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1" 2>/dev/null || true; }
 
 lock() {
@@ -109,7 +109,7 @@ cmd_deploy() {
     ((rc == 0)) || die "drain failed (exit $rc)"
     DRAINED=1
     # If anything below fails before the switch, take calls again rather than wait for the TTL.
-    trap '[[ -n $DRAINED ]] && control resume >/dev/null 2>&1 || true' EXIT
+    trap 'if [[ -n $DRAINED ]]; then control resume >/dev/null 2>&1 || true; fi' EXIT
     control_backup "pre-deploy-$(date -u +%Y%m%dT%H%M%SZ)-$(digest_of "${prev:-none}").db" || die "pre-deploy backup failed"
   fi
 
@@ -157,7 +157,7 @@ cmd_status() {
   [[ -n $cur ]] && echo "revision: $(revision "$cur")"
   if [[ -f $DIR/compose.yaml ]]; then
     compose ps --format '{{.Name}}: {{.Status}}' scamsitter
-    running && control status || true
+    if running; then control status || true; fi
   fi
 }
 

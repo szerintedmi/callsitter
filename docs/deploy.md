@@ -144,7 +144,7 @@ Run these on the VPS (`ssh scamsitter-vps`):
 | --- | --- |
 | Current release, health, active calls | `sudo scamsitter-deploy status` |
 | Logs | `sudo docker compose --project-directory /opt/scamsitter logs -f` |
-| Roll back one release | `sudo scamsitter-deploy rollback` |
+| Go back to the release that ran before this one (twice toggles back) | `sudo scamsitter-deploy rollback` |
 | Deploy a specific image (already on the VPS) | `sudo scamsitter-deploy deploy ghcr.io/szerintedmi/scamsitter@sha256:… </dev/null` |
 | Stop / restart taking calls | `sudo scamsitter-deploy drain` / `sudo scamsitter-deploy resume` |
 
