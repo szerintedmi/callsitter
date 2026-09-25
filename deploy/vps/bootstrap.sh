@@ -96,6 +96,14 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
 systemctl enable --now qemu-guest-agent 2>/dev/null || warn "qemu-guest-agent not started (no guest channel?)"
+# systemd-resolved answers LLMNR (port 5355) on all interfaces by default; nothing here needs it.
+if systemctl is-active --quiet systemd-resolved; then
+  install -d -m 0755 /etc/systemd/resolved.conf.d
+  tmp=$(mktemp)
+  printf '[Resolve]\nLLMNR=no\nMulticastDNS=no\n' >"$tmp"
+  if put "$tmp" /etc/systemd/resolved.conf.d/10-scamsitter.conf 0644; then systemctl restart systemd-resolved; fi
+  rm -f "$tmp"
+fi
 
 log "Docker daemon"
 # live-restore: containers (and calls) keep running while dockerd restarts, e.g. on upgrade.

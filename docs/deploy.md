@@ -55,7 +55,7 @@ Don't move the public and admin hostnames yet; that's step 5.
 
 1. Order the VPS with **Debian 13** and your SSH key. OVH's console needs a password, so set one for your user: `sudo passwd debian`.
 2. Choose OVH automated backup (daily, 7 days), scheduled for **03:00 UTC or later**, after the 02:30 UTC SQLite copy.
-3. Create the deploy key on your laptop: `ssh-keygen -t ed25519 -N '' -C github-deploy -f ~/.ssh/scamsitter-deploy`.
+3. Create the GitHub deploy key on your laptop: `ssh-keygen -t ed25519 -N '' -C github-actions-deploy@scamsitter -f ~/.ssh/scamsitter-github-deploy`. Keep it separate from the key you log in with: the deploy key can only run `scamsitter-deploy`.
 4. Copy the scripts and the tunnel credentials, then run the bootstrap twice:
 
    ```sh
@@ -63,7 +63,7 @@ Don't move the public and admin hostnames yet; that's step 5.
    scp ~/.cloudflared/<PROD_ID>.json debian@<VPS_IP>:
    ssh debian@<VPS_IP>
    sudo ./scamsitter-vps/bootstrap.sh              # first run: creates /etc/scamsitter/deploy.conf and stops
-   sudo nano /etc/scamsitter/deploy.conf           # DEPLOY_PUBKEY (~/.ssh/scamsitter-deploy.pub), TUNNEL_ID=<PROD_ID>
+   sudo nano /etc/scamsitter/deploy.conf           # DEPLOY_PUBKEY (~/.ssh/scamsitter-github-deploy.pub), TUNNEL_ID=<PROD_ID>
    sudo install -D -m 0600 <PROD_ID>.json /etc/cloudflared/<PROD_ID>.json && rm <PROD_ID>.json
    sudo ./scamsitter-vps/bootstrap.sh              # installs everything; prints the DEPLOY_KNOWN_HOSTS line
    sudo nano /etc/scamsitter/scamsitter.env        # from your .env; new MEDIA_TOKEN_SECRET
@@ -94,7 +94,7 @@ Don't move the public and admin hostnames yet; that's step 5.
 ### 3. GitHub (repository secrets and variables)
 
 ```sh
-gh secret set DEPLOY_SSH_KEY < ~/.ssh/scamsitter-deploy
+gh secret set DEPLOY_SSH_KEY < ~/.ssh/scamsitter-github-deploy
 gh secret set DEPLOY_KNOWN_HOSTS --body 'scamsitter-ssh.geekmango.com ssh-ed25519 AAAA…'   # printed by bootstrap.sh
 gh secret set CF_ACCESS_CLIENT_ID --body '<id>.access'
 gh secret set CF_ACCESS_CLIENT_SECRET                                                     # paste when prompted
