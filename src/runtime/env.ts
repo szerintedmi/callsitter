@@ -69,6 +69,11 @@ function hostOfWsBase(base: string): string | null {
   }
 }
 
+/** The public host (PUBLIC_WS_BASE's): webhooks, media and the public page. */
+export function publicHostOf(env: Env): string {
+  return hostOfWsBase(env.PUBLIC_WS_BASE)!;
+}
+
 export function adminAuthFrom(env: Env): AdminAuth {
   if (env.ADMIN_AUTH === "none") return { mode: "none", adminHost: env.ADMIN_HOST };
   return { mode: "access", adminHost: env.ADMIN_HOST!, teamDomain: env.CF_ACCESS_TEAM_DOMAIN!, aud: env.CF_ACCESS_AUD! };

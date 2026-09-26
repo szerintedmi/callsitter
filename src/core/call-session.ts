@@ -59,6 +59,7 @@ export class CallSession {
   /** drives the classification trigger and the silence watchdog */
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private maxTimer: ReturnType<typeof setTimeout> | null = null;
+  private timeUpTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * Last caller speech or agent speech (wall clock). Agent speech counts until it has played
    * out, so this can be in the future.
@@ -145,10 +146,15 @@ export class CallSession {
     this.codec = codec;
     this.answeredAt = this.d.clock.now();
     // The deadline runs from answer, so a Live connection that stalls can't keep the call open.
-    this.maxTimer = setTimeout(
-      () => void this.hangup("max call length reached"),
-      cfg.flow.timing.max_call_seconds * 1000,
-    );
+    // time_up asks for the goodbye first; at the deadline the call ends once it has played.
+    const maxMs = cfg.flow.timing.max_call_seconds * 1000;
+    const timeUpMs = cfg.flow.timing.time_up ? maxMs - cfg.flow.timing.time_up.seconds_left * 1000 : 0;
+    if (timeUpMs > 0) this.timeUpTimer = setTimeout(() => this.orch.timeUp(), timeUpMs);
+    this.maxTimer = setTimeout(() => {
+      void this.hangupAfterGoodbye("max call length reached");
+      // Backstop: the goodbye check only runs while the call is active.
+      this.maxTimer = setTimeout(() => void this.hangup("max call length reached"), cfg.flow.timing.agent_idle.max_hangup_wait_ms + 1000);
+    }, maxMs);
 
     // Say hello straight away with the recorded greeting; Live connects meanwhile and carries on from it.
     // Not over OpenAI SIP: the phone leg is OpenAI's, so there is nowhere to play it.
@@ -477,6 +483,7 @@ export class CallSession {
     this.endedAt = this.d.clock.now();
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.maxTimer) clearTimeout(this.maxTimer);
+    if (this.timeUpTimer) clearTimeout(this.timeUpTimer);
     this.connecting.abort(new Error("call ended"));
     this.orch.end();
     // A hangup still waiting for the goodbye is this one.

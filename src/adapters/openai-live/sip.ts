@@ -61,21 +61,14 @@ export class OpenAiSip {
     return this.client.live.sessions.reject(sessionId, { status_code: statusCode });
   }
 
-  async hangup(sessionId: string) {
-    try {
-      await this.client.live.sessions.hangup(sessionId);
-    } catch (err) {
-      // The call has ended already.
-      if (err instanceof OpenAI.APIError && (err.status === 404 || err.status === 409)) return;
-      throw err;
-    }
+  hangup(sessionId: string) {
+    return hangupSession(this.client, sessionId);
   }
 
   /**
    * A voice agent for one incoming SIP session: connect() accepts the call with the Live config
-   * (SIP negotiates the audio format, so there is none) and attaches the sideband. With
-   * `onRecording`, the reflected audio is recorded as a stereo 24 kHz WAV (caller left, agent
-   * right) and handed over when the session closes. With `greetAfter`, the greeting waits for it.
+   * (SIP negotiates the audio format, so there is none) and attaches the sideband
+   * (recordedSideband).
    */
   voiceAgent(sessionId: string, opts: { onRecording?: (wav: ArrayBuffer) => void; greetAfter?: Promise<void> } = {}): VoiceAgent {
     return {
@@ -94,26 +87,52 @@ export class OpenAiSip {
           },
           { signal: o.signal },
         );
-        const recorder = opts.onRecording ? new StereoRecorder(24000, Date.now()) : undefined;
-        let saved = false;
-        const url = `${this.o.liveUrl ?? LIVE_URL}/${encodeURIComponent(sessionId)}/attach`;
-        return attachSideband(
-          url,
-          this.o.apiKey,
-          o,
-          {
-            ...h,
-            onClose: () => {
-              if (recorder && !saved) {
-                saved = true;
-                opts.onRecording!(recorder.toWav());
-              }
-              h.onClose();
-            },
-          },
-          { recorder, greetAfter: opts.greetAfter },
-        );
+        return recordedSideband(this.o.apiKey, this.o.liveUrl, sessionId, o, h, opts);
       },
     };
   }
+}
+
+/** Ends a Live session from the server; a session that has ended already is fine. */
+export async function hangupSession(client: OpenAI, sessionId: string) {
+  try {
+    await client.live.sessions.hangup(sessionId);
+  } catch (err) {
+    if (err instanceof OpenAI.APIError && (err.status === 404 || err.status === 409)) return;
+    throw err;
+  }
+}
+
+/**
+ * Attaches the sideband to a started session (SIP accept, or WebRTC create). With `onRecording`,
+ * the reflected audio is recorded as a stereo 24 kHz WAV (caller left, agent right) and handed
+ * over when the session closes. With `greetAfter`, the greeting waits for it.
+ */
+export function recordedSideband(
+  apiKey: string,
+  liveUrl: string | undefined,
+  sessionId: string,
+  o: VoiceSessionOptions,
+  h: VoiceSessionHandlers,
+  opts: { onRecording?: (wav: ArrayBuffer) => void; greetAfter?: Promise<void> },
+): Promise<VoiceSession> {
+  const recorder = opts.onRecording ? new StereoRecorder(24000, Date.now()) : undefined;
+  let saved = false;
+  const url = `${liveUrl ?? LIVE_URL}/${encodeURIComponent(sessionId)}/attach`;
+  return attachSideband(
+    url,
+    apiKey,
+    o,
+    {
+      ...h,
+      onClose: () => {
+        if (recorder && !saved) {
+          saved = true;
+          opts.onRecording!(recorder.toWav());
+        }
+        h.onClose();
+      },
+    },
+    { recorder, greetAfter: opts.greetAfter },
+  );
 }

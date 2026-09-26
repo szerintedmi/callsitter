@@ -8,6 +8,7 @@ import type { MediaChannel, Telephony } from "../core/ports";
 import { StereoRecorder } from "../core/wav";
 import { sipUri, type OpenAiSip } from "../adapters/openai-live/sip";
 import { isSipCall, sipSessionId, TEST_HEADER, testDial, type BrowserSipCalls } from "./openai-sip";
+import { isPublicCall } from "./public";
 import { TEST_CALL_PROTOCOL } from "./test-call-protocol";
 
 // Browser test call: the UI streams the computer mic over a WebSocket instead of a phone leg.
@@ -53,6 +54,8 @@ export function routeTelephony(carrier: Telephony, browser: BrowserCalls, sip?: 
   return {
     hangup: async (ccid) => {
       if (BrowserCalls.isBrowser(ccid)) return browser.hangup(ccid);
+      // The page's WebRTC leg is Live's own: closing the session (the sideband) ends it.
+      if (isPublicCall(ccid)) return;
       if (isSipCall(ccid)) {
         if (!sip) throw new Error("OpenAI SIP is not configured");
         return sip.hangup(sipSessionId(ccid));

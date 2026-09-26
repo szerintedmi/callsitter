@@ -15,6 +15,8 @@ export interface AttachOptions {
   /** per-call voice agent (OpenAI SIP: accept + sideband for this session) instead of the shared one */
   voice?: VoiceAgent;
   mediaViaVoice?: boolean;
+  /** caps flow.timing.max_call_seconds for this call (public calls) */
+  maxCallSeconds?: number;
 }
 
 /** For calls whose audio doesn't pass through us (OpenAI SIP): agent audio copies are dropped. */
@@ -58,7 +60,7 @@ export class CallManager {
     return new Set([...this.pending, ...this.attaching.keys(), ...this.sessions.keys()]).size;
   }
 
-  async registerIncoming(c: { callId: string; callControlId: string; from: string; to: string; divertedFrom?: string }) {
+  async registerIncoming(c: { callId: string; callControlId: string; from: string; to: string; divertedFrom?: string; callerIp?: string }) {
     // Checked before the first await, so a call can't slip in after a drain reports no calls.
     if (!this.accepting) throw new Error("not accepting calls (draining or shutting down)");
     this.pending.add(c.callId);
@@ -70,6 +72,7 @@ export class CallManager {
         from: c.from,
         to: c.to,
         divertedFrom: c.divertedFrom ?? null,
+        callerIp: c.callerIp ?? null,
         startedAt,
       });
     } catch (err) {
@@ -101,8 +104,17 @@ export class CallManager {
     // stopAll has already hung up the sessions it saw; the next startup reaps this call.
     if (this.shuttingDown) throw new Error("server shutting down");
 
+    const cap = opts.maxCallSeconds;
+    const config = cap
+      ? () => {
+          const cfg = this.d.config();
+          const timing = { ...cfg.flow.timing, max_call_seconds: Math.min(cfg.flow.timing.max_call_seconds, cap) };
+          return { ...cfg, flow: { ...cfg.flow, timing } };
+        }
+      : this.d.config;
     const session = new CallSession({
       ...this.d,
+      config,
       meta: {
         callId,
         from: call.from,

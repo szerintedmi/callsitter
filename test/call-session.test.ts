@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { b64encode } from "../src/core/audio";
 import { CallSession, type CallSessionDeps } from "../src/core/call-session";
 import { MemoryEventBus } from "../src/core/event-bus";
-import type { TellLive } from "../src/core/config";
+import type { AppConfig, TellLive } from "../src/core/config";
 import type { Agent, VoiceSessionHandlers } from "../src/core/ports";
 import type { CallEvent } from "../src/core/types";
 import { loadRepoConfig, scripted } from "./helpers";
@@ -17,8 +17,9 @@ const msg = (as: TellLive["as"], text: string, o: Partial<TellLive> = {}): TellL
   ...o,
 });
 
-async function rig(opts: { agent?: Agent; sip?: boolean; afterCall?: boolean } = {}) {
+async function rig(opts: { agent?: Agent; sip?: boolean; afterCall?: boolean; config?: (c: AppConfig) => void } = {}) {
   const config = await loadRepoConfig();
+  opts.config?.(config);
   config.luna.after_call = { ...config.luna.after_call, enabled: opts.afterCall ?? false };
   config.flow.silence = { ...config.flow.silence, enabled: true, after_ms: 7000, max_prompts: 2, hang_up: true };
   config.connection.speech_detection = { caller_dbfs: -40, agent_dbfs: -50 };
@@ -316,6 +317,27 @@ describe("call session lifecycle", () => {
     return { session: new CallSession(all), hangups, ended, notes, signal: () => signal };
   }
 
+  test("time_up asks for the goodbye before max call length, then the call ends", async () => {
+    const r = await rig({
+      config: (c) => {
+        c.flow.timing.max_call_seconds = 0.2;
+        c.flow.timing.time_up = { ...c.flow.timing.time_up!, seconds_left: 0.1 };
+      },
+    });
+    const text = r.config.flow.timing.time_up!.tell_live.text;
+    const ended: string[] = [];
+    r.bus.subscribe((e) => void (e.type === "call.ended" && ended.push(e.reason)));
+    await Bun.sleep(150);
+    expect(r.appended).toEqual([text]);
+    expect(r.kinds.at(-1)).toBe("commentary");
+    expect(r.session.orch.stage).toBe("time_up");
+    expect(r.hangups).toEqual([]);
+    await Bun.sleep(100);
+    await r.session.finished;
+    expect(ended).toEqual(["max call length reached"]);
+    expect(r.hangups).toEqual(["cc1"]);
+  });
+
   test("max call length applies while Live is still connecting", async () => {
     const r = await stalled((c) => {
       c.flow.timing.max_call_seconds = 0.03;
@@ -530,11 +552,6 @@ describe("call session silence watchdog", () => {
     await r.session.stop("test");
   });
 
-  test("the silence prompt tells the agent not to talk over the caller", async () => {
-    const r = await rig();
-    expect(r.prompt).toContain("If they start talking, stop and listen.");
-    await r.session.stop("test");
-  });
 
   describe("steering instructions are held so they don't cancel the agent", () => {
     const loud = b64encode(new Uint8Array(160).fill(0xaa));

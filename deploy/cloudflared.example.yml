@@ -1,6 +1,6 @@
 # Cloudflare named tunnel -> 127.0.0.1:8787. Copy to deploy/cloudflared.yml (gitignored) and run
 # `bun run tunnel`. This is for dev; production uses deploy/vps/cloudflared.yml (docs/deploy.md).
-#   hooks.example.com   public, Telnyx/OpenAI webhooks + media only
+#   hooks.example.com   public, Telnyx/OpenAI webhooks + media, and the public page
 #   admin.example.com   admin UI, behind a Cloudflare Access application (the app also verifies the Access JWT)
 # Create with: cloudflared tunnel create scamsitter
 #              cloudflared tunnel route dns <tunnel-id> <hostname>   (use the ID: a default
@@ -11,9 +11,9 @@ credentials-file: /Users/you/.cloudflared/<tunnel-id>.json
 # origincert: /Users/you/.cloudflared/cert.pem   # if cert.pem isn't in the default location
 
 ingress:
-  # Public: only the Telnyx and OpenAI webhooks, media stream and health paths.
+  # Public: the Telnyx and OpenAI webhooks, media stream, health, and the public page (/, /call…).
   - hostname: hooks.example.com
-    path: ^/(telnyx/webhook|openai/webhook|media/.*|healthz)$
+    path: ^/(telnyx/webhook|openai/webhook|media/.*|healthz|call(/.*)?|assets/public\.js)?$
     service: http://127.0.0.1:8787
   - hostname: hooks.example.com
     service: http_status:404

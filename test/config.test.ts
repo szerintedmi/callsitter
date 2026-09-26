@@ -49,15 +49,16 @@ describe("config", () => {
 
   test("{owner_name} is filled in every config text, falling back to \"the owner\"", async () => {
     const yaml = new YamlDirSource("./config");
-    const named = await loadConfig(yaml, { ownerName: "Alex" });
-    expect(named.live.instructions).toContain("This is Alex's phone");
-    expect(named.luna.instructions).toContain("answers Alex's personal UK mobile");
-    // Filled per Luna reply.
-    expect(named.flow.when_live_asks_for_help.tell_live.text).toStartWith("SUPERVISOR: {luna_response}");
-    expect((await loadConfig(yaml)).live.instructions).toContain("This is the owner's phone");
-    expect((await loadConfig(yaml)).live.instructions).toContain("You speak English:");
-    expect((await loadConfig(yaml, { agentLanguages: "English and Hungarian" })).live.instructions)
-      .toContain("You speak English and Hungarian:");
+    // Checks the filling, not the prompts' wording.
+    const named = JSON.stringify(await loadConfig(yaml, { ownerName: "Alex", agentLanguages: "English and Hungarian" }));
+    expect(named).not.toMatch(/\{(owner_name|agent_languages)\}/);
+    expect(named).toContain("Alex");
+    expect(named).toContain("English and Hungarian");
+    // Filled per Luna reply, not at load.
+    expect(named).toContain("{luna_response}");
+    const unnamed = JSON.stringify(await loadConfig(yaml));
+    expect(unnamed).not.toMatch(/\{(owner_name|agent_languages)\}/);
+    expect(unnamed).toContain("the owner");
     const cfg = await loadRepoConfig();
     cfg.flow.rules[0]!.then = { tell_live: { as: "instructions", text: "Tell {owner_name} later.", send: "now", max_hold_ms: null } };
     expect(fillPlaceholders(cfg, { ownerName: "Alex" }).flow.rules[0]!.then!.tell_live!.text).toBe("Tell Alex later.");

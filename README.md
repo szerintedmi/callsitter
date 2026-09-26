@@ -52,6 +52,15 @@ Replay examples:
 - It needs the setup in [OpenAI SIP](#openai-sip). Test calls show up as `browser (SIP)`.
 - The page's **Debug log** shows the Telnyx call states (with SIP codes) and the server's log lines.
 
+**Public page** (`https://<public host>/`, the one Telnyx calls; preview at `/public` on the admin host): a single **Scam me** button for anyone with the link. The visitor plays the scammer.
+
+- The browser talks to gpt-live-1 over **WebRTC**. The server exchanges the SDP offer with `POST /v1/live/sessions` ([voice-webrtc](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live): "we recommend using WebRTC rather than WebSockets for more consistent performance") and attaches a sideband, as for a SIP call. The API key and the prompt stay on the server.
+- The page's data channel is locked down (`client.data_channel`): it can't send any client event, so a visitor can't append instructions. It only receives `session.closed`.
+- Cost caps (`config/public.yaml`): a 10-minute call length, 3 calls at once, 10 calls per IP a day, and a rolling-24 h budget. A call is admitted only if it fits even if it and every live public call run the full 10 minutes.
+- During the call the page shows a meter whose needle leans from genuine to scam/spam (P(scam) + P(spam) − P(genuine); an unclear verdict pulls it to the middle) and the call-flow stage, streamed as server-sent events from `/call/:id/events`.
+- Luna's tools are live (`public.yaml → tools`): a genuine caller's message can reach the owner by SMS. Calls are recorded and listed with the caller `public` and the visitor's IP (`CF-Connecting-IP`, stored with the call).
+- Why the admin test call uses a WebSocket relay instead: it exercises the Telnyx media-stream path that real calls take. The public page is the only caller that really arrives over WebRTC.
+
 **Call page:** a live status strip, and an aligned timeline with one row per utterance: transcript | Jev classifications | Luna, call-flow stages, tools and errors.
 
 ## Setup
@@ -61,9 +70,9 @@ Replay examples:
    - Copy the webhook public key into `TELNYX_PUBLIC_KEY`.
    - For SMS, use a +447 number, or an alphanumeric sender with a messaging profile (Level 2 verification).
 2. **Cloudflare tunnel:** see [deploy/cloudflared.example.yml](deploy/cloudflared.example.yml).
-   - `hooks.<domain>` is public, but only the webhook and media paths are routed.
+   - `hooks.<domain>` is public, but only the webhook, media and public-page paths are routed.
    - `admin.<domain>` serves the admin UI (call list, call pages, test call) at its root, behind Cloudflare Access. The app verifies the Access JWT itself (`ADMIN_AUTH=access`, with `ADMIN_HOST`, `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`), so a direct `127.0.0.1` request gets 403.
-   - The admin UI has its own hostname so it never shares a browser origin with the public host, whose root is kept for a future public UI.
+   - The admin UI has its own hostname so it never shares a browser origin with the public host, whose root serves the public page.
    - For offline dev, set `ADMIN_AUTH=none`. The admin UI is then served on loopback only; Host and Origin are still checked.
    - Copy it to `deploy/cloudflared.yml` (gitignored, since it has machine-specific paths and IDs) and run `bun run tunnel`.
 3. **Divert your mobile** to the Telnyx number (this is a phone setting).
@@ -96,8 +105,8 @@ Setup:
 
 ```
 src/core/       runtime-agnostic: config schema, call flow, orchestrator, call session, ports
-src/adapters/   telnyx (webhooks/REST/media), openai-live (WebSocket, SIP + sideband), jev, luna, storage (sqlite/fs), config (yaml)
-src/web/        Hono routes: /telnyx/webhook, /openai/webhook, /media/:callId/:codec/:token; admin UI on ADMIN_HOST
+src/adapters/   telnyx (webhooks/REST/media), openai-live (WebSocket, SIP, WebRTC + sideband), jev, luna, storage (sqlite/fs), config (yaml)
+src/web/        Hono routes: /telnyx/webhook, /openai/webhook, /media/:callId/:codec/:token, the public page (/, /call); admin UI on ADMIN_HOST
 src/web/client/ browser TypeScript for the UI pages, compiled with Bun.build and served as /assets/<page>.js on the admin host
 src/runtime/    bun.ts entrypoint, env schema, client build (client-assets.ts)
 src/replay/     transcript replay harness + offline keyword classifier
@@ -119,6 +128,7 @@ Each file has one job (schemas and cross-file checks: `src/core/config.ts`; `bun
 | `luna.yaml`       | Everything about Luna: model, tools, limits, prompts.                                                                                                                                                       |
 | `connection.yaml` | How the audio reaches the agent: OpenAI SIP, Telnyx media stream, speech levels.                                                                                                                            |
 | `cost.yaml`       | Rough per-call cost estimate.                                                                                                                                                                               |
+| `public.yaml`     | The public page's limits: call length, calls at once, per IP, daily budget.                                                                                                                                 |
 
 
 What reaches Live, and when:
@@ -127,6 +137,7 @@ What reaches Live, and when:
 - **Each caller pause:** Jev answers the `jev.yaml` questions, and the first matching `call-flow.yaml` rule runs. It sends Live a text, asks Luna (her reply goes out the same way), or hangs up after the goodbye. Texts wait until the agent is idle, unless the rule says to send at once.
 - **Live asks for help:** Luna answers, or a fallback does.
 - **Silence:** the agent is nudged; after the goodbyes, or repeated silence, the call ends.
+- **Time up:** 30 s before `max_call_seconds` (`call-flow.yaml → timing.time_up`), the agent is told to say goodbye and the call enters `time_up`, where no rule sends anything. At the limit, the call ends once the goodbye has played, or at the first silence after it.
 - **Hangup:** nothing more reaches Live; Luna saves the caller's message and writes the summary.
 
 Any config text can use `{owner_name}` (`OWNER_NAME` from `.env`, or "the owner" if unset) and `{agent_languages}` (`AGENT_LANGUAGES`, or "English"); it is filled in when the config loads, and other placeholders are rejected.

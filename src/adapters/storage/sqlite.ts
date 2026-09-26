@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { asc, desc, eq, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ne } from "drizzle-orm";
 import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { mkdirSync } from "node:fs";
@@ -21,7 +21,7 @@ export function openSqlite(path: string, migrationsFolder = "./drizzle"): BunSQL
 export class SqliteRepo implements Repo {
   constructor(private db: BunSQLiteDatabase<typeof schema>) {}
 
-  async createCall(rec: Pick<CallRecord, "id" | "callControlId" | "from" | "to" | "divertedFrom" | "startedAt">) {
+  async createCall(rec: Pick<CallRecord, "id" | "callControlId" | "from" | "to" | "divertedFrom" | "startedAt"> & { callerIp?: string | null }) {
     this.db
       .insert(schema.calls)
       .values({ ...rec, status: "ringing" })
@@ -50,6 +50,14 @@ export class SqliteRepo implements Repo {
 
   async listOpenCalls() {
     return this.db.select().from(schema.calls).where(ne(schema.calls.status, "ended")).all();
+  }
+
+  async listCallsFrom(from: string, since: number) {
+    return this.db
+      .select()
+      .from(schema.calls)
+      .where(and(eq(schema.calls.from, from), gte(schema.calls.startedAt, since)))
+      .all();
   }
 
   async appendEvent(ev: CallEvent, patch?: Partial<Omit<CallRecord, "id">>) {

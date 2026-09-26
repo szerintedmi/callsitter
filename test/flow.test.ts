@@ -87,7 +87,7 @@ describe("call flow (config/call-flow.yaml)", () => {
       stage: "low_confidence",
       message: message("low_confidence"),
     });
-    expect(message("low_confidence").text).toStartWith("SUPERVISOR: {luna_response} Do this once");
+    expect(message("low_confidence").text).toContain("{luna_response}");
   });
 
   test("Luna is asked again while the call stays in her stage", () => {

@@ -6,6 +6,8 @@ export const calls = sqliteTable("calls", {
   from: text("from").notNull(),
   to: text("to").notNull(),
   divertedFrom: text("diverted_from"),
+  // Public page calls: the visitor's IP (Cloudflare's CF-Connecting-IP).
+  callerIp: text("caller_ip"),
   status: text("status", { enum: ["ringing", "active", "ended"] }).notNull(),
   startedAt: integer("started_at").notNull(),
   endedAt: integer("ended_at"),
