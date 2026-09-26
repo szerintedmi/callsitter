@@ -25,7 +25,10 @@ const LiveCase = z.strictObject({
 });
 const LunaCase = z.strictObject({
   name: z.string(),
-  reason: z.string(),
+  // guidance: a Luna run (her guidance and tool calls); progress: her rolling update for the owner
+  run: z.enum(["guidance", "progress"]).default("guidance"),
+  // why Luna is consulted (guidance only)
+  reason: z.string().default("low confidence"),
   transcript: z.string(),
   // Jev's last result as Luna sees it; omitted: none yet.
   jev: z

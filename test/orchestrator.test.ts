@@ -1,62 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { MemoryEventBus } from "../src/core/event-bus";
 import { Orchestrator, type Steer } from "../src/core/orchestrator";
-import type { AgentInput, Notifier } from "../src/core/ports";
+import type { AgentInput } from "../src/core/ports";
+import type { Suggestion } from "../src/core/types";
 import { cls, loadRepoConfig, scripted, type ClsInput } from "./helpers";
 
-async function lunaToolsOffered(notifier?: Notifier) {
-  const config = await loadRepoConfig();
-  let offered: AgentInput["enabledTools"] = [];
-  const orch = new Orchestrator({
-    meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
-    config: () => config,
-    classifier: scripted({}),
-    agent: {
-      run: async (input) => ((offered = input.enabledTools), { toolCalls: [] }),
-      summarize: async () => "",
-    },
-    bus: new MemoryEventBus(),
-    steer: { tellLive: () => {}, hangup: async () => {} },
-    clock: { now: () => 0 },
-    notifier,
-  });
-  await orch.runLuna("test");
-  return offered;
-}
-
 describe("orchestrator", () => {
-  test("Telegram tool offered to Luna only when Telegram to the owner is configured", async () => {
-    expect(await lunaToolsOffered({ send: async () => {} })).toContain("send_telegram_to_owner");
-    const without = await lunaToolsOffered();
-    expect(without).not.toContain("send_telegram_to_owner");
-    expect(without).toContain("end_call");
-  });
-
-  test("Telegram to the owner goes through the notifier, at most twice per call", async () => {
-    const config = await loadRepoConfig();
-    const sent: string[] = [];
-    const results: string[] = [];
-    const orch = new Orchestrator({
-      meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
-      config: () => config,
-      classifier: scripted({}),
-      agent: {
-        run: async (input) => {
-          for (const t of ["one", "two", "three"]) results.push(await input.tools.sendTelegramToOwner(t));
-          return { toolCalls: [] };
-        },
-        summarize: async () => "",
-      },
-      bus: new MemoryEventBus(),
-      notifier: { send: async (t) => void sent.push(t) },
-      steer: { tellLive: () => {}, hangup: async () => {} },
-      clock: { now: () => 0 },
-    });
-    await orch.runLuna("test");
-    expect(sent).toEqual(["one", "two"]);
-    expect(results).toEqual(["sent", "sent", "refused: message limit for this call reached"]);
-  });
-
   test("Luna's reply is sent through her rule's tell_live, and the call enters its stage", async () => {
     const config = await loadRepoConfig();
     const appended: unknown[] = [];
@@ -69,7 +18,7 @@ describe("orchestrator", () => {
       classifier: scripted({}),
       agent: {
         run: async () => ({ instructions: "Ask for their name and the best callback number.", toolCalls: [] }),
-        summarize: async () => "",
+        summarize: async () => ({ text: "" }),
       },
       bus,
       steer: { tellLive: (s) => void appended.push(s.message), hangup: async () => {} },
@@ -108,7 +57,7 @@ describe("orchestrator", () => {
             return cls({ verdict: "unclear", confidence: 0.5, urgency: 0 });
           },
         },
-        agent: { run: async () => ({ toolCalls: [] }), summarize: async () => "" },
+        agent: { run: async () => ({ toolCalls: [] }), summarize: async () => ({ text: "" }) },
         bus: new MemoryEventBus(),
         steer: { tellLive: () => {}, hangup: async () => {} },
         clock: { now: () => now },
@@ -187,7 +136,7 @@ describe("orchestrator", () => {
           return cls({ verdict: "unclear", confidence: 0.5, urgency: 0 });
         },
       },
-      agent: { run: async () => ({ toolCalls: [] }), summarize: async () => "" },
+      agent: { run: async () => ({ toolCalls: [] }), summarize: async () => ({ text: "" }) },
       bus: new MemoryEventBus(),
       steer: { tellLive: () => {}, hangup: async () => {} },
       clock: { now: () => now },
@@ -217,7 +166,7 @@ describe("orchestrator", () => {
       meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
       config: () => config,
       classifier: scripted({}),
-      agent: { run: async (input) => (seen.push(input.previousResponseId), results.shift()!()), summarize: async () => "" },
+      agent: { run: async (input) => (seen.push(input.previousResponseId), results.shift()!()), summarize: async () => ({ text: "" }) },
       bus: new MemoryEventBus(),
       steer: { tellLive: () => {}, hangup: async () => {} },
       clock: { now: () => 0 },
@@ -251,7 +200,7 @@ describe("orchestrator", () => {
             running--;
             return { toolCalls: [] };
           },
-          summarize: async () => "",
+          summarize: async () => ({ text: "" }),
         },
         bus: new MemoryEventBus(),
         steer: { tellLive: () => {}, hangup: async () => {} },
@@ -363,7 +312,7 @@ describe("orchestrator", () => {
             await new Promise<void>((r) => releases.push(r));
             return { instructions: "Ask for their callback number.", toolCalls: [] };
           },
-          summarize: async () => "",
+          summarize: async () => ({ text: "" }),
         },
         bus,
         steer: { tellLive: (s) => void sent.push(s), hangup: async () => {} },
@@ -427,5 +376,210 @@ describe("orchestrator", () => {
       expect(r.sent[0]!.message.text).toBe(r.help.text.replace("{luna_response}", "Ask for their callback number."));
       expect(r.orch.stage).toBeNull(); // answering Live's request enters no stage
     });
+  });
+});
+
+describe("progress summaries for the owner (luna.yaml progress)", () => {
+  /** Jev's answer to owner_update, one per Jev call (the last repeats) */
+  async function rig(o: { ownerStatus?: boolean; news?: number[]; failFirst?: number } = {}) {
+    const config = await loadRepoConfig();
+    config.luna.progress = { ...config.luna.progress, min_interval_ms: 5000, max_interval_ms: 30_000 };
+    let now = 0;
+    const calls: { transcript: string[]; owner: readonly string[] | undefined; suggestions: readonly Suggestion[] | undefined }[] = [];
+    const progress: { summary: string; questions: string[] }[] = [];
+    const suggestions: (Suggestion[] | undefined)[] = [];
+    const reasons: string[] = [];
+    const ownerUpdates: unknown[] = [];
+    const lunaInputs: AgentInput[] = [];
+    const marks: (number | undefined)[] = [];
+    const news = o.news ?? [0.9];
+    let jev = 0;
+    const bus = new MemoryEventBus();
+    bus.subscribe((e) => {
+      if (e.type === "progress") progress.push({ summary: e.summary, questions: e.questions }), reasons.push(e.reason), suggestions.push(e.suggestions);
+      if (e.type === "classification") ownerUpdates.push(e.ownerUpdate);
+    });
+    const orch = new Orchestrator({
+      meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+      config: () => config,
+      classifier: {
+        async classify(input) {
+          marks.push(input.ownerUpdatedThrough);
+          const p = news[Math.min(jev++, news.length - 1)]!;
+          return cls({ verdict: "genuine", answers: { owner_update: { choice: p >= 0.5 ? "new" : "nothing_new", probabilities: { new: p, nothing_new: 1 - p } } } });
+        },
+      },
+      agent: {
+        run: async (input) => (lunaInputs.push(input), { toolCalls: [] }),
+        summarize: async () => ({ text: "" }),
+        progress: async (_m, t, opts) => {
+          calls.push({ transcript: t.map((e) => e.text), owner: opts?.ownerMessages, suggestions: opts?.suggestions });
+          if (calls.length <= (o.failFirst ?? 0)) throw new Error("Luna down");
+          const sug = [{ label: " Call back ", text: " Tell her you'll call back as soon as you can. " }, { label: "", text: "x" }];
+          return { summary: " Sarah is calling. ", questions: ["Is he free Tuesday?", " "], suggestions: sug, alert: false };
+        },
+      },
+      bus,
+      steer: { tellLive: () => {}, hangup: async () => {} },
+      clock: { now: () => now },
+      ownerStatus: () => o.ownerStatus ?? true,
+    });
+    let n = 0;
+    /** the caller says something, pauses, and Jev answers */
+    const say = async (text: string) => {
+      const id = `c${++n}`;
+      orch.onTranscriptDelta("caller", id, text);
+      orch.onTranscriptDone("caller", id);
+      now += 1000;
+      orch.poll();
+      await Bun.sleep(0);
+      orch.poll();
+      await Bun.sleep(0);
+    };
+    /** a poll with no new caller words */
+    const tick = async () => {
+      orch.poll();
+      await Bun.sleep(0);
+    };
+    return { orch, calls, progress, suggestions, reasons, ownerUpdates, lunaInputs, marks, say, tick, advance: (ms: number) => void (now += ms) };
+  }
+
+  test("runs when Jev says there's news for the owner, at most every min_interval_ms", async () => {
+    const r = await rig({ news: [0.9, 0.3, 0.95, 0.95] });
+    await r.say("It's Sarah.");
+    expect(r.calls).toHaveLength(1);
+    expect(r.progress).toEqual([{ summary: "Sarah is calling.", questions: ["Is he free Tuesday?"] }]);
+    // Jev: nothing new.
+    r.advance(10_000);
+    await r.say("Yeah.");
+    expect(r.calls).toHaveLength(1);
+    // News, then more news too soon after: it waits for the interval.
+    await r.say("Is he free Tuesday?");
+    expect(r.calls).toHaveLength(2);
+    await r.say("Or Wednesday?");
+    expect(r.calls).toHaveLength(2);
+    r.advance(5000);
+    await r.say("Either works.");
+    expect(r.calls).toHaveLength(3);
+    // Each Jev result carries its say on the summary; each run says why it ran.
+    expect(r.ownerUpdates[0]).toEqual({ question: "owner_update", answer: "new", probability: 0.9, min: 0.8 });
+    expect(r.reasons[0]).toBe("Jev: owner_update new 0.90 ≥ 0.8");
+  });
+
+  test("the owner's suggested buttons are trimmed, and the next run sees them", async () => {
+    const r = await rig({ news: [0.9] });
+    await r.say("It's Sarah.");
+    const kept = [{ label: "Call back", text: "Tell her you'll call back as soon as you can." }];
+    expect(r.suggestions).toEqual([kept]);
+    expect(r.calls[0]!.suggestions).toEqual([]);
+    r.advance(5000);
+    await r.say("Can he call me?");
+    expect(r.calls[1]!.suggestions).toEqual(kept);
+  });
+
+  test("Jev's transcript is marked where the last summary was written", async () => {
+    const r = await rig({ news: [0.9, 0.2] });
+    await r.say("It's Sarah.");
+    await r.say("Yeah.");
+    expect(r.marks).toEqual([undefined, 1]);
+  });
+
+  test("refreshed after max_interval_ms (default 30 s) anyway if the caller said anything", async () => {
+    expect((await loadRepoConfig()).luna.progress.max_interval_ms).toBe(30_000);
+    const r = await rig({ news: [0.1] });
+    await r.say("Hmm.");
+    expect(r.calls).toHaveLength(0);
+    r.advance(30_000);
+    await r.say("Hmm again.");
+    expect(r.calls).toHaveLength(1);
+    expect(r.reasons[0]).toBe("32 s since the call started, with new caller words");
+  });
+
+  test("a failed summary is retried after min_interval_ms, and Jev's marker only moves on success", async () => {
+    const r = await rig({ news: [0.9, 0.2], failFirst: 1 });
+    await r.say("It's Sarah.");
+    expect(r.calls).toHaveLength(1);
+    expect(r.progress).toEqual([]);
+    // No new caller words: still retried once the interval is up.
+    await r.tick();
+    expect(r.calls).toHaveLength(1);
+    r.advance(5000);
+    await r.tick();
+    expect(r.calls).toHaveLength(2);
+    expect(r.progress).toHaveLength(1);
+    await r.say("Yeah.");
+    // Jev saw no marker until a summary went out.
+    expect(r.marks).toEqual([undefined, 1]);
+  });
+
+  test("the marker leaves out an utterance still coming in", async () => {
+    const r = await rig({ news: [0.9, 0.9, 0.2] });
+    await r.say("It's Sarah.");
+    // Sarah's next utterance is still open when the second summary runs.
+    r.advance(10_000);
+    r.orch.onTranscriptDelta("caller", "open", "Is he free");
+    r.advance(1000);
+    r.orch.poll();
+    await Bun.sleep(0);
+    r.orch.poll();
+    await Bun.sleep(0);
+    expect(r.calls).toHaveLength(2);
+    expect(r.calls[1]!.transcript).toEqual(["It's Sarah.", "Is he free"]);
+    r.orch.onTranscriptDelta("caller", "open", " on Tuesday?");
+    r.orch.onTranscriptDone("caller", "open");
+    await r.say("Hello?");
+    // Marker after "It's Sarah." (seq 1), so all of the open utterance (seq 2) reads as new.
+    expect(r.marks.at(-1)).toBe(1);
+  });
+
+  test("off without status messages", async () => {
+    const r = await rig({ ownerStatus: false });
+    await r.say("It's Sarah.");
+    expect(r.calls).toEqual([]);
+  });
+
+  test("the owner's messages reach Luna and the progress summary", async () => {
+    const r = await rig();
+    r.orch.ownerSteered("ask for her number");
+    await r.say("It's Sarah.");
+    expect(r.calls[0]!.owner).toEqual(["ask for her number"]);
+    await r.orch.runLuna("test");
+    expect(r.lunaInputs[0]!.ownerMessages).toEqual(["ask for her number"]);
+  });
+});
+
+describe("call costs", () => {
+  test("Luna is priced from her tokens: uncached, cached and cache-write input, output, times the tier", async () => {
+    const { priceLuna } = await import("../src/core/cost");
+    const config = await loadRepoConfig();
+    const u = { model: "gpt-6-luna", inputTokens: 2_000_000, cachedTokens: 1_000_000, cacheWriteTokens: 500_000, outputTokens: 1_000_000, reasoningTokens: 0 };
+    // 0.5M uncached × $0.1 + 1M cached × $0.01 + 0.5M writes × $0.125 + 1M out × $0.5
+    expect(priceLuna(u, config.cost).costUsd).toBeCloseTo(0.05 + 0.01 + 0.0625 + 0.5, 6);
+    expect(priceLuna({ ...u, serviceTier: "priority" }, config.cost).costUsd).toBeCloseTo(2 * 0.6225, 6);
+    expect(priceLuna({ ...u, serviceTier: "default" }, config.cost).costUsd).toBeCloseTo(0.6225, 6);
+  });
+
+  test("each Luna run's usage is priced on its event and added to the call's costs", async () => {
+    const config = await loadRepoConfig();
+    const lunaEvents: unknown[] = [];
+    const bus = new MemoryEventBus();
+    bus.subscribe((e) => void (e.type === "luna" && lunaEvents.push(e.usage)));
+    const orch = new Orchestrator({
+      meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+      config: () => config,
+      classifier: scripted({}),
+      agent: {
+        run: async () => ({ toolCalls: [], usage: { model: "gpt-6-luna", inputTokens: 1_000_000, cachedTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0 } }),
+        summarize: async () => ({ text: "" }),
+      },
+      bus,
+      steer: { tellLive: () => {}, hangup: async () => {} },
+      clock: { now: () => 0 },
+    });
+    await orch.runLuna("test");
+    await orch.runLuna("test");
+    expect(lunaEvents).toEqual([expect.objectContaining({ costUsd: 0.1 }), expect.objectContaining({ costUsd: 0.1 })]);
+    const costs = orch.costs.total(120);
+    expect(costs).toMatchObject({ liveSeconds: 120, liveUsd: 0.1, lunaUsd: 0.2, totalUsd: 0.3, luna: { calls: 2, inputTokens: 2_000_000 } });
   });
 });

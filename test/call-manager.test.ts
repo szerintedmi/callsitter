@@ -6,7 +6,7 @@ import { attachPersistence } from "../src/core/persist";
 import type { Agent } from "../src/core/ports";
 import { loadRepoConfig, scripted } from "./helpers";
 
-async function rig(agent: Agent = { run: async () => ({ toolCalls: [] }), summarize: async () => "" }) {
+async function rig(agent: Agent = { run: async () => ({ toolCalls: [] }), summarize: async () => ({ text: "" }) }) {
   const config = await loadRepoConfig();
   const repo = new SqliteRepo(openSqlite(":memory:"));
   const bus = new MemoryEventBus();
@@ -46,7 +46,7 @@ describe("call manager", () => {
     let release!: () => void;
     const r = await rig({
       run: async () => ({ toolCalls: [] }),
-      summarize: async () => (await new Promise<void>((res) => (release = res)), "Sarah called about dinner."),
+      summarize: async () => (await new Promise<void>((res) => (release = res)), { text: "Sarah called about dinner." }),
     });
     const s = await r.manager.attachMedia("c1", NO_MEDIA, "pcma");
     s.orch.onTranscriptDelta("caller", "u1", "It's Sarah.");

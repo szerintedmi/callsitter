@@ -18,7 +18,7 @@ const msg = (as: TellLive["as"], text: string, o: Partial<TellLive> = {}): TellL
 });
 
 async function rig(
-  opts: { agent?: Agent; sip?: boolean; config?: (c: AppConfig) => void } & Pick<CallSessionDeps, "notifier" | "callLink" | "dryRun"> = {},
+  opts: { agent?: Agent; sip?: boolean; config?: (c: AppConfig) => void } & Pick<CallSessionDeps, "dryRun"> = {},
 ) {
   const config = await loadRepoConfig();
   opts.config?.(config);
@@ -53,14 +53,12 @@ async function rig(
       },
     },
     classifier: scripted({ verdict: "unclear", confidence: 0.5 }),
-    agent: opts.agent ?? { run: async () => ({ toolCalls: [] }), summarize: async () => "" },
+    agent: opts.agent ?? { run: async () => ({ toolCalls: [] }), summarize: async () => ({ text: "" }) },
     bus,
     telephony: { hangup: async (id) => void hangups.push(id) },
     clock: { now: () => now },
     media: { sendAudio() {}, clear() {}, close() {} },
     mediaViaVoice: opts.sip,
-    notifier: opts.notifier,
-    callLink: opts.callLink,
     dryRun: opts.dryRun,
   });
   await session.start(opts.sip ? "pcm24" : "pcma");
@@ -88,54 +86,100 @@ async function rig(
   };
 }
 
-describe("summary to the owner", () => {
-  async function summaryRig(o: { summarize?: Agent["summarize"]; dryRun?: boolean; config?: (c: AppConfig) => void } = {}) {
-    const sent: string[] = [];
+describe("owner steering from Telegram", () => {
+  test("a message goes to Live at once, in a SUPERVISOR line", async () => {
+    const r = await rig();
+    // The agent is mid-reply: steering still goes out straight away.
+    r.handlers().onTranscriptDelta("caller", "c1", "Is he free on Tuesday?");
+    expect(r.session.steerFromOwner("  Say I'm free after 3  ", "commentary")).toEqual({ ok: true });
+    expect(r.appended.at(-1)).toBe("SUPERVISOR: Say I'm free after 3");
+    expect(r.kinds.at(-1)).toBe("commentary");
+    expect(r.appends.at(-1)).toMatchObject({ source: "owner", as: "commentary", heldMs: 0 });
+    expect(r.session.orch.ownerMessages).toEqual(["Say I'm free after 3"]);
+  });
+
+  test("it goes as the kind it's given, the text as it is", async () => {
+    const r = await rig();
+    r.session.steerFromOwner("stop, don't give that", "instructions");
+    r.session.steerFromOwner("!It's a genuine call.", "thinking");
+    expect(r.kinds.slice(-2)).toEqual(["instructions", "thinking"]);
+    expect(r.appended.slice(-2)).toEqual(["SUPERVISOR: stop, don't give that", "SUPERVISOR: !It's a genuine call."]);
+  });
+
+  test("refused when empty, turned off, or after the call ended", async () => {
+    const r = await rig();
+    expect(r.session.steerFromOwner(" ", "commentary")).toEqual({ ok: false, reason: "the message is empty" });
+    r.config.telegram.steering.enabled = false;
+    expect(r.session.steerFromOwner("hi", "commentary")).toMatchObject({ ok: false });
+    r.config.telegram.steering.enabled = true;
+    await r.session.stop("caller hung up");
+    expect(r.session.steerFromOwner("hi", "commentary")).toEqual({ ok: false, reason: "that call has ended" });
+    expect(r.appends.filter((a) => a.source === "owner")).toEqual([]);
+  });
+
+  test("Luna's guidance from a run that started before the owner steered is dropped", async () => {
+    let finish!: (v: { instructions: string; toolCalls: [] }) => void;
     const r = await rig({
-      agent: { run: async () => ({ toolCalls: [] }), summarize: o.summarize ?? (async () => "Sarah called about dinner; call her back on 0207 946 0000.") },
-      notifier: { send: async (t) => void sent.push(t) },
-      callLink: (id) => `https://admin.example.com/calls/${id}`,
-      dryRun: o.dryRun,
-      config: o.config,
+      agent: { run: () => new Promise((res) => (finish = res)), summarize: async () => ({ text: "" }) },
     });
-    r.handlers().onTranscriptDelta("caller", "c1", "It's Sarah, please ask him to call me back.");
-    return { ...r, sent };
-  }
-
-  test("after the summary, it goes to the owner with the caller, verdict, length and a link to the call", async () => {
-    const r = await summaryRig();
-    r.session.orch.lastClassification = cls({ verdict: "genuine" });
-    await r.session.stop("caller hung up");
-    expect(r.sent).toHaveLength(1);
-    const [head, summary, link] = r.sent[0]!.split("\n\n");
-    expect(head).toContain("+441");
-    expect(head).toContain("genuine");
-    expect(summary).toBe("Sarah called about dinner; call her back on 0207 946 0000.");
-    expect(link).toBe("https://admin.example.com/calls/c1");
-    expect(r.notes).toContain("summary sent to the owner on Telegram");
+    const run = r.session.orch.runLuna("unsure", { rule: { stage: "clarify", message: msg("commentary", "SUPERVISOR: {luna_response}") } });
+    r.session.steerFromOwner("keep them talking", "commentary");
+    finish({ instructions: "Wrap up now.", toolCalls: [] });
+    expect(await run).toBe("");
+    expect(r.appended).not.toContain("SUPERVISOR: Wrap up now.");
   });
 
-  test("a failed summary still tells the owner about the call", async () => {
-    const r = await summaryRig({ summarize: async () => Promise.reject(new Error("boom")) });
+  test("at hangup, the last rolling summary is reused if the caller said nothing new after it", async () => {
+    let summarized = 0;
+    const r = await rig({ agent: { run: async () => ({ toolCalls: [] }), summarize: async () => (summarized++, { text: "Luna's final." }) } });
+    const summaries: { text: string; reused?: boolean }[] = [];
+    r.bus.subscribe((e) => void (e.type === "summary" && summaries.push({ text: e.text, ...(e.reused ? { reused: e.reused } : {}) })));
+    r.handlers().onTranscriptDelta("caller", "c1", "It's Sarah.");
+    r.session.orch.lastProgress = { summary: "Sarah is calling.", callerRev: r.session.orch.transcript.callerRev };
+    // The agent's goodbye isn't the caller's.
+    r.handlers().onTranscriptDelta("agent", "a1", "Bye then.");
     await r.session.stop("caller hung up");
-    expect(r.sent).toHaveLength(1);
-    expect(r.sent[0]).toContain("https://admin.example.com/calls/c1");
+    expect(summaries).toEqual([{ text: "Sarah is calling.", reused: true }]);
+    expect(summarized).toBe(0);
+
+    // New caller words after it: Luna writes the final summary.
+    const r2 = await rig({ agent: { run: async () => ({ toolCalls: [] }), summarize: async () => (summarized++, { text: "Luna's final." }) } });
+    const s2: string[] = [];
+    r2.bus.subscribe((e) => void (e.type === "summary" && s2.push(e.text)));
+    r2.handlers().onTranscriptDelta("caller", "c1", "It's Sarah.");
+    r2.session.orch.lastProgress = { summary: "Sarah is calling.", callerRev: r2.session.orch.transcript.callerRev };
+    r2.handlers().onTranscriptDelta("caller", "c2", "Call me back on 0207 946 0000.");
+    await r2.session.stop("caller hung up");
+    expect(s2).toEqual(["Luna's final."]);
+    expect(summarized).toBe(1);
   });
 
-  test("nothing is sent for skipped verdicts, on dry runs, or when the caller never spoke", async () => {
-    const skipped = await summaryRig({ config: (c) => (c.luna.summary_to_owner.skip_verdicts = ["scam"]) });
-    skipped.session.orch.lastClassification = cls({ verdict: "scam" });
-    await skipped.session.stop("caller hung up");
-    expect(skipped.sent).toEqual([]);
+  test("steering while Live waits for help doesn't turn Luna's answer into the fallback", async () => {
+    let finish!: (v: { instructions: string; toolCalls: [] }) => void;
+    const r = await rig({ agent: { run: () => new Promise((res) => (finish = res)), summarize: async () => ({ text: "" }) } });
+    r.handlers().onDelegation({ id: "d1" });
+    await Bun.sleep(0);
+    r.session.steerFromOwner("ask when they can redeliver", "commentary");
+    finish({ instructions: "Ask what delivery slots they can offer.", toolCalls: [] });
+    await Bun.sleep(0);
+    r.session.flushHeldInstructions();
+    const answer = r.appends.find((a) => a.delegationId === "d1")!;
+    expect(answer.fallback).toBeUndefined();
+    expect(answer.text).toContain("Ask what delivery slots they can offer.");
+  });
 
-    const dry = await summaryRig({ dryRun: true });
-    await dry.session.stop("caller hung up");
-    expect(dry.sent).toEqual([]);
-
-    const sent: string[] = [];
-    const silent = await rig({ agent: { run: async () => ({ toolCalls: [] }), summarize: async () => "x" }, notifier: { send: async (t) => void sent.push(t) } });
-    await silent.session.stop("caller hung up");
-    expect(sent).toEqual([]);
+  test("the summary sees what the owner said", async () => {
+    let seen: readonly string[] | undefined;
+    const r = await rig({
+      agent: { run: async () => ({ toolCalls: [] }), summarize: async (_m, _t, o) => ((seen = o?.ownerMessages), { text: "Sarah called." }) },
+    });
+    const summaries: string[] = [];
+    r.bus.subscribe((e) => e.type === "summary" && summaries.push(e.text));
+    r.handlers().onTranscriptDelta("caller", "c1", "It's Sarah.");
+    r.session.steerFromOwner("ask for her number", "commentary");
+    await r.session.stop("caller hung up");
+    expect(seen).toEqual(["ask for her number"]);
+    expect(summaries).toEqual(["Sarah called."]);
   });
 });
 
@@ -186,7 +230,7 @@ describe("call session: recorded greeting", () => {
         },
       },
       classifier: scripted({ verdict: "unclear", confidence: 0.5 }),
-      agent: { run: async () => ({ toolCalls: [] }), summarize: async () => "" },
+      agent: { run: async () => ({ toolCalls: [] }), summarize: async () => ({ text: "" }) },
       bus: new MemoryEventBus(),
       telephony: { hangup: async () => {} },
       clock: { now: () => Date.now() },
@@ -219,10 +263,10 @@ describe("call session: Luna around hangup", () => {
     const agent: Agent = {
       async run(input) {
         await new Promise<void>((r) => (release = r));
-        const result = await input.tools.sendTelegramToOwner("Sarah: call back re dinner");
-        return { instructions: "Say goodbye.", toolCalls: [{ name: "send_telegram_to_owner", args: {}, result }], responseId: "resp_1" };
+        const result = await input.tools.endCall("done");
+        return { instructions: "Say goodbye.", toolCalls: [{ name: "end_call", args: {}, result }], responseId: "resp_1" };
       },
-      summarize: async (_m, _t, o) => (summarized.push(o?.previousResponseId), "Sarah called about dinner."),
+      summarize: async (_m, _t, o) => (summarized.push(o?.previousResponseId), { text: "Sarah called about dinner." }),
     };
     const r = await rig({ agent });
     const order: string[] = [];
@@ -245,7 +289,7 @@ describe("call session: Luna around hangup", () => {
     const agent: Agent = {
       run: (input) =>
         new Promise((_, reject) => input.signal?.addEventListener("abort", () => ((aborted = true), reject(new Error("aborted"))))),
-      summarize: async () => "",
+      summarize: async () => ({ text: "" }),
     };
     const r = await rig({ agent });
     r.config.luna.drain_timeout_ms = 20;
@@ -263,7 +307,7 @@ describe("call session: Luna around hangup", () => {
         const result = await input.tools.endCall("conversation finished");
         return { toolCalls: [{ name: "end_call", args: {}, result }] };
       },
-      summarize: async () => "",
+      summarize: async () => ({ text: "" }),
     };
     const r = await rig({ agent });
     r.config.luna.drain_timeout_ms = 60_000;
@@ -276,7 +320,7 @@ describe("call session: Luna around hangup", () => {
 
 describe("call session: delegation", () => {
   test("Luna's answer is appended once, with the delegation's id", async () => {
-    const agent: Agent = { run: async () => ({ instructions: "Say he's out until six.", toolCalls: [] }), summarize: async () => "" };
+    const agent: Agent = { run: async () => ({ instructions: "Say he's out until six.", toolCalls: [] }), summarize: async () => ({ text: "" }) };
     const r = await rig({ agent });
     r.handlers().onDelegation({ id: "d1" });
     await Bun.sleep(0);
@@ -318,7 +362,7 @@ describe("call session lifecycle", () => {
           }),
       },
       classifier: scripted({ verdict: "unclear", confidence: 0.5 }),
-      agent: { run: async () => ({ toolCalls: [] }), summarize: async () => "" },
+      agent: { run: async () => ({ toolCalls: [] }), summarize: async () => ({ text: "" }) },
       bus,
       telephony: { hangup: async (id) => void hangups.push(id) },
       clock: { now: () => Date.now() },
@@ -429,7 +473,7 @@ describe("call session lifecycle", () => {
     let release!: () => void;
     const agent: Agent = {
       run: async () => (await new Promise<void>((r) => (release = r)), { toolCalls: [] }),
-      summarize: async () => "",
+      summarize: async () => ({ text: "" }),
     };
     const r = await rig({ agent });
     r.handlers().onDelegation({ id: "d1" });
@@ -452,7 +496,7 @@ describe("call session lifecycle", () => {
     let release!: () => void;
     const agent: Agent = {
       run: async () => (await new Promise<void>((r) => (release = r)), { toolCalls: [] }),
-      summarize: async () => "",
+      summarize: async () => ({ text: "" }),
     };
     const r = await rig({ agent });
     const ended: Extract<CallEvent, { type: "call.ended" }>[] = [];
@@ -465,12 +509,13 @@ describe("call session lifecycle", () => {
     r.advance(20_000); // Luna takes another 20 s
     release();
     await stopped;
-    const c = r.config.cost;
-    const cost = (10 / 60) * c.live_usd_per_min + c.luna_usd_per_call;
+    // Live for the 10 s before hangup; this Luna stand-in reports no tokens.
+    const cost = (10 / 60) * r.config.cost.live_usd_per_min;
     expect(ended).toHaveLength(1);
     expect(ended[0]!.at).toBe(10_000);
     expect(ended[0]!.endedAt).toBe(1_010_000);
     expect(ended[0]!.costUsd).toBe(Math.round(cost * 10000) / 10000);
+    expect(ended[0]!.costs).toMatchObject({ liveSeconds: 10, lunaUsd: 0, jevUsd: 0 });
   });
 });
 
@@ -637,7 +682,8 @@ describe("call session silence watchdog", () => {
       steer.tellLive({ message: msg("instructions", "waste time"), key: "stage" });
       steer.tellLive({ message: msg("instructions", "SUPERVISOR: ask for their name"), rev: 0 });
       steer.tellLive({ message: msg("instructions", "SUPERVISOR: say he's out"), rev: 0, delegation: { id: "d1", fallback: msg("instructions", FALLBACK) } });
-      r.session.orch.revision = 1; // e.g. Jev: genuine after all (a Luna rule, so no new stage)
+      // e.g. Jev: genuine after all (a Luna rule, so no new stage); a flow decision bumps both
+      r.session.orch.revision = r.session.orch.flowRevision = 1;
       tick(r, 2100);
       expect(r.appended).toEqual(["waste time", FALLBACK]);
       expect(r.delegations).toEqual([undefined, "d1"]);

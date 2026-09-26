@@ -11,6 +11,7 @@ import { CODECS } from "./audio";
 //   connection.yaml  how the call's audio reaches the agent (OpenAI SIP or Telnyx media stream)
 //   cost.yaml        rough per-call cost estimate
 //   public.yaml      the public "Scam me" page: limits that cap what strangers can spend
+//   telegram.yaml    the owner's Telegram: a status message per call, and steering the call from it
 
 /** gpt-live-1 built-in voices (openai BuiltInVoice in resources/live/live.d.ts). */
 export const LIVE_VOICES = [
@@ -30,6 +31,7 @@ export const LiveConfig = z.object({
 });
 
 const labelName = z.string().regex(/^[a-z0-9_]+$/, "use lower_snake_case");
+const unit = z.number().min(0).max(1);
 /** A Jev Choice: the prompt and each answer's label → description. */
 const ChoiceQuestion = z.object({
   prompt: z.string().min(1),
@@ -39,6 +41,9 @@ const ChoiceQuestion = z.object({
 export const JevConfig = z.object({
   model: z.string().default("jev-latest"),
   timeout_ms: z.number().int().positive().default(1500),
+  // The line Jev's transcript gets where the owner's last summary was written (luna.yaml
+  // progress); prompts refer to it as {owner_update_marker}.
+  owner_update_marker: z.string().min(1).default("--- last update sent to {owner_name} ---"),
   // Free-text context sent with the transcript as part of the Jev state.
   context: z.string().default(""),
   // Asked in one systemOne call on every tick. verdict and urgency are stored with
@@ -57,7 +62,7 @@ export const JevConfig = z.object({
     .catchall(ChoiceQuestion),
 });
 
-export const LunaTool = z.enum(["send_telegram_to_owner", "end_call"]);
+export const LunaTool = z.enum(["end_call"]);
 
 export const LunaConfig = z.object({
   model: z.string().default("gpt-6-luna"),
@@ -66,7 +71,7 @@ export const LunaConfig = z.object({
   // priority (= "fast") is lower latency at a higher price; flex is cheaper and slower.
   // https://developers.openai.com/api/docs/guides/fast-mode
   service_tier: z.enum(["auto", "default", "priority", "fast", "flex"]).default("auto"),
-  tools: z.array(LunaTool).default(["send_telegram_to_owner"]),
+  tools: z.array(LunaTool).default(["end_call"]),
   // Guards on ask_luna: at most max_calls per call, at least cooldown_ms apart, and only
   // when the caller has said something new.
   limits: z
@@ -80,15 +85,25 @@ export const LunaConfig = z.object({
   summary_instructions: z
     .string()
     .default("Summarise this phone call for the owner in 2–3 sentences: who called, what they wanted, and whether it was a scam."),
-  // The summary goes to the owner on Telegram (with a link to the call page) unless Jev's last
-  // verdict is in skip_verdicts. Needs summarize_on_hangup and Telegram configured.
-  summary_to_owner: z
+  // Rolling summary and the caller's open questions for the owner's Telegram status message.
+  // Due when Jev's answer to `when` reaches min (at most every min_interval_ms), or after
+  // max_interval_ms if the caller said anything since. Never reaches Live and isn't counted in
+  // limits.max_calls.
+  progress: z
     .object({
       enabled: z.boolean().default(true),
-      skip_verdicts: z.array(z.enum(["scam", "spam", "genuine", "unclear"])).default([]),
+      when: z
+        .strictObject({ question: labelName, answer: labelName, min: unit })
+        .default({ question: "owner_update", answer: "new", min: 0.8 }),
+      min_interval_ms: z.number().int().min(1000).default(5000),
+      max_interval_ms: z.number().int().min(1000).nullable().default(30000),
+      reasoning_effort: z.enum(["none", "low", "medium", "high", "xhigh", "max"]).default("low"),
+      instructions: z
+        .string()
+        .default("Summarise this phone call so far for the owner in 1–2 sentences, and list what the caller asked that only the owner can answer."),
     })
     .prefault({}),
-  // After hangup, a running Luna call may finish (it can still message the owner) for up to this
+  // After hangup, a running Luna call may finish (so the summary sees it) for up to this
   // long before it's cancelled.
   drain_timeout_ms: z.number().int().min(0).default(20000),
 });
@@ -104,6 +119,8 @@ export const LunaConfig = z.object({
  */
 export const LIVE_APPENDS = ["instructions", "thinking", "commentary"] as const;
 export type LiveAppend = (typeof LIVE_APPENDS)[number];
+/** instructions.append is limited to ~500 tokens; stay well under */
+export const MAX_APPEND_CHARS = 1800;
 
 /**
  * When a text is sent (measured on gpt-live-1: an instructions append cuts off what the agent is
@@ -117,6 +134,13 @@ export type SendMode = (typeof SEND_MODES)[number];
 
 /** Filled with Luna's reply in the tell_live text of an ask_luna rule. */
 export const LUNA_RESPONSE = "{luna_response}";
+/** Filled with the owner's Telegram message in telegram.yaml steering.text. */
+export const OWNER_MESSAGE = "{owner_message}";
+
+/** The owner's steering text as Live gets it: in telegram.yaml steering.text, within the append limit. */
+export function ownerAppendText(st: TelegramConfig["steering"], text: string): string {
+  return st.text.replace(OWNER_MESSAGE, () => text).slice(0, MAX_APPEND_CHARS);
+}
 /** The time a prompt is sent, e.g. "Fri 2026-Sep-25 19:10 BST"; only in the texts of CURRENT_TIME_TEXTS */
 export const CURRENT_TIME = "{current_time}";
 /** Filled each time they're sent: Live's at call start, Jev's per classification, Luna's per run. */
@@ -156,8 +180,7 @@ const NO_HOLD_WHEN_NOW = { message: "max_hold_ms only applies to send: when_agen
 const TellLiveInput = z
   .strictObject({
     as: z.enum(LIVE_APPENDS),
-    // ≤ ~500 tokens
-    text: z.string().min(1).max(1800),
+    text: z.string().min(1).max(MAX_APPEND_CHARS),
     ...delivery,
   })
   .refine(noHoldWhenNow, NO_HOLD_WHEN_NOW);
@@ -170,7 +193,6 @@ export interface TellLive {
   max_hold_ms: number | null;
 }
 
-const unit = z.number().min(0).max(1);
 const oneOrMany = z.union([labelName, z.array(labelName).min(1)]);
 
 /**
@@ -324,7 +346,7 @@ export const CallFlowConfig = z
     when_live_asks_for_help: z
       .strictObject({
         tell_live: TellLiveInput.default({ as: "commentary", text: "SUPERVISOR: {luna_response}" }),
-        fallback: z.string().min(1).max(1800).default("No specific guidance; carry on naturally."),
+        fallback: z.string().min(1).max(MAX_APPEND_CHARS).default("No specific guidance; carry on naturally."),
       })
       .prefault({}),
   })
@@ -444,6 +466,17 @@ export const ConnectionConfig = z.object({
 
 export const CostConfig = z.object({
   live_usd_per_min: z.number().min(0).default(0.05),
+  // Luna's prices per 1M tokens; a response's service tier multiplies them.
+  luna: z
+    .object({
+      input_usd_per_mtok: z.number().min(0).default(0.1),
+      cached_input_usd_per_mtok: z.number().min(0).default(0.01),
+      cache_write_usd_per_mtok: z.number().min(0).default(0.125),
+      output_usd_per_mtok: z.number().min(0).default(0.5),
+      tier_multipliers: z.record(z.string(), z.number().min(0)).default({ priority: 2, fast: 2, flex: 0.5 }),
+    })
+    .prefault({}),
+  // Only for the public page's worst-case budget check (calls are priced from their tokens).
   luna_usd_per_call: z.number().min(0).default(0.01),
   jev_usd_per_mtok: z.number().min(0).default(0.042),
 });
@@ -461,11 +494,58 @@ export const PublicConfig = z.object({
   // Calls per client IP (Cloudflare's CF-Connecting-IP) over a rolling 24 h; kept in memory, so a
   // restart resets it.
   per_ip_per_day: z.number().int().min(0).default(10),
-  // Luna's tools are live on public calls: she can message the owner on Telegram (at most a few per call)
-  // and end the call. false: they run dry, as on admin test calls.
+  // Luna's tools are live on public calls: she can end the call. false: they run dry, as on admin
+  // test calls.
   tools: z.boolean().default(true),
   // Live greets once the page reports its audio connected, or after this long.
   greeting_wait_ms: z.number().int().min(0).max(10_000).default(3000),
+});
+
+// The owner's Telegram (TELEGRAM_* in .env): one status message per call, edited as it goes on,
+// and steering: the owner's messages reach Live as steering.text.
+export const TelegramConfig = z.object({
+  status: z
+    .object({
+      enabled: z.boolean().default(true),
+      // Telegram allows about one message per second in a chat, edits included.
+      min_edit_interval_ms: z.number().int().min(1000).default(3000),
+      // A notifying reply to the status message when Jev says the call is urgent, once per call,
+      // unless Jev's scam + spam probability is at least unless_junk; with luna, also when Luna's
+      // rolling summary says so (luna.yaml progress: alert).
+      urgent_alert: z
+        .object({
+          enabled: z.boolean().default(true),
+          min_urgency: unit.default(0.7),
+          unless_junk: unit.default(0.75),
+          luna: z.boolean().default(true),
+        })
+        .prefault({}),
+    })
+    .prefault({}),
+  steering: z
+    .object({
+      enabled: z.boolean().default(true),
+      // the owner's messages older than this are ignored (sent while the server was down)
+      stale_after_ms: z.number().int().positive().default(60_000),
+      default: z.enum(LIVE_APPENDS).default("commentary"),
+      // first character(s) of a message → how it reaches Live instead of `default`
+      prefixes: z.record(z.string().min(1).max(4).regex(/^\S+$/, "no spaces"), z.enum(LIVE_APPENDS)).default({ "!": "instructions", "~": "thinking" }),
+      text: z
+        .string()
+        .min(1)
+        .max(1000)
+        .default(`SUPERVISOR: ${OWNER_MESSAGE}`)
+        .refine((t) => t.includes(OWNER_MESSAGE), `needs ${OWNER_MESSAGE}`),
+      // Buttons under a live call's status message; a tap sends `text` as `as`.
+      buttons: z
+        .array(z.strictObject({ label: z.string().min(1).max(30), text: z.string().min(1).max(500), as: z.enum(LIVE_APPENDS).default("thinking") }))
+        .max(8)
+        .default([]),
+      // Luna's suggested buttons (luna.yaml progress: suggestions), one per row below `buttons`,
+      // replaced with each rolling summary; a tap sends the suggestion's text as `as`.
+      suggestions: z.object({ enabled: z.boolean().default(true), as: z.enum(LIVE_APPENDS).default("commentary") }).prefault({}),
+    })
+    .prefault({}),
 });
 
 export type LiveConfig = z.infer<typeof LiveConfig>;
@@ -476,6 +556,7 @@ export type CallFlowConfig = z.infer<typeof CallFlowConfig>;
 export type ConnectionConfig = z.infer<typeof ConnectionConfig>;
 export type CostConfig = z.infer<typeof CostConfig>;
 export type PublicConfig = z.infer<typeof PublicConfig>;
+export type TelegramConfig = z.infer<typeof TelegramConfig>;
 
 export interface AppConfig {
   live: LiveConfig;
@@ -485,6 +566,7 @@ export interface AppConfig {
   connection: ConnectionConfig;
   cost: CostConfig;
   public: PublicConfig;
+  telegram: TelegramConfig;
 }
 
 const schemas = {
@@ -495,6 +577,7 @@ const schemas = {
   connection: ConnectionConfig,
   cost: CostConfig,
   public: PublicConfig,
+  telegram: TelegramConfig,
 } as const;
 
 export type ConfigName = keyof typeof schemas;
@@ -508,6 +591,7 @@ export const CONFIG_FILES: Record<ConfigName, string> = {
   connection: "connection.yaml",
   cost: "cost.yaml",
   public: "public.yaml",
+  telegram: "telegram.yaml",
 };
 
 /** Supplies the raw (already YAML-parsed) value for each config file. */
@@ -572,6 +656,19 @@ export function checkFlow(flow: CallFlowConfig, jev: JevConfig): void {
   if (issues.length) throw new ConfigError(`Invalid config:\n${issues.join("\n")}`);
 }
 
+/** Checks luna.yaml progress.when against jev.yaml: it must name a Choice question and one of its answers. */
+export function checkProgress(luna: LunaConfig, jev: JevConfig): void {
+  const w = luna.progress.when;
+  if (!luna.progress.enabled) return;
+  const answers = choiceQuestions(jev).get(w.question);
+  const issue = !answers
+    ? `no Choice question ${w.question} in jev.yaml`
+    : !answers.includes(w.answer)
+      ? `${w.answer} is not an answer of jev.yaml questions.${w.question}`
+      : null;
+  if (issue) throw new ConfigError(`Invalid config:\n  luna.yaml: progress.when: ${issue}`);
+}
+
 /** Values for the {placeholders} config texts may use. */
 export interface ConfigVars {
   /** OWNER_NAME; {owner_name} falls back to "the owner" */
@@ -581,15 +678,18 @@ export interface ConfigVars {
 }
 
 /**
- * Fills {owner_name} and {agent_languages} in every config text. Other placeholders are rejected, except
+ * Fills {owner_name}, {agent_languages} and {owner_update_marker} (jev.yaml's, itself filled) in
+ * every config text. Other placeholders are rejected, except
  * {luna_response} in call-flow.yaml (the schema checks where), which is filled with each Luna reply,
- * and {current_time} in CURRENT_TIME_TEXTS, filled as they're sent (fillCurrentTime).
+ * {owner_message} in telegram.yaml steering.text, filled with each of the owner's messages, and
+ * {current_time} in CURRENT_TIME_TEXTS, filled as they're sent (fillCurrentTime).
  */
 export function fillPlaceholders(cfg: AppConfig, vars: ConfigVars = {}): AppConfig {
   const values: Record<string, string> = {
     owner_name: vars.ownerName || "the owner",
     agent_languages: vars.agentLanguages || "English",
   };
+  values.owner_update_marker = cfg.jev.owner_update_marker.replace(/\{(owner_name|agent_languages)\}/g, (_, k: string) => values[k]!);
   const issues: string[] = [];
   const where = (path: string[]) => {
     const [name, ...rest] = path as [ConfigName, ...string[]];
@@ -601,7 +701,11 @@ export function fillPlaceholders(cfg: AppConfig, vars: ConfigVars = {}): AppConf
     if (typeof v === "string") {
       return v.replace(/\{([a-z_]+)\}/g, (m, key: string) => {
         if (key in values) return values[key]!;
-        const later = (m === LUNA_RESPONSE && path[0] === "flow") || (m === CURRENT_TIME && CURRENT_TIME_TEXTS.includes(path.join(".")));
+        const at = path.join(".");
+        const later =
+          (m === LUNA_RESPONSE && path[0] === "flow") ||
+          (m === OWNER_MESSAGE && at === "telegram.steering.text") ||
+          (m === CURRENT_TIME && CURRENT_TIME_TEXTS.includes(at));
         if (!later) {
           issues.push(`  ${where(path)}: unknown placeholder ${m} (known: ${Object.keys(values).map((k) => `{${k}}`).join(", ")})`);
         }
@@ -623,6 +727,7 @@ export async function loadConfig(source: ConfigSource, vars: ConfigVars = {}): P
   );
   const cfg = Object.fromEntries(entries) as unknown as AppConfig;
   checkFlow(cfg.flow, cfg.jev);
+  checkProgress(cfg.luna, cfg.jev);
   return fillPlaceholders(cfg, vars);
 }
 

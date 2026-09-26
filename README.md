@@ -4,9 +4,11 @@ An AI call screener for a personal phone number. Divert your calls to a Telnyx n
 
 - **Scam or spam:** it tells the voice agent to waste their time, mixing a few tactics.
 - **Genuine caller:** the agent takes a message itself; it reaches the owner in the call summary.
-- **The classifier is unsure, or the agent asks for help:** **GPT-6 Luna** judges and returns guidance, and can call tools such as an urgent Telegram message to the owner.
-- **Urgent** (Jev's urgency ≥ 0.7, anything short of a confident scam or spam): Luna decides whether to message the owner right away and tells the agent what to say.
-- **After every call** where the caller spoke, Luna's summary goes to the owner on Telegram with a link to the call page (`luna.yaml → summary_to_owner`).
+- **The classifier is unsure, or the agent asks for help:** **GPT-6 Luna** judges and returns guidance, and can end the call.
+- **Urgent** (Jev's urgency ≥ 0.7, anything short of a confident scam or spam, or Luna's rolling summary says the owner may want to act while the caller is on the line): the owner's Telegram status message gets a notifying 🚨 reply, once per call (`telegram.yaml → status.urgent_alert`). It doesn't steer the call.
+- **On Telegram** (`telegram.yaml`), every call gets one status message: sent as the call comes in, then edited as it goes on with the verdict, the stage, a rolling summary and the caller's open questions from Luna, and the transcript (newest first, collapsed to its latest lines; tap to expand). Jev decides when the summary is out of date (`jev.yaml → owner_update`, at ≥ 0.8 by default), with a refresh anyway every 30 s while the caller keeps talking (`luna.yaml → progress`). The call page shows Jev's answer on every Jev row (📝) and in the status strip. When the call ends, Luna's summary replaces the rolling one (or the last rolling summary is kept if the caller said nothing after it), the call's cost is added, and there's a link to the call page.
+- **Costs** are priced from what the vendors report (the Responses API returns token counts, not dollars): Live per second, Luna's tokens (uncached, cached, cache writes, output; times the service tier) and Jev's input tokens (`cost.yaml`). Each call stores the breakdown; the call list, the call page and the final Telegram update show it.
+- **Steering from Telegram:** reply to a call's status message, or send a message while a call is live, and it reaches the voice agent as a `SUPERVISOR:` line. Plain text goes as commentary; start with `!` for instructions (cuts the agent off) or `~` for thinking (kept in mind). The **Genuine** and **Spam/Scam** buttons under the status message send "It's a genuine call." / "It's a spam or scam call." as thinking (`telegram.yaml → steering.buttons`). Below them, up to 3 replies Luna suggests with each rolling summary (e.g. **Call back soon** → "Tell them you'll call back as soon as you can."), sent as commentary (`telegram.yaml → steering.suggestions`, prompt in `luna.yaml → progress`); a button replaced while you tapped it still sends what it showed. The automatic flow keeps running, Luna sees your messages, and each one shows in the status message and on the call page as "owner → Live".
 
 ## Run
 
@@ -30,7 +32,7 @@ Replay examples:
 
 - `bun run replay test/fixtures/scam-bank.txt --fake` runs offline with a keyword classifier.
 - Without `--fake` it uses real Jev (`TYPESAFE_API_KEY`).
-- `--luna` also calls real Luna (`OPENAI_API_KEY`). Tools run dry, so no Telegram message is sent and no call is ended.
+- `--luna` also calls real Luna (`OPENAI_API_KEY`). Tools run dry, so no call is ended.
 - Transcript files use lines of the form `caller: …` / `agent: …`.
 
 **Evals** (`evals/`, on demand, not part of `bun test`): a small set of cases in `evals/cases.yaml`, one per fragile point found on test calls, run against the real vendors and the real `config/`. They follow the single-turn approach of OpenAI's [GPT-Live evaluation guide](https://developers.openai.com/cookbook/examples/audio/voice_agent_evaluation), which also says to run each scenario several times, since voice models are nondeterministic.
@@ -44,7 +46,7 @@ Replay examples:
 **Test call from the browser** (`/test-call`, linked from the call list): talk to the voice agent through the computer mic, with no phone or Telnyx involved.
 
 - The page streams 16 kHz PCM16 over a WebSocket as binary frames, in both directions. The server runs a normal call session on it (Live, Jev, call flow, Luna); only the phone leg is replaced (`src/web/test-call.ts`).
-- It uses the real Live, Jev and Luna APIs. Luna's tools run dry by default: no Telegram message is sent and Luna can't hang up.
+- It uses the real Live, Jev and Luna APIs. Luna's tools run dry by default: she can't hang up. The call still gets its Telegram status message, so you can try steering from it.
 - Use headphones, or the agent hears itself.
 - Test calls appear in the call list with the caller shown as `browser`.
 
@@ -60,7 +62,7 @@ Replay examples:
 - The page's data channel is locked down (`client.data_channel`): it can't send any client event, so a visitor can't append instructions. It only receives `session.closed`.
 - Cost caps (`config/public.yaml`): a 10-minute call length, 3 calls at once, 10 calls per IP a day, and a rolling-24 h budget. A call is admitted only if it fits even if it and every live public call run the full 10 minutes.
 - During the call the page shows a meter whose needle leans from genuine to scam/spam (P(scam) + P(spam) − P(genuine); an unclear verdict pulls it to the middle) and the call-flow stage, streamed as server-sent events from `/call/:id/events`.
-- Luna's tools are live (`public.yaml → tools`), and the call's summary goes to the owner on Telegram. Calls are recorded and listed with the caller `public` and the visitor's IP (`CF-Connecting-IP`, stored with the call).
+- Luna's tools are live (`public.yaml → tools`). The call gets a Telegram status message like any other, and the owner can steer it. The budget counts the rolling summaries too. Calls are recorded and listed with the caller `public` and the visitor's IP (`CF-Connecting-IP`, stored with the call).
 - Why the admin test call uses a WebSocket relay instead: it exercises the Telnyx media-stream path that real calls take. The public page is the only caller that really arrives over WebRTC.
 
 **Call page:** a live status strip, and an aligned timeline with one row per utterance: transcript | Jev classifications | Luna, call-flow stages, tools and errors.
@@ -70,9 +72,11 @@ Replay examples:
 1. **Telnyx**
    - Create a Call Control application with webhook URL `https://hooks.<domain>/telnyx/webhook` and assign your UK number to it.
    - Copy the webhook public key into `TELNYX_PUBLIC_KEY`.
-2. **Telegram** (optional; without it there are no call summaries on Telegram, and Luna isn't offered `send_telegram_to_owner`)
+2. **Telegram** (optional; without it there are no status messages, rolling summaries or steering)
    - Create a bot with [@BotFather](https://t.me/BotFather) and put its token in `TELEGRAM_BOT_TOKEN`.
    - Send the bot any message from the owner's account, then read `message.chat.id` from `https://api.telegram.org/bot<token>/getUpdates` into `TELEGRAM_CHAT_ID`. A bot can't message someone who hasn't started a chat with it.
+   - The app receives your messages by long polling (`getUpdates`), so no public URL is needed. Only one process can poll a bot at a time, so give dev its own bot. Steering needs a numeric chat id, and only that chat is heard.
+   - Send `/help` to the bot for how steering works.
 3. **Cloudflare tunnel:** see [deploy/cloudflared.example.yml](deploy/cloudflared.example.yml).
    - `hooks.<domain>` is public, but only the webhook, media and public-page paths are routed.
    - `admin.<domain>` serves the admin UI (call list, call pages, test call) at its root, behind Cloudflare Access. The app verifies the Access JWT itself (`ADMIN_AUTH=access`, with `ADMIN_HOST`, `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`), so a direct `127.0.0.1` request gets 403.
@@ -131,8 +135,9 @@ Each file has one job (schemas and cross-file checks: `src/core/config.ts`; `bun
 | `call-flow.yaml`  | What happens: when Jev runs, ordered rules over Jev's answers, how and when texts reach Live, the silence watchdog, and Live's own requests for help. Its header comment documents the rule format. |
 | `luna.yaml`       | Everything about Luna: model, tools, limits, prompts.                                                                                                                                                       |
 | `connection.yaml` | How the audio reaches the agent: OpenAI SIP, Telnyx media stream, speech levels.                                                                                                                            |
-| `cost.yaml`       | Rough per-call cost estimate.                                                                                                                                                                               |
+| `cost.yaml`       | Prices for each call's cost: Live per minute, Luna and Jev per token.                                                                                                                                       |
 | `public.yaml`     | The public page's limits: call length, calls at once, per IP, daily budget.                                                                                                                                 |
+| `telegram.yaml`   | The owner's Telegram: the per-call status message, and how steering messages reach Live.                                                                                                                     |
 
 
 What reaches Live, and when:
@@ -142,7 +147,8 @@ What reaches Live, and when:
 - **Live asks for help:** Luna answers, or a fallback does.
 - **Silence:** the agent is nudged; after the goodbyes, or repeated silence, the call ends.
 - **Time up:** 30 s before `max_call_seconds` (`call-flow.yaml → timing.time_up`), the agent is told to say goodbye and the call enters `time_up`, where no rule sends anything. At the limit, the call ends once the goodbye has played, or at the first silence after it.
-- **Hangup:** nothing more reaches Live; Luna writes the summary, which goes to the owner on Telegram.
+- **Your Telegram message:** sent at once, as commentary, instructions or thinking (`telegram.yaml → steering`). Luna guidance from a run that started before it is dropped.
+- **Hangup:** nothing more reaches Live; Luna writes the summary, which goes into the call's Telegram status message.
 
 Any config text can use `{owner_name}` (`OWNER_NAME` from `.env`, or "the owner" if unset) and `{agent_languages}` (`AGENT_LANGUAGES`, or "English"); it is filled in when the config loads, and other placeholders are rejected.
 
@@ -185,5 +191,5 @@ These differ from the original plan:
 - L16: Telnyx byte order (assumed big-endian and swapped), and whether the inbound stream is also 16 kHz after `streaming_start`.
 - The transcript segmenter's gap and idle defaults against real Live transcript timing.
 - Jev latency from the UK, and whether the verdict probabilities are well calibrated for the `call-flow.yaml` thresholds.
-- Luna's cost per call (`cost.yaml → luna_usd_per_call` is a rough estimate).
+- Luna's cost per call for the public page's worst-case budget (`cost.yaml → luna_usd_per_call` is a rough estimate; calls themselves are priced from Luna's tokens).
 

@@ -3,7 +3,8 @@ import OpenAI from "openai";
 import type { ClientEvent, ServerEvent } from "openai/resources/live/live";
 import { LIVE_URL } from "../src/adapters/openai-live/session";
 import { b64decode, b64encode, BYTES_PER_MS, levelDbfs } from "../src/core/audio";
-import { fillCurrentTime, type AppConfig, type LiveAppend } from "../src/core/config";
+import { fillCurrentTime, ownerAppendText, type AppConfig, type LiveAppend } from "../src/core/config";
+import { parseOwnerMessage } from "../src/core/owner-desk";
 import { parseLines, type Line, type LiveCase, type Settings } from "./cases";
 import type { Judge } from "./judge";
 import type { Outcome } from "./run";
@@ -43,8 +44,20 @@ export async function runLiveCase(c: LiveCase, cfg: AppConfig, s: Settings, apiK
   return { pass: g.pass, detail: g.reason, log: `agent: ${reply.text || "(silent)"}${notes.length ? `\n    (${notes.join(", ")})` : ""}` };
 }
 
-/** A call-flow stage's tell_live text, as the flow would send it. */
+/** A call-flow stage's tell_live text, as the flow would send it; `button:<label>` is a Telegram steering button's. */
 function stageText(cfg: AppConfig, stage: string): { as: LiveAppend; text: string } {
+  const st = cfg.telegram.steering;
+  // The owner's typed Telegram message, as CallSession.steerFromOwner sends it.
+  if (stage.startsWith("owner:")) {
+    const s = parseOwnerMessage(st, stage.slice("owner:".length));
+    return { as: s.as, text: ownerAppendText(st, s.text) };
+  }
+  if (stage.startsWith("button:")) {
+    const label = stage.slice("button:".length);
+    const b = st.buttons.find((x) => x.label === label);
+    if (!b) throw new Error(`no telegram.yaml steering button "${label}"`);
+    return { as: b.as, text: ownerAppendText(st, b.text) };
+  }
   const t = cfg.flow.rules.find((r) => r.stage === stage)?.then?.tell_live;
   if (!t) throw new Error(`no call-flow rule "${stage}" with tell_live`);
   return { as: t.as, text: t.text };

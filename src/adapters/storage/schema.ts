@@ -1,4 +1,5 @@
 import { integer, real, sqliteTable, text, index } from "drizzle-orm/sqlite-core";
+import type { CallCosts } from "../../core/types";
 
 export const calls = sqliteTable("calls", {
   id: text("id").primaryKey(),
@@ -16,7 +17,10 @@ export const calls = sqliteTable("calls", {
   // The column predates the call flow (it held the strategy id); a stage is the same idea.
   stage: text("strategy"),
   lunaCalls: integer("luna_calls").notNull().default(0),
+  // The call's total cost, and broken down by vendor with the tokens (CallCosts). costs is null
+  // on calls from before costs were recorded, which only have the estimate in cost_usd.
   costUsd: real("cost_usd"),
+  costs: text("costs", { mode: "json" }).$type<CallCosts>(),
   summary: text("summary"),
   recordingPath: text("recording_path"),
 });

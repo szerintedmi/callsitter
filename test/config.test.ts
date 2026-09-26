@@ -82,6 +82,16 @@ describe("config", () => {
     expect(() => fillPlaceholders(cfg)).toThrow(/live\.yaml: greeting: unknown placeholder \{luna_response\}/);
   });
 
+  test("{owner_message} is left for each steering message, in telegram.yaml steering.text only", async () => {
+    const cfg = await loadRepoConfig();
+    expect(cfg.telegram.steering.text).toContain("{owner_message}");
+    expect(fillPlaceholders(cfg).telegram.steering.text).toContain("{owner_message}");
+    cfg.live.greeting = "Hello, {owner_message}";
+    expect(() => fillPlaceholders(cfg)).toThrow(/live\.yaml: greeting: unknown placeholder \{owner_message\}/);
+    expect(() => parseConfig("telegram", { steering: { text: "SUPERVISOR: hi" } })).toThrow(/needs \{owner_message\}/);
+    expect(() => parseConfig("telegram", { steering: { prefixes: { "!": "shout" } } })).toThrow(ConfigError);
+  });
+
   test("rejects unknown Luna tools", () => {
     expect(() => parseConfig("luna", { instructions: "x", tools: ["transfer_money"] })).toThrow(ConfigError);
   });

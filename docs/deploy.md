@@ -138,6 +138,7 @@ Telnyx, and the OpenAI webhook if SIP is set up, already point at these hostname
   - `scamsitter-dev-admin.geekmango.com`: its own Access app, so its own `CF_ACCESS_AUD` in `.env`.
 - `deploy/cloudflared.yml` and `.env` (`PUBLIC_WS_BASE`, `ADMIN_HOST`, `CF_ACCESS_AUD`) point at them. Dev needs no service token.
 - Dev gets no real phone calls. Use the browser test call (`/test-call`).
+- Dev needs its own Telegram bot (`TELEGRAM_BOT_TOKEN`): the app long-polls for the owner's messages, and Telegram lets only one process poll a bot, so sharing production's would steal its messages.
 - The browser **SIP** test in dev would need its own Telnyx credential connection and OpenAI webhook pointed at the dev hostnames (`scripts/setup-sip.ts`).
 
 ## Operations

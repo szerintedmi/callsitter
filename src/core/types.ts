@@ -39,6 +39,38 @@ export interface Classification {
   raw?: unknown;
 }
 
+/** Token usage of one model call (its responses summed), as the vendor reports it. */
+export interface TokenUsage {
+  model: string;
+  /** the tier the request ran on (cost.yaml luna.tier_multipliers) */
+  serviceTier?: string;
+  /** all input tokens, including cached tokens and cache writes */
+  inputTokens: number;
+  cachedTokens: number;
+  cacheWriteTokens: number;
+  /** all output tokens, including reasoning */
+  outputTokens: number;
+  reasoningTokens: number;
+}
+
+/** TokenUsage with cost.yaml prices applied. */
+export interface PricedUsage extends TokenUsage {
+  costUsd: number;
+}
+
+/** What a call cost, by vendor; totalUsd is the call's costUsd. */
+export interface CallCosts {
+  /** Live bills per second of session */
+  liveSeconds: number;
+  liveUsd: number;
+  /** every Luna call: guidance, rolling summaries and the end-of-call summary */
+  lunaUsd: number;
+  jevUsd: number;
+  totalUsd: number;
+  luna: { calls: number; inputTokens: number; cachedTokens: number; cacheWriteTokens: number; outputTokens: number; reasoningTokens: number };
+  jevInputTokens: number;
+}
+
 export interface CallMeta {
   callId: string;
   from: string;
@@ -53,8 +85,11 @@ export type CallStatus = "ringing" | "active" | "ended";
 /** summary: the end-of-call summary, which ends with a summary event rather than a luna one */
 export type LunaTrigger = "rule" | "delegation" | "summary";
 
-/** What a text sent to Live answers: a rule's stage text, Luna's reply, the silence watchdog, or Live's delegation. */
-export type AppendSource = "stage" | "luna" | "silence" | "delegation";
+/**
+ * What a text sent to Live answers: a rule's stage text, Luna's reply, the silence watchdog,
+ * Live's delegation, or the owner steering the call from Telegram.
+ */
+export type AppendSource = "stage" | "luna" | "silence" | "delegation" | "owner";
 
 /** What the call flow did with one Jev result. */
 export interface FlowDecision {
@@ -70,7 +105,15 @@ export interface FlowDecision {
 export type CallEvent =
   | { type: "call.started"; callId: string; meta: CallMeta }
   | { type: "transcript"; callId: string; entry: TranscriptEntry }
-  | { type: "classification"; callId: string; at: number; classification: Classification; decision?: FlowDecision }
+  | {
+      type: "classification";
+      callId: string;
+      at: number;
+      classification: Classification;
+      decision?: FlowDecision;
+      /** Jev's answer to luna.yaml progress.when: the owner's summary is due when probability ≥ min */
+      ownerUpdate?: { question: string; answer: string; probability: number; min: number };
+    }
   /** a call-flow rule told Live something, moving the call into a new stage */
   | { type: "stage"; callId: string; at: number; stage: string; as?: LiveAppend }
   /**
@@ -105,8 +148,25 @@ export type CallEvent =
       /** why Luna's reply wasn't sent to Live, if it wasn't */
       dropped?: string;
       toolCalls: ToolCallRecord[];
+      usage?: PricedUsage;
     }
   | { type: "tool"; callId: string; at: number; call: ToolCallRecord }
+  /** Luna's rolling summary for the owner (luna.yaml progress): the call so far, and the caller's open questions */
+  | {
+      type: "progress";
+      callId: string;
+      at: number;
+      summary: string;
+      questions: string[];
+      /** steering buttons for the owner (missing on calls from before they existed) */
+      suggestions?: Suggestion[];
+      /** the owner may want to act while the caller is still on the line */
+      alert?: boolean;
+      /** why it ran: Jev's owner_update answer, or the fallback interval */
+      reason: string;
+      tookMs: number;
+      usage?: PricedUsage;
+    }
   | { type: "note"; callId: string; at: number; level: "info" | "warn" | "error"; message: string }
   /** `at` and `endedAt` are when the call was hung up, not when its wrap-up (Luna, summary) finished */
   | {
@@ -119,8 +179,20 @@ export type CallEvent =
       costUsd: number;
       lunaCalls: number;
       jevTicks: number;
+      /** by vendor, from the usage they reported (calls ended before this was recorded have none) */
+      costs?: CallCosts;
     }
-  | { type: "summary"; callId: string; at: number; text: string }
+  | {
+      type: "summary";
+      callId: string;
+      at: number;
+      text: string;
+      usage?: PricedUsage;
+      /** the last rolling summary, reused: the caller said nothing new after it */
+      reused?: boolean;
+    }
+  /** the call's final costs, once the end-of-call summary is priced in too (call.ended has them without it) */
+  | { type: "costs"; callId: string; at: number; costs: CallCosts }
   | { type: "recording"; callId: string; at: number; path: string }
   | {
       type: "sip.headers";
@@ -143,4 +215,10 @@ export interface ToolCallRecord {
   name: string;
   args: Record<string, unknown>;
   result: string;
+}
+
+/** A steering button Luna suggests to the owner: a tap sends `text` to the agent. */
+export interface Suggestion {
+  label: string;
+  text: string;
 }

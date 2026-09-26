@@ -1,7 +1,13 @@
-import type { Notifier } from "../../core/ports";
+import { errMsg } from "../../core/orchestrator";
+import type { MessageLayout, OwnerButtonPress, OwnerChat, OwnerMessage } from "../../core/ports";
 
-// Telegram Bot API sendMessage (https://core.telegram.org/bots/api#sendmessage): the bot
-// messages one chat, the owner's. The owner has to start a chat with the bot first.
+// Telegram Bot API (https://core.telegram.org/bots/api): the bot talks to one chat, the owner's.
+// The owner has to start a chat with the bot first. Messages are plain text (no parse_mode), so
+// Luna's text and transcripts need no escaping. Incoming messages arrive by long polling
+// (getUpdates), which needs no public URL; it fails while a webhook is set, and only one poller
+// per bot works at a time, so dev and production need separate bots. Collapsed parts of a message
+// are expandable_blockquote entities (offsets in UTF-16 code units, as JS strings count), and
+// buttons are an inline keyboard whose presses arrive as callback queries.
 
 export interface TelegramOptions {
   /** from @BotFather */
@@ -11,28 +17,156 @@ export interface TelegramOptions {
   fetch?: typeof fetch;
 }
 
-export class TelegramNotifier implements Notifier {
+/** getUpdates long-poll timeout (s) */
+const POLL_TIMEOUT_S = 50;
+const RETRY_MIN_MS = 1000;
+const RETRY_MAX_MS = 60_000;
+
+/** MessageLayout as sendMessage/editMessageText parameters. */
+function layoutParams(layout: MessageLayout | undefined, edit: boolean): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (layout?.collapsed?.length) out.entities = layout.collapsed.map((q) => ({ type: "expandable_blockquote", offset: q.offset, length: q.length }));
+  const rows = layout?.buttons?.filter((r) => r.length) ?? [];
+  // An edit without buttons removes the ones the message had.
+  if (rows.length || edit) out.reply_markup = { inline_keyboard: rows.map((r) => r.map((b) => ({ text: b.label, callback_data: b.data }))) };
+  return out;
+}
+
+interface TgMessage {
+  message_id: number;
+  date: number;
+  chat: { id: number };
+  text?: string;
+  reply_to_message?: { message_id: number };
+}
+
+interface TgCallbackQuery {
+  id: string;
+  /** the message with the button; absent for inline-mode messages */
+  message?: { message_id: number; chat: { id: number } };
+  data?: string;
+}
+
+export class TelegramBot implements OwnerChat {
   private f: typeof fetch;
 
   constructor(private o: TelegramOptions) {
     this.f = o.fetch ?? fetch;
   }
 
-  async send(text: string) {
-    // The token is part of the URL: keep it out of error messages, which reach logs and Luna.
-    const redact = (s: string) => s.replaceAll(this.o.botToken, "<token>");
+  /** Only a numeric chat can be heard from: a channel's @username can't message the bot. */
+  get canListen(): boolean {
+    return /^-?[0-9]+$/.test(this.o.chatId);
+  }
+
+  // The token is part of the URL: keep it out of error messages, which reach logs and Luna.
+  private redact(s: string) {
+    return s.replaceAll(this.o.botToken, "<token>");
+  }
+
+  private async call<T>(method: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
     let res: Response;
     try {
-      res = await this.f(`https://api.telegram.org/bot${this.o.botToken}/sendMessage`, {
+      res = await this.f(`https://api.telegram.org/bot${this.o.botToken}/${method}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // Plain text (no parse_mode), so Luna's text needs no escaping.
-        body: JSON.stringify({ chat_id: this.o.chatId, text, link_preview_options: { is_disabled: true } }),
+        body: JSON.stringify(body),
+        signal,
       });
     } catch (err) {
-      throw new Error(`Telegram sendMessage failed: ${redact(err instanceof Error ? err.message : String(err))}`);
+      throw new Error(`Telegram ${method} failed: ${this.redact(errMsg(err))}`);
     }
-    const body = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string };
-    if (!res.ok || !body.ok) throw new Error(`Telegram sendMessage failed: ${res.status} ${redact(body.description ?? "")}`.trim());
+    const out = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string; result?: T };
+    if (!res.ok || !out.ok) throw new Error(`Telegram ${method} failed: ${res.status} ${this.redact(out.description ?? "")}`.trim());
+    return out.result as T;
   }
+
+  async send(text: string, opts: { replyTo?: number; silent?: boolean; layout?: MessageLayout } = {}): Promise<number> {
+    const msg = await this.call<{ message_id: number }>("sendMessage", {
+      chat_id: this.o.chatId,
+      text,
+      link_preview_options: { is_disabled: true },
+      ...layoutParams(opts.layout, false),
+      ...(opts.silent ? { disable_notification: true } : {}),
+      ...(opts.replyTo !== undefined ? { reply_parameters: { message_id: opts.replyTo, allow_sending_without_reply: true } } : {}),
+    });
+    return msg.message_id;
+  }
+
+  async edit(messageId: number, text: string, layout?: MessageLayout): Promise<void> {
+    try {
+      await this.call("editMessageText", {
+        chat_id: this.o.chatId,
+        message_id: messageId,
+        text,
+        link_preview_options: { is_disabled: true },
+        ...layoutParams(layout, true),
+      });
+    } catch (err) {
+      // The same text again: nothing to do.
+      if (err instanceof Error && err.message.includes("message is not modified")) return;
+      throw err;
+    }
+  }
+
+  /** "Telegram clients will display a progress bar until you call answerCallbackQuery." */
+  async answerButton(pressId: string, notice?: string): Promise<void> {
+    await this.call("answerCallbackQuery", { callback_query_id: pressId, ...(notice ? { text: notice.slice(0, 200) } : {}) });
+  }
+
+  /**
+   * Long-polls for messages and button presses in the owner's chat until `signal` aborts;
+   * anything from another chat is ignored. Failures are logged and retried with backoff.
+   */
+  async listen(
+    on: { message: (m: OwnerMessage) => void | Promise<void>; button: (b: OwnerButtonPress) => void | Promise<void> },
+    signal: AbortSignal,
+  ): Promise<void> {
+    let offset: number | undefined;
+    let retryMs = RETRY_MIN_MS;
+    while (!signal.aborted) {
+      let updates: { update_id: number; message?: TgMessage; callback_query?: TgCallbackQuery }[];
+      try {
+        updates = await this.call("getUpdates", { offset, timeout: POLL_TIMEOUT_S, allowed_updates: ["message", "callback_query"] }, signal);
+        retryMs = RETRY_MIN_MS;
+      } catch (err) {
+        if (signal.aborted) return;
+        console.warn(`[telegram] ${errMsg(err)}; retrying in ${retryMs / 1000} s`);
+        await sleep(retryMs, signal);
+        retryMs = Math.min(RETRY_MAX_MS, retryMs * 2);
+        continue;
+      }
+      for (const u of updates) {
+        offset = u.update_id + 1;
+        try {
+          const m = u.message;
+          const q = u.callback_query;
+          if (m && String(m.chat.id) === this.o.chatId) {
+            await on.message({
+              messageId: m.message_id,
+              date: m.date * 1000,
+              ...(m.text !== undefined ? { text: m.text } : {}),
+              ...(m.reply_to_message ? { replyTo: m.reply_to_message.message_id } : {}),
+            });
+          } else if (q?.message && q.data !== undefined && String(q.message.chat.id) === this.o.chatId) {
+            await on.button({ pressId: q.id, messageId: q.message.message_id, data: q.data });
+          }
+        } catch (err) {
+          console.error("[telegram] handling an update failed", err);
+        }
+      }
+    }
+  }
+}
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const t = setTimeout(done, ms);
+    function done() {
+      clearTimeout(t);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+    signal.addEventListener("abort", done);
+  });
 }
