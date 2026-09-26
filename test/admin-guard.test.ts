@@ -152,7 +152,6 @@ describe("admin env", () => {
     PUBLIC_WS_BASE: "wss://hooks.example.com",
     TELNYX_API_KEY: "k",
     TELNYX_PUBLIC_KEY: "k",
-    TELNYX_SMS_FROM: "ScamSitter",
     OPENAI_API_KEY: "k",
     TYPESAFE_API_KEY: "k",
     MEDIA_TOKEN_SECRET: "s".repeat(32),
@@ -172,9 +171,9 @@ describe("admin env", () => {
     expect(adminAuthFrom(readEnv({ ...base, ADMIN_AUTH: "none" }))).toEqual({ mode: "none", adminHost: undefined });
   });
 
-  test("blank vars count as unset; SMS sender is optional", () => {
-    const env = readEnv({ ...base, ADMIN_AUTH: "none", TELNYX_SMS_FROM: "", OWNER_NAME: "  " });
-    expect(env.TELNYX_SMS_FROM).toBeUndefined();
+  test("blank vars count as unset; Telegram is optional", () => {
+    const env = readEnv({ ...base, ADMIN_AUTH: "none", TELEGRAM_BOT_TOKEN: "", TELEGRAM_CHAT_ID: "", OWNER_NAME: "  " });
+    expect(env.TELEGRAM_BOT_TOKEN).toBeUndefined();
     expect(env.OWNER_NAME).toBeUndefined();
     expect(() => readEnv({ ...base, CF_ACCESS_AUD: "" })).toThrow(/CF_ACCESS_AUD: required when ADMIN_AUTH=access/);
   });

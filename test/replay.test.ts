@@ -27,11 +27,11 @@ describe("replay harness", () => {
     expect(res.lunaCalls).toBe(0);
   });
 
-  test("genuine fixture → no Luna during the call; after it she texts the owner (dry run)", async () => {
+  test("genuine fixture → no Luna during the call; after it she messages the owner (dry run)", async () => {
     const agent: Agent = {
       async run(input) {
-        const r = await input.tools.sendSmsToOwner("Sarah at Parkside Dental: appointment moved to 11:30. 020 7946 0321");
-        return { instructions: "Thank her and say Alex will call back.", toolCalls: [{ name: "send_sms_to_owner", args: {}, result: r }] };
+        const r = await input.tools.sendTelegramToOwner("Sarah at Parkside Dental: appointment moved to 11:30. 020 7946 0321");
+        return { instructions: "Thank her and say Alex will call back.", toolCalls: [{ name: "send_telegram_to_owner", args: {}, result: r }] };
       },
       async summarize() {
         return "";

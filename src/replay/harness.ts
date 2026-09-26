@@ -68,13 +68,12 @@ export async function replay(opts: {
     classifier: opts.classifier,
     agent: opts.agent ?? stubAgent,
     bus,
-    notifier: { sms: async () => {} },
+    notifier: { send: async () => {} },
     steer: {
       tellLive: (s) => void appended.push(s.message),
       hangup: async () => {},
     },
     clock: { now: () => now },
-    ownerNumber: "+440000000002",
     dryRun: true,
   });
 

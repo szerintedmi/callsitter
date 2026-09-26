@@ -95,7 +95,6 @@ describe("Telnyx answer", () => {
     const calls: { url: string; body: Record<string, unknown> }[] = [];
     const api = new TelnyxApi({
       apiKey: "k",
-      smsFrom: "ScamSitter",
       fetch: (async (url: string, init: RequestInit) => {
         calls.push({ url, body: JSON.parse(String(init.body)) });
         return Response.json({ data: {} });

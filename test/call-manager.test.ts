@@ -23,10 +23,8 @@ async function rig(agent: Agent = { run: async () => ({ toolCalls: [] }), summar
     classifier: scripted({ verdict: "unclear", confidence: 0.5 }),
     agent,
     bus,
-    notifier: { sms: async () => {} },
     telephony: { hangup: async () => {} },
     clock: { now: () => Date.now() },
-    ownerNumber: "",
     repo,
     blobs: { put: async (k) => k, get: async () => null },
   });

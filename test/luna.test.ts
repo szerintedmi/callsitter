@@ -34,7 +34,7 @@ async function rig(replies: (object | { status: number; error: string })[]) {
     reason: "genuine caller",
     enabledTools: ["take_message"],
     tools: {
-      sendSmsToOwner: async () => "sent",
+      sendTelegramToOwner: async () => "sent",
       endCall: async () => "ending call",
       takeMessage: async (m) => (messages.push(m), "recorded"),
     },

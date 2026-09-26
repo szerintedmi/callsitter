@@ -46,15 +46,17 @@ export interface OrchestratorDeps {
   classifier: Classifier;
   agent: Agent;
   bus: EventBus;
-  notifier: Notifier;
+  /** messages to the owner; unset means Luna isn't offered send_telegram_to_owner */
+  notifier?: Notifier;
   steer: Steering;
   clock: Clock;
-  ownerNumber: string;
   /** replay/dry-run: tools are recorded but have no side effects */
   dryRun?: boolean;
 }
 
-const MAX_SMS_PER_CALL = 2;
+const MAX_OWNER_MESSAGES_PER_CALL = 2;
+/** Telegram's limit for a message's text */
+const MAX_OWNER_MESSAGE_CHARS = 4096;
 /** instructions.append is limited to ~500 tokens; stay well under */
 const MAX_APPEND_CHARS = 1800;
 
@@ -83,7 +85,7 @@ export class Orchestrator {
   private lunaInFlight: Promise<string> | null = null;
   /** a Luna call the flow wanted during cooldown or while Luna was busy; poll() runs it when due */
   private deferredLuna: { reason: string; rule: NonNullable<LunaTarget["rule"]>; atMs: number; callerRev: number } | null = null;
-  private smsSent = 0;
+  private ownerMessagesSent = 0;
   /** a Jev call is running (only ever one) */
   private classifying = false;
   /** last caller transcript fragment (wall clock) */
@@ -335,8 +337,8 @@ export class Orchestrator {
         transcript: this.transcript.all(),
         classification: c,
         reason,
-        // No owner number means SMS is disabled; don't offer Luna a tool that can only fail.
-        enabledTools: (afterCall ? cfg.luna.after_call.tools : cfg.luna.tools).filter((t) => this.d.ownerNumber || t !== "send_sms_to_owner"),
+        // No notifier means messages to the owner are off; don't offer Luna a tool that can only fail.
+        enabledTools: (afterCall ? cfg.luna.after_call.tools : cfg.luna.tools).filter((t) => this.d.notifier || t !== "send_telegram_to_owner"),
         tools: this.toolContext(),
         signal: ac.signal,
         previousResponseId: this.lunaChain,
@@ -412,7 +414,7 @@ export class Orchestrator {
   }
 
   /**
-   * After hangup: one Luna run that saves the caller's message and texts the owner if needed
+   * After hangup: one Luna run that saves the caller's message and messages the owner if needed
    * (luna.yaml after_call). Nothing goes to Live. Waits up to timeoutMs, then cancels it.
    */
   async afterCall(timeoutMs: number) {
@@ -433,21 +435,21 @@ export class Orchestrator {
     const record = (call: ToolCallRecord) =>
       this.emit({ type: "tool", callId: this.d.meta.callId, at: this.elapsed(), call });
     return {
-      sendSmsToOwner: async (text) => {
+      sendTelegramToOwner: async (text) => {
         let result: string;
-        if (this.smsSent >= MAX_SMS_PER_CALL) result = "refused: SMS limit for this call reached";
-        else if (!this.d.ownerNumber) result = "refused: SMS to owner is not configured";
+        if (this.ownerMessagesSent >= MAX_OWNER_MESSAGES_PER_CALL) result = "refused: message limit for this call reached";
+        else if (!this.d.notifier) result = "refused: Telegram to owner is not configured";
         else if (this.d.dryRun) result = "dry run: not sent";
         else {
           try {
-            await this.d.notifier.sms(this.d.ownerNumber, text.slice(0, 600));
-            this.smsSent++;
+            await this.d.notifier.send(text.slice(0, MAX_OWNER_MESSAGE_CHARS));
+            this.ownerMessagesSent++;
             result = "sent";
           } catch (err) {
             result = `failed: ${errMsg(err)}`;
           }
         }
-        record({ name: "send_sms_to_owner", args: { text }, result });
+        record({ name: "send_telegram_to_owner", args: { text }, result });
         return result;
       },
       endCall: async (reason) => {
@@ -477,7 +479,7 @@ export class Orchestrator {
 
   /**
    * Stops classifying: cancels the Jev call in flight and any Luna call not yet started. A Luna
-   * call already running is left to finish (see drain), as it may still text the owner or take
+   * call already running is left to finish (see drain), as it may still message the owner or take
    * a message.
    */
   end() {

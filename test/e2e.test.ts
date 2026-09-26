@@ -83,7 +83,7 @@ beforeAll(async () => {
   const blobs = new FsBlobStore(dataDir);
   const bus = new MemoryEventBus();
   attachPersistence(bus, repo);
-  const telnyx = new TelnyxApi({ apiKey: "k", smsFrom: "ScamSitter", fetch: fakeFetch });
+  const telnyx = new TelnyxApi({ apiKey: "k", fetch: fakeFetch });
   const browserCalls = new BrowserCalls();
   manager = new CallManager({
     config: () => config.get(),
@@ -91,10 +91,8 @@ beforeAll(async () => {
     classifier: scripted({ verdict: "scam", confidence: 0.9 }),
     agent: fakeAgent,
     bus,
-    notifier: telnyx,
     telephony: routeTelephony(telnyx, browserCalls),
     clock: { now: () => Date.now() },
-    ownerNumber: "+447700900000",
     repo,
     blobs,
   });

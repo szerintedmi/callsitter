@@ -86,10 +86,8 @@ beforeAll(async () => {
     classifier: scripted({ verdict: "scam", confidence: 0.9 }),
     agent: { run: async () => ({ toolCalls: [] }), summarize: async () => "" },
     bus,
-    notifier: telnyx,
     telephony: routeTelephony(telnyx, browserCalls),
     clock: { now: () => Date.now() },
-    ownerNumber: "",
     repo,
     blobs: new FsBlobStore(dataDir),
   });

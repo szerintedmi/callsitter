@@ -26,10 +26,10 @@ export interface CallSessionDeps {
   classifier: Classifier;
   agent: Agent;
   bus: EventBus;
-  notifier: Notifier;
+  /** messages to the owner; unset turns them off */
+  notifier?: Notifier;
   telephony: Telephony;
   clock: Clock;
-  ownerNumber: string;
   media: MediaChannel;
   /**
    * The voice vendor terminates the phone leg itself (OpenAI SIP): caller audio never reaches
@@ -108,7 +108,6 @@ export class CallSession {
       bus: d.bus,
       notifier: d.notifier,
       clock: d.clock,
-      ownerNumber: d.ownerNumber,
       dryRun: d.dryRun,
       steer: {
         tellLive: (m) => this.tellLive(m),

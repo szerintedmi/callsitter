@@ -325,7 +325,7 @@ export function adminRoutes(d: AdminDeps) {
             </select>
           </label>
           <label>
-            <input type="checkbox" id="dry" /> Dry-run Luna tools (no SMS, no hang-up)
+            <input type="checkbox" id="dry" /> Dry-run Luna tools (no Telegram, no hang-up)
           </label>
           <span class="meter" title="microphone level">
             <i id="meter" />

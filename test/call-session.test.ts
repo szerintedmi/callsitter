@@ -54,10 +54,8 @@ async function rig(opts: { agent?: Agent; sip?: boolean; afterCall?: boolean; co
     classifier: scripted({ verdict: "unclear", confidence: 0.5 }),
     agent: opts.agent ?? { run: async () => ({ toolCalls: [] }), summarize: async () => "" },
     bus,
-    notifier: { sms: async () => {} },
     telephony: { hangup: async (id) => void hangups.push(id) },
     clock: { now: () => now },
-    ownerNumber: "",
     media: { sendAudio() {}, clear() {}, close() {} },
     mediaViaVoice: opts.sip,
   });
@@ -135,10 +133,8 @@ describe("call session: recorded greeting", () => {
       classifier: scripted({ verdict: "unclear", confidence: 0.5 }),
       agent: { run: async () => ({ toolCalls: [] }), summarize: async () => "" },
       bus: new MemoryEventBus(),
-      notifier: { sms: async () => {} },
       telephony: { hangup: async () => {} },
       clock: { now: () => Date.now() },
-      ownerNumber: "",
       media: { sendAudio: (a) => void media.push(a), clear() {}, close() {} },
       greetings: { get: (codec) => (codec === "pcma" ? new Uint8Array(1600).fill(0x12) : null) },
     });
@@ -205,7 +201,7 @@ describe("call session: Luna around hangup", () => {
     r.bus.subscribe((e) => void order.push(e.type === "luna.started" ? `luna.started:${e.trigger}` : e.type));
     r.handlers().onTranscriptDelta("caller", "c1", "It's Sarah, please ask him to call me back.");
     await r.session.stop("caller hung up");
-    expect(runs).toEqual([{ reason: r.config.luna.after_call.task, tools: ["take_message"] }]); // no owner number: no SMS
+    expect(runs).toEqual([{ reason: r.config.luna.after_call.task, tools: ["take_message"] }]); // no notifier: no Telegram
     expect(order.filter((t) => t.startsWith("luna") || ["tool", "call.ended", "summary"].includes(t))).toEqual([
       "luna.started:after_call",
       "tool",
@@ -305,10 +301,8 @@ describe("call session lifecycle", () => {
       classifier: scripted({ verdict: "unclear", confidence: 0.5 }),
       agent: { run: async () => ({ toolCalls: [] }), summarize: async () => "" },
       bus,
-      notifier: { sms: async () => {} },
       telephony: { hangup: async (id) => void hangups.push(id) },
       clock: { now: () => Date.now() },
-      ownerNumber: "",
       media: { sendAudio() {}, clear() {}, close() {} },
       ...deps,
     };

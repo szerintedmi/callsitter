@@ -88,7 +88,7 @@ export interface Classifier {
 
 /** Tools that Luna can call; implemented by the orchestrator per call. */
 export interface ToolContext {
-  sendSmsToOwner(text: string): Promise<string>;
+  sendTelegramToOwner(text: string): Promise<string>;
   endCall(reason: string): Promise<string>;
   takeMessage(message: { name?: string; callback?: string; message: string }): Promise<string>;
 }
@@ -167,8 +167,9 @@ export interface BlobStore {
   get(key: string): Promise<{ body: ReadableStream | Blob; contentType: string } | null>;
 }
 
+/** Sends a message to the phone's owner (the recipient is fixed by the adapter). */
 export interface Notifier {
-  sms(to: string, text: string): Promise<void>;
+  send(text: string): Promise<void>;
 }
 
 export interface EventBus {

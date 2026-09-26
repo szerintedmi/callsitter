@@ -15,14 +15,14 @@ import { renderTranscript } from "../jev/classifier";
 const MAX_TOOL_ROUNDS = 3;
 
 export const TOOL_DEFS: Record<LunaTool, FunctionTool> = {
-  send_sms_to_owner: {
+  send_telegram_to_owner: {
     type: "function",
-    name: "send_sms_to_owner",
-    description: "Send a short SMS to the phone's owner about this call: who is calling, why, and a callback number if known.",
+    name: "send_telegram_to_owner",
+    description: "Send the phone's owner a short Telegram message about this call: who is calling, why, and how to reach them if known.",
     strict: true,
     parameters: {
       type: "object",
-      properties: { text: { type: "string", description: "SMS body, under 300 characters" } },
+      properties: { text: { type: "string", description: "message text, under 500 characters" } },
       required: ["text"],
       additionalProperties: false,
     },
@@ -81,8 +81,8 @@ async function execTool(name: string, argsJson: string, tools: ToolContext): Pro
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : undefined);
   let result: string;
   switch (name) {
-    case "send_sms_to_owner":
-      result = await tools.sendSmsToOwner(String(args.text ?? ""));
+    case "send_telegram_to_owner":
+      result = await tools.sendTelegramToOwner(String(args.text ?? ""));
       break;
     case "end_call":
       result = await tools.endCall(String(args.reason ?? ""));

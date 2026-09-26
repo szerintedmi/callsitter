@@ -7,7 +7,7 @@ import type { Judge } from "./judge";
 import type { Outcome } from "./run";
 
 const dryTools: ToolContext = {
-  sendSmsToOwner: async () => "sent (dry run)",
+  sendTelegramToOwner: async () => "sent (dry run)",
   endCall: async () => "ended (dry run)",
   takeMessage: async () => "recorded",
 };
@@ -22,7 +22,7 @@ export async function runLunaCase(c: LunaCase, cfg: AppConfig, apiKey: string, j
     transcript,
     classification: null,
     reason: c.reason,
-    enabledTools: cfg.luna.tools.filter((t) => t !== "send_sms_to_owner"),
+    enabledTools: cfg.luna.tools.filter((t) => t !== "send_telegram_to_owner"),
     tools: dryTools,
   });
   const tools = res.toolCalls.map((t) => `tool ${t.name} ${JSON.stringify(t.args)}`).join("\n");
