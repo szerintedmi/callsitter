@@ -20,6 +20,8 @@ export interface OwnerDeskDeps {
   callLink?: (callId: string) => string;
   /** sends the owner's message to the call's Live session (CallSession.steerFromOwner) */
   steer: (callId: string, text: string, as: LiveAppend) => OwnerSteerResult;
+  /** ends the call once the agent's goodbye has played (CallSession.hangUpFromOwner) */
+  hangUp: (callId: string) => OwnerSteerResult;
   /** whether steering is possible at all (it needs a chat we can hear from) */
   canSteer: boolean;
 }
@@ -262,7 +264,8 @@ export class OwnerDesk {
       this.d.chat.send(text, { replyTo: m.messageId }).catch((err) => console.warn(`[owner] reply not sent: ${errMsg(err)}`));
     const text = m.text?.trim();
     if (!text) return void (await reply("Only text messages can steer a call."));
-    if (text.startsWith("/")) return void (await reply(this.help()));
+    const hangUp = /^\/hangup(@\S+)?$/i.test(text);
+    if (text.startsWith("/") && !hangUp) return void (await reply(this.help()));
     if (!this.steeringOn()) return void (await reply("Steering is turned off."));
 
     let callId: string | undefined;
@@ -275,6 +278,10 @@ export class OwnerDesk {
     }
     const v = this.views.get(callId);
     if (!v || v.ended) return void (await reply("That call has ended."));
+    if (hangUp) {
+      const res = this.hangUpCall(v);
+      return void (await reply(res.ok ? "Hanging up after the goodbye." : `Not hung up: ${res.reason}.`));
+    }
     const steer = parseOwnerMessage(this.d.config().telegram.steering, text);
     const res = this.steerCall(v, steer.text, steer.as);
     if (!res.ok) return void (await reply(`Not sent: ${res.reason}.`));
@@ -291,7 +298,7 @@ export class OwnerDesk {
     const st = this.d.config().telegram.steering;
     const callId = this.messages.get(b.messageId);
     const v = callId ? this.views.get(callId) : undefined;
-    let button: { text: string; as: LiveAppend } | undefined;
+    let button: { text: string; as: LiveAppend; hang_up?: boolean } | undefined;
     if (b.data.startsWith(BUTTON)) button = st.buttons[Number(b.data.slice(BUTTON.length))];
     else if (b.data.startsWith(SUGGESTION) && st.suggestions.enabled) {
       const [gen, i] = b.data.slice(SUGGESTION.length).split(":").map(Number);
@@ -301,8 +308,25 @@ export class OwnerDesk {
     if (!button) return void (await answer("That button no longer does anything."));
     if (!callId || !v || v.ended) return void (await answer("That call has ended."));
     if (!this.steeringOn()) return void (await answer("Steering is turned off."));
+    if (button.hang_up) {
+      const res = this.hangUpCall(v, button);
+      return void (await answer(res.ok ? "Hanging up after the goodbye." : `Not hung up: ${res.reason}.`));
+    }
     const res = this.steerCall(v, button.text, button.as);
     await answer(res.ok ? `Sent: ${button.text}` : `Not sent: ${res.reason}.`);
+  }
+
+  /**
+   * Ends the call: the goodbye text (the hang_up button's, or the first one configured) goes to
+   * Live, then the call hangs up once it has played.
+   */
+  private hangUpCall(v: CallView, button?: { text: string; as: LiveAppend }): OwnerSteerResult {
+    const goodbye = button ?? this.d.config().telegram.steering.buttons.find((b) => b.hang_up);
+    if (goodbye) {
+      const said = this.steerCall(v, goodbye.text, goodbye.as);
+      if (!said.ok) return said;
+    }
+    return this.d.hangUp(v.callId);
   }
 
   private steeringOn(): boolean {

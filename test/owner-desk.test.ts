@@ -17,6 +17,7 @@ async function rig(o: { steer?: (callId: string, text: string, as: LiveAppend) =
   const sent: { id: number; text: string; replyTo?: number; layout?: MessageLayout }[] = [];
   const edits: { id: number; text: string; layout?: MessageLayout }[] = [];
   const steered: { callId: string; text: string; as: LiveAppend }[] = [];
+  const hungUp: string[] = [];
   const answers: { pressId: string; notice?: string }[] = [];
   const chat: OwnerChat = {
     async send(text, opts) {
@@ -47,6 +48,7 @@ async function rig(o: { steer?: (callId: string, text: string, as: LiveAppend) =
       steered.push({ callId, text, as });
       return o.steer?.(callId, text, as) ?? { ok: true };
     },
+    hangUp: (callId) => (hungUp.push(callId), { ok: true }),
   });
   const start = (callId: string, from = "+441") => bus.publish({ type: "call.started", callId, meta: { callId, from, to: "+442", startedAt: now } });
   const message = (text: string | undefined, replyTo?: number) =>
@@ -58,6 +60,7 @@ async function rig(o: { steer?: (callId: string, text: string, as: LiveAppend) =
     sent,
     edits,
     steered,
+    hungUp,
     answers,
     start,
     message,
@@ -98,7 +101,7 @@ describe("owner desk: the call's status message", () => {
     expect(text).toContain("❓ Is Peter home?");
     expect(r.lastQuote()).toBe("0:01 caller: Hi, it's the bank.");
     expect(text).toContain("Reply to steer");
-    expect(r.edits[0]!.layout?.buttons?.[0]?.map((b) => b.label)).toEqual(["Genuine", "Spam/Scam"]);
+    expect(r.edits[0]!.layout?.buttons?.[0]?.map((b) => b.label)).toEqual(["Genuine", "Spam/Scam", "Hang up"]);
     expect(text).toContain("https://admin.example.com/calls/c1");
   });
 
@@ -163,10 +166,14 @@ describe("owner desk: the call's status message", () => {
     r.bus.publish({ type: "classification", callId: "c1", at: 3000, classification: cls({ verdict: "genuine", confidence: 0.7, urgency: 0.9 }) });
     await settle();
     const alerts = r.sent.filter((m) => m.text.startsWith("🚨"));
-    expect(alerts).toEqual([{ id: alerts[0]!.id, text: "🚨 Urgent call (urgency 0.80): caller: I'm locked out, can you call me?", replyTo: r.sent[0]!.id }]);
+    // 0.8 is under min_urgency (0.85); 0.9 alerts.
+    expect(alerts).toEqual([{ id: alerts[0]!.id, text: "🚨 Urgent call (urgency 0.90): caller: I'm locked out, can you call me?", replyTo: r.sent[0]!.id }]);
 
     r.start("c2");
     r.bus.publish({ type: "classification", callId: "c2", at: 2000, classification: cls({ verdict: "scam", confidence: 0.8, urgency: 0.95 }) });
+    // A bank "fraud team" caller: scam 0.54 and urgency 0.91 at their first words.
+    r.start("c3");
+    r.bus.publish({ type: "classification", callId: "c3", at: 2000, classification: cls({ verdict: "scam", confidence: 0.54, urgency: 0.91 }) });
     await settle();
     expect(r.sent.filter((m) => m.text.startsWith("🚨"))).toHaveLength(1);
     r.desk.detach();
@@ -278,6 +285,7 @@ describe("owner desk: steering", () => {
     expect(status.layout?.buttons?.[0]).toEqual([
       { label: "Genuine", data: "steer:0" },
       { label: "Spam/Scam", data: "steer:1" },
+      { label: "Hang up", data: "steer:2" },
     ]);
     await r.desk.onButton({ pressId: "q1", messageId: status.id, data: "steer:0" });
     const genuine = r.config.telegram.steering.buttons[0]!;
@@ -290,6 +298,23 @@ describe("owner desk: steering", () => {
     await r.desk.onButton({ pressId: "q2", messageId: status.id, data: "steer:1" });
     expect(r.answers.at(-1)).toEqual({ pressId: "q2", notice: "That call has ended." });
     expect(r.steered).toHaveLength(1);
+    r.desk.detach();
+  });
+
+  test("Hang up (button or /hangup): the goodbye goes to Live, then the call hangs up", async () => {
+    const r = await rig();
+    r.start("c1");
+    await settle();
+    const status = r.sent[0]!;
+    const goodbye = r.config.telegram.steering.buttons.find((b) => b.hang_up)!;
+    await r.desk.onButton({ pressId: "q1", messageId: status.id, data: `steer:${r.config.telegram.steering.buttons.indexOf(goodbye)}` });
+    expect(r.steered).toEqual([{ callId: "c1", text: goodbye.text, as: goodbye.as }]);
+    expect(r.hungUp).toEqual(["c1"]);
+    expect(r.answers).toEqual([{ pressId: "q1", notice: "Hanging up after the goodbye." }]);
+
+    await r.message("/hangup", status.id);
+    expect(r.hungUp).toEqual(["c1", "c1"]);
+    expect(r.sent.at(-1)!.text).toBe("Hanging up after the goodbye.");
     r.desk.detach();
   });
 

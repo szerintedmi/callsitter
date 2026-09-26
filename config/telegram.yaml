@@ -14,8 +14,8 @@ status:
   # (luna.yaml progress: alert), e.g. someone at the door.
   urgent_alert:
     enabled: true
-    min_urgency: 0.7
-    unless_junk: 0.75
+    min_urgency: 0.85
+    unless_junk: 0.5
     luna: true
 
 # Your messages steer the call: reply to a call's status message, or send a message while a call
@@ -43,6 +43,12 @@ steering:
     - label: Spam/Scam
       text: This is a scam or spam call. From now on handle it as one.
       as: thinking
+    # Ends the call once the goodbye has played (steering texts alone can't hang up); so does
+    # sending /hangup.
+    - label: Hang up
+      text: The call is over. Say a short, polite goodbye now, then stay quiet.
+      as: commentary
+      hang_up: true
   # Luna's suggested replies (luna.yaml progress: suggestions), one button per row below these,
   # replaced with each rolling summary. A tap sends the suggestion's instruction (in `text` above)
   # as `as`: commentary, so the agent acts on it at once, in its own words.

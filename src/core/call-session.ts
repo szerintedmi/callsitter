@@ -349,6 +349,17 @@ export class CallSession {
     return { ok: true };
   }
 
+  /**
+   * The owner ended the call from Telegram: it hangs up once the agent's goodbye (a steering text
+   * sent just before) has played, like the call flow's hang-ups.
+   */
+  hangUpFromOwner(): OwnerSteerResult {
+    if (this.stopped) return { ok: false, reason: "that call has ended" };
+    if (this._phase !== "active") return { ok: false, reason: "the call isn't connected yet" };
+    void this.hangupAfterGoodbye("the owner hung up from Telegram");
+    return { ok: true };
+  }
+
   /** The agent is speaking, or the caller spoke and the agent is about to reply. */
   private agentBusy(): boolean {
     const now = this.d.clock.now();

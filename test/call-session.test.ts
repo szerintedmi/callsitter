@@ -168,6 +168,15 @@ describe("owner steering from Telegram", () => {
     expect(answer.text).toContain("Ask what delivery slots they can offer.");
   });
 
+  test("the owner hangs up: once the agent's goodbye has played", async () => {
+    const r = await rig();
+    expect(r.session.hangUpFromOwner()).toEqual({ ok: true });
+    r.session.checkPendingHangup();
+    await r.session.finished;
+    expect(r.hangups).toEqual(["cc1"]);
+    expect(r.session.hangUpFromOwner()).toEqual({ ok: false, reason: "that call has ended" });
+  });
+
   test("the summary sees what the owner said", async () => {
     let seen: readonly string[] | undefined;
     const r = await rig({

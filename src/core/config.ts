@@ -515,8 +515,8 @@ export const TelegramConfig = z.object({
       urgent_alert: z
         .object({
           enabled: z.boolean().default(true),
-          min_urgency: unit.default(0.7),
-          unless_junk: unit.default(0.75),
+          min_urgency: unit.default(0.85),
+          unless_junk: unit.default(0.5),
           luna: z.boolean().default(true),
         })
         .prefault({}),
@@ -536,9 +536,17 @@ export const TelegramConfig = z.object({
         .max(1000)
         .default(`SUPERVISOR: ${OWNER_MESSAGE}`)
         .refine((t) => t.includes(OWNER_MESSAGE), `needs ${OWNER_MESSAGE}`),
-      // Buttons under a live call's status message; a tap sends `text` as `as`.
+      // Buttons under a live call's status message; a tap sends `text` as `as`, and with hang_up
+      // ends the call once the agent's goodbye has played (so does /hangup).
       buttons: z
-        .array(z.strictObject({ label: z.string().min(1).max(30), text: z.string().min(1).max(500), as: z.enum(LIVE_APPENDS).default("thinking") }))
+        .array(
+          z.strictObject({
+            label: z.string().min(1).max(30),
+            text: z.string().min(1).max(500),
+            as: z.enum(LIVE_APPENDS).default("thinking"),
+            hang_up: z.boolean().default(false),
+          }),
+        )
         .max(8)
         .default([]),
       // Luna's suggested buttons (luna.yaml progress: suggestions), one per row below `buttons`,
