@@ -36,7 +36,7 @@ lock_ssh() {
   systemctl restart ssh
   log "sshd now listens on loopback only:"
   ss -tlnp | grep -E ':22\b' || true
-  echo "Break-glass: the OVH KVM console (needs a local password: 'passwd <you>'), then 'bootstrap.sh unlock-ssh'."
+  echo "Break-glass: log in to the OVH KVM console as your user (it needs a password: 'passwd <you>'), then 'sudo bootstrap.sh unlock-ssh'."
 }
 
 unlock_ssh() {
@@ -96,6 +96,14 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
 systemctl enable --now qemu-guest-agent 2>/dev/null || warn "qemu-guest-agent not started (no guest channel?)"
+# Keep the OVH console usable for a break-glass login:
+# - systemd-ssh-generator (SSH over AF_VSOCK for VMs) fails on every daemon-reload here ("Failed to
+#   query local AF_VSOCK CID"); nothing uses it.
+# - Only kernel errors go to the console (routine Docker bridge/veth messages stay in the journal).
+install -d -m 0755 /etc/systemd/system-generators
+ln -sfn /dev/null /etc/systemd/system-generators/systemd-ssh-generator
+echo 'kernel.printk = 3 4 1 3' >/etc/sysctl.d/90-scamsitter-console.conf
+sysctl -q -p /etc/sysctl.d/90-scamsitter-console.conf
 # systemd-resolved answers LLMNR (port 5355) on all interfaces by default; nothing here needs it.
 if systemctl is-active --quiet systemd-resolved; then
   install -d -m 0755 /etc/systemd/resolved.conf.d
