@@ -18,11 +18,10 @@ const msg = (as: TellLive["as"], text: string, o: Partial<TellLive> = {}): TellL
 });
 
 async function rig(
-  opts: { agent?: Agent; sip?: boolean; afterCall?: boolean; config?: (c: AppConfig) => void } & Pick<CallSessionDeps, "notifier" | "callLink" | "dryRun"> = {},
+  opts: { agent?: Agent; sip?: boolean; config?: (c: AppConfig) => void } & Pick<CallSessionDeps, "notifier" | "callLink" | "dryRun"> = {},
 ) {
   const config = await loadRepoConfig();
   opts.config?.(config);
-  config.luna.after_call = { ...config.luna.after_call, enabled: opts.afterCall ?? false };
   config.flow.silence = { ...config.flow.silence, enabled: true, after_ms: 7000, max_prompts: 2, hang_up: true };
   config.connection.speech_detection = { caller_dbfs: -40, agent_dbfs: -50 };
   let now = 1_000_000;
@@ -220,8 +219,8 @@ describe("call session: Luna around hangup", () => {
     const agent: Agent = {
       async run(input) {
         await new Promise<void>((r) => (release = r));
-        const result = await input.tools.takeMessage({ name: "Sarah", callback: "02079460000", message: "Call back re dinner" });
-        return { instructions: "Say goodbye.", toolCalls: [{ name: "take_message", args: {}, result }], responseId: "resp_1" };
+        const result = await input.tools.sendTelegramToOwner("Sarah: call back re dinner");
+        return { instructions: "Say goodbye.", toolCalls: [{ name: "send_telegram_to_owner", args: {}, result }], responseId: "resp_1" };
       },
       summarize: async (_m, _t, o) => (summarized.push(o?.previousResponseId), "Sarah called about dinner."),
     };
@@ -239,42 +238,6 @@ describe("call session: Luna around hangup", () => {
     expect(order.filter((t) => ["tool", "luna", "call.ended", "summary"].includes(t))).toEqual(["tool", "luna", "call.ended", "summary"]);
     expect(r.appended.some((a) => a.includes("Say goodbye."))).toBe(false); // no voice session to guide
     expect(summarized).toEqual(["resp_1"]);
-  });
-
-  test("after the call, Luna saves the message once with her after-call tools; nothing goes to Live", async () => {
-    const runs: { reason: string; tools: readonly string[] }[] = [];
-    const summarized: (string | undefined)[] = [];
-    const agent: Agent = {
-      async run(input) {
-        runs.push({ reason: input.reason, tools: input.enabledTools });
-        const result = await input.tools.takeMessage({ name: "Sarah", callback: "02079460000", message: "Call back re dinner" });
-        return { instructions: "Thanks.", toolCalls: [{ name: "take_message", args: {}, result }], responseId: "resp_after" };
-      },
-      summarize: async (_m, _t, o) => (summarized.push(o?.previousResponseId), "Sarah called about dinner."),
-    };
-    const r = await rig({ agent, afterCall: true });
-    const order: string[] = [];
-    r.bus.subscribe((e) => void order.push(e.type === "luna.started" ? `luna.started:${e.trigger}` : e.type));
-    r.handlers().onTranscriptDelta("caller", "c1", "It's Sarah, please ask him to call me back.");
-    await r.session.stop("caller hung up");
-    expect(runs).toEqual([{ reason: r.config.luna.after_call.task, tools: ["take_message"] }]);
-    expect(order.filter((t) => t.startsWith("luna") || ["tool", "call.ended", "summary"].includes(t))).toEqual([
-      "luna.started:after_call",
-      "tool",
-      "luna",
-      "call.ended",
-      "luna.started:summary",
-      "summary",
-    ]);
-    expect(r.appended.some((a) => a.includes("Thanks."))).toBe(false);
-    expect(summarized).toEqual(["resp_after"]);
-  });
-
-  test("no after-call Luna when the caller never spoke", async () => {
-    let runs = 0;
-    const r = await rig({ agent: { run: async () => (runs++, { toolCalls: [] }), summarize: async () => "" }, afterCall: true });
-    await r.session.stop("caller hung up");
-    expect(runs).toBe(0);
   });
 
   test("a Luna call still running after drain_timeout_ms is cancelled", async () => {

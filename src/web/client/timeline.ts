@@ -442,7 +442,7 @@ export function createTimeline(root: HTMLElement): Timeline {
       }
       case "luna.started": {
         const who =
-          ev.trigger === "delegation" ? "Live asks for help" : ev.trigger === "after_call" ? "after the call: save the message" : ev.trigger === "summary" ? "summarise the call" : esc(ev.reason);
+          ev.trigger === "delegation" ? "Live asks for help" : ev.trigger === "summary" ? "summarise the call" : esc(ev.reason);
         lunaStart = ev;
         // The call flow calls Luna; Live's request for help goes through it.
         const { g } = row({

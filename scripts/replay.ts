@@ -75,7 +75,7 @@ const print = (ev: CallEvent) => {
       console.log(`    ⇒ STAGE ${ev.stage}`);
       break;
     case "luna":
-      console.log(`    ⇒ LUNA (${ev.trigger === "after_call" ? "after call" : ev.reason}): ${ev.instructions ?? "(no guidance)"}`);
+      console.log(`    ⇒ LUNA (${ev.reason}): ${ev.instructions ?? "(no guidance)"}`);
       for (const t of ev.toolCalls) console.log(`       tool ${t.name} ${JSON.stringify(t.args)} → ${t.result}`);
       break;
     case "note":

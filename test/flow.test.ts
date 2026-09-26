@@ -71,7 +71,7 @@ describe("call flow (config/call-flow.yaml)", () => {
     expect(decide(cls({ confidence: 0.6 }), state(), cfg)).toEqual({ kind: "none", reason: "no rule matched" });
   });
 
-  test("confident genuine → Live is told once (no Luna): it takes the message, Luna saves it after the call", () => {
+  test("confident genuine → Live is told once (no Luna): it takes the message, the summary passes it on", () => {
     const genuine = cls({ verdict: "genuine", confidence: 0.8 });
     expect(decide(genuine, state(), cfg)).toMatchObject({ kind: "tell_live", stage: "genuine", message: { as: "thinking" } });
     expect(decide(genuine, state({ stage: "genuine" }), cfg)).toEqual({ kind: "none", reason: "no rule matched" });
@@ -88,6 +88,26 @@ describe("call flow (config/call-flow.yaml)", () => {
       message: message("low_confidence"),
     });
     expect(message("low_confidence").text).toContain("{luna_response}");
+  });
+
+  test("urgent, short of a confident scam or spam → Luna, once", () => {
+    const urgent = (p: Parameters<typeof cls>[0]) => cls({ urgency: 0.85, ...p });
+    // Unclear and leaning-scam calls count: Luna judges.
+    for (const c of [urgent({ verdict: "unclear", confidence: 0.7 }), urgent({ confidence: 0.5 }), urgent({ verdict: "genuine", confidence: 0.9 })]) {
+      expect(decide(c, state(), cfg)).toEqual({ kind: "luna", reason: "urgent", stage: "urgent", message: message("urgent") });
+    }
+    expect(decide(urgent({ verdict: "genuine", confidence: 0.9 }), state({ stage: "genuine" }), cfg).kind).toBe("luna");
+    expect(decide(cls({ verdict: "unclear", confidence: 0.7, urgency: 0.69 }), state(), cfg)).toEqual({ kind: "none", reason: "still unclear" });
+    // A confident scam wastes time, urgent or not.
+    expect(stageOf(decide(urgent({}), state(), cfg))).toBe("waste_time");
+    expect(decide(urgent({ confidence: 0.5 }), state({ stage: "waste_time" }), cfg)).toEqual({ kind: "none", reason: "no rule matched" });
+    // Once Luna has told the agent something, the call moves on to the rules below.
+    expect(decide(urgent({ verdict: "unclear", confidence: 0.7 }), state({ stage: "urgent" }), cfg)).toEqual({ kind: "none", reason: "still unclear" });
+    expect(decide(urgent({ verdict: "genuine", confidence: 0.9 }), state({ stage: "urgent" }), cfg)).toEqual({ kind: "none", reason: "no rule matched" });
+    expect(stageOf(decide(urgent({ verdict: "genuine", confidence: 0.9, done: 0.9 }), state({ stage: "urgent" }), cfg))).toBe("wrap_up");
+    expect(decide(urgent({ verdict: "genuine", confidence: 0.3 }), state({ stage: "urgent" }), cfg)).toMatchObject({ kind: "luna", stage: "low_confidence" });
+    // Not from wrap_up: the goodbye is under way.
+    expect(decide(urgent({ verdict: "genuine", confidence: 0.9 }), state({ stage: "wrap_up" }), cfg)).toEqual({ kind: "none", reason: "keep wrapping up" });
   });
 
   test("Luna is asked again while the call stays in her stage", () => {
@@ -148,6 +168,15 @@ describe("call flow engine", () => {
     expect(holds({ unsure: 0.5 }, a)).toBe(true);
     expect(holds({ unsure: 0.4 }, a)).toBe(false);
     expect(holds("scam", undefined)).toBe(false); // question not answered
+  });
+
+  test("urgency conditions check Jev's urgency score", () => {
+    const f = flow([
+      { stage: "urgent", when: { urgency: { min: 0.8 } }, then: { tell_live: { as: "thinking", text: "a" } } },
+      { stage: "rest" },
+    ]);
+    expect(stageOf(decide(cls({ urgency: 0.8 }), state(), { flow: f, luna: cfg.luna }))).toBe("urgent");
+    expect(decide(cls({ urgency: 0.7 }), state(), { flow: f, luna: cfg.luna })).toEqual({ kind: "none", reason: "rest" });
   });
 
   const flow = (rules: unknown[]) => parseConfig("flow", { rules });
@@ -237,6 +266,7 @@ describe("call flow engine", () => {
     expect(check([{ stage: "x", when: { manipulation: "attempt" } }])).not.toThrow();
     expect(check([{ stage: "x", when: { topic: "abuse" } }])).toThrow(/no Choice question topic/); // dropped
     expect(check([{ stage: "x", when: { category: "tech_support" } }])).toThrow(/no Choice question category/); // dropped
-    expect(check([{ stage: "x", when: { urgency: "high" } }])).toThrow(/no Choice question urgency/);
+    // Urgency is a score, not a Choice.
+    expect(() => flow([{ stage: "x", when: { urgency: "high" } }])).toThrow(/rules\[x\]\.when\.urgency: expected \{ min/);
   });
 });

@@ -87,8 +87,6 @@ export async function replay(opts: {
     await orch.idle();
   }
   orch.end();
-  // Luna saves the caller's message after the call (luna.yaml after_call); tools run dry.
-  await orch.afterCall(opts.config.luna.drain_timeout_ms);
   return {
     actions: orch.actions,
     appended,

@@ -39,22 +39,6 @@ export const TOOL_DEFS: Record<LunaTool, FunctionTool> = {
       additionalProperties: false,
     },
   },
-  take_message: {
-    type: "function",
-    name: "take_message",
-    description: "Record a message for the owner once the caller's details are known.",
-    strict: true,
-    parameters: {
-      type: "object",
-      properties: {
-        name: { type: ["string", "null"], description: "caller's name" },
-        callback: { type: ["string", "null"], description: "callback number" },
-        message: { type: "string" },
-      },
-      required: ["name", "callback", "message"],
-      additionalProperties: false,
-    },
-  },
 };
 
 export function renderContext(meta: CallMeta, transcript: readonly TranscriptEntry[], c: Classification | null, reason: string) {
@@ -78,7 +62,6 @@ async function execTool(name: string, argsJson: string, tools: ToolContext): Pro
   } catch {
     return { name, args: { raw: argsJson }, result: "error: arguments were not valid JSON" };
   }
-  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : undefined);
   let result: string;
   switch (name) {
     case "send_telegram_to_owner":
@@ -86,13 +69,6 @@ async function execTool(name: string, argsJson: string, tools: ToolContext): Pro
       break;
     case "end_call":
       result = await tools.endCall(String(args.reason ?? ""));
-      break;
-    case "take_message":
-      result = await tools.takeMessage({
-        name: str(args.name),
-        callback: str(args.callback),
-        message: String(args.message ?? ""),
-      });
       break;
     default:
       result = `error: unknown tool ${name}`;

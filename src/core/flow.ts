@@ -31,7 +31,10 @@ export type FlowAction =
 export function matchRule(c: Classification, stage: string | null, rules: readonly Rule[]): Rule | null {
   return (
     rules.find(
-      (r) => (!r.inStage || r.inStage.includes(stage ?? "none")) && Object.entries(r.when).every(([q, cond]) => holds(cond, c.answers[q])),
+      (r) =>
+        (!r.inStage || r.inStage.includes(stage ?? "none")) &&
+        (r.minUrgency === undefined || c.urgency >= r.minUrgency) &&
+        Object.entries(r.when).every(([q, cond]) => holds(cond, c.answers[q])),
     ) ?? null
   );
 }

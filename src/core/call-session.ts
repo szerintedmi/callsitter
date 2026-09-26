@@ -513,8 +513,6 @@ export class CallSession {
 
     // Let a running Luna call finish first, so call.ended and the summary include what it did.
     await this.orch.drain(cfg.luna.drain_timeout_ms);
-    // Then Luna saves the caller's message (luna.yaml after_call); the summary continues her run.
-    await this.orch.afterCall(cfg.luna.drain_timeout_ms);
     const minutes = this.answeredAt ? (this.endedAt - this.answeredAt) / 60000 : 0;
     const c = cfg.cost;
     const costUsd =

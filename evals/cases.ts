@@ -23,7 +23,16 @@ const LiveCase = z.strictObject({
   after_caller: z.array(z.string()).default([]),
   pass_if: z.string(),
 });
-const LunaCase = z.strictObject({ name: z.string(), reason: z.string(), transcript: z.string(), pass_if: z.string() });
+const LunaCase = z.strictObject({
+  name: z.string(),
+  reason: z.string(),
+  transcript: z.string(),
+  // Jev's last result as Luna sees it; omitted: none yet.
+  jev: z
+    .strictObject({ verdict: z.enum(["scam", "spam", "genuine", "unclear"]), confidence: z.number().min(0).max(1), urgency: z.number().min(0).max(1) })
+    .optional(),
+  pass_if: z.string(),
+});
 
 const Cases = z.strictObject({
   settings: Settings,

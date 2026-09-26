@@ -29,7 +29,7 @@ describe("orchestrator", () => {
     expect(await lunaToolsOffered({ send: async () => {} })).toContain("send_telegram_to_owner");
     const without = await lunaToolsOffered();
     expect(without).not.toContain("send_telegram_to_owner");
-    expect(without).toContain("take_message");
+    expect(without).toContain("end_call");
   });
 
   test("Telegram to the owner goes through the notifier, at most twice per call", async () => {
@@ -386,7 +386,7 @@ describe("orchestrator", () => {
       r.releases.shift()!();
       await r.orch.idle();
       expect(r.sent.map((s) => s.key)).toEqual(["stage"]);
-      expect(r.notes).toContain("Luna's guidance dropped: the call moved to waste_time while Luna ran");
+      expect(r.notes).toContain("Luna's guidance dropped: the call flow moved to waste_time while Luna ran");
     });
 
     test("scam → genuine (Luna starts) → scam again: the genuine-caller guidance is dropped", async () => {
@@ -401,7 +401,7 @@ describe("orchestrator", () => {
       r.releases.shift()!();
       await r.orch.idle();
       expect(r.sent.map((s) => s.key)).toEqual(["stage"]);
-      expect(r.notes).toContain("Luna's guidance dropped: the call moved to waste_time while Luna ran");
+      expect(r.notes).toContain("Luna's guidance dropped: the call flow moved to waste_time while Luna ran");
     });
 
     test("a delegation whose guidance went stale is still answered, with the fallback", async () => {

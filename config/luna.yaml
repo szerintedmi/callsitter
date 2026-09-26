@@ -1,6 +1,5 @@
-# GPT-6 Luna, the supervisor: runs when a call-flow.yaml rule says ask_luna (today: Jev is
-# unsure) or Live asks for help, saves the caller's message after the call (after_call), and
-# writes the end-of-call summary.
+# GPT-6 Luna, the supervisor: runs when a call-flow.yaml rule says ask_luna (today: Jev is unsure,
+# or says the call is urgent) or Live asks for help, and writes the end-of-call summary.
 # How her reply reaches Live is set in call-flow.yaml (tell_live with {luna_response}).
 model: gpt-6-luna
 reasoning_effort: medium   # none | low | medium | high | xhigh | max
@@ -9,7 +8,6 @@ reasoning_effort: medium   # none | low | medium | high | xhigh | max
 service_tier: priority
 tools:
   - send_telegram_to_owner
-  - take_message
   - end_call
 # ask_luna is skipped once max_calls is reached, waits until cooldown_ms after the previous
 # Luna call, and only runs when the caller has said something new.
@@ -35,9 +33,10 @@ instructions: |
     gives made-up details that won't work. No wrapping up or taking a message.
 
   Use tools when appropriate:
-  - send_telegram_to_owner: only if {owner_name} should act while the caller is still on the line;
-    every call's summary reaches {owner_name} on Telegram anyway.
-  - take_message: record the caller's name, how to reach them and message once you have them.
+  - send_telegram_to_owner: when {owner_name} may want to act while the caller is still on the
+    line (e.g. someone at the door, an urgent call back), or the caller asks for it. It gives the
+    caller nothing: send it even if unsure, saying so; not for clear scams or spam. Then have the
+    agent say it's been passed on. Everything else reaches {owner_name} in the call summary.
   - end_call: only when the conversation is clearly finished or abusive.
   You may be consulted several times in one call; your earlier guidance and tool results are
   above. Don't repeat a tool call that already succeeded unless something new has come up.
@@ -48,17 +47,6 @@ instructions: |
   call. Don't have it say the name {owner_name} unless the
   caller has.
   Current time: {current_time}.
-# After hangup, before the summary: one Luna run that saves the caller's message. Nothing goes
-# to Live. `task` is why she is consulted.
-after_call:
-  enabled: true
-  tools:
-    - take_message
-  # No run when Jev's last verdict is one of these: there's no message to save.
-  skip_verdicts: [scam, spam]
-  task: >-
-    The call has ended. Don't write guidance. If the caller is genuine, record their message with
-    take_message. Do nothing for scam or spam calls.
 # End-of-call summary; it continues Luna's conversation, so it sees Luna's guidance and tool calls.
 summarize_on_hangup: true
 summary_instructions: |
