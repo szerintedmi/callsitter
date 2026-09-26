@@ -3,8 +3,8 @@
 An AI call screener for a personal phone number. Divert your calls to a Telnyx number, and an OpenAI **gpt-live-1** agent answers them. **TypeSafe Jev** classifies the growing transcript, and a deterministic call flow (`config/call-flow.yaml`) steers the agent:
 
 - **Scam or spam:** it tells the voice agent to waste their time, mixing a few tactics.
-- **Genuine caller:** the agent takes a message itself; after the call **GPT-6 Luna** saves it and can text the owner.
-- **The classifier is unsure, or the agent asks for help:** Luna judges and returns guidance, and can call tools such as SMS to owner.
+- **Genuine caller:** the agent takes a message itself; after the call **GPT-6 Luna** saves it and can message the owner on Telegram.
+- **The classifier is unsure, or the agent asks for help:** Luna judges and returns guidance, and can call tools such as a Telegram message to the owner.
 
 ## Run
 
@@ -28,7 +28,7 @@ Replay examples:
 
 - `bun run replay test/fixtures/scam-bank.txt --fake` runs offline with a keyword classifier.
 - Without `--fake` it uses real Jev (`TYPESAFE_API_KEY`).
-- `--luna` also calls real Luna (`OPENAI_API_KEY`). Tools run dry, so no SMS is sent and no call is ended.
+- `--luna` also calls real Luna (`OPENAI_API_KEY`). Tools run dry, so no Telegram message is sent and no call is ended.
 - Transcript files use lines of the form `caller: …` / `agent: …`.
 
 **Evals** (`evals/`, on demand, not part of `bun test`): a small set of cases in `evals/cases.yaml`, one per fragile point found on test calls, run against the real vendors and the real `config/`. They follow the single-turn approach of OpenAI's [GPT-Live evaluation guide](https://developers.openai.com/cookbook/examples/audio/voice_agent_evaluation), which also says to run each scenario several times, since voice models are nondeterministic.
@@ -42,7 +42,7 @@ Replay examples:
 **Test call from the browser** (`/test-call`, linked from the call list): talk to the voice agent through the computer mic, with no phone or Telnyx involved.
 
 - The page streams 16 kHz PCM16 over a WebSocket as binary frames, in both directions. The server runs a normal call session on it (Live, Jev, call flow, Luna); only the phone leg is replaced (`src/web/test-call.ts`).
-- It uses the real Live, Jev and Luna APIs. Luna's tools run dry by default: no SMS is sent and Luna can't hang up.
+- It uses the real Live, Jev and Luna APIs. Luna's tools run dry by default: no Telegram message is sent and Luna can't hang up.
 - Use headphones, or the agent hears itself.
 - Test calls appear in the call list with the caller shown as `browser`.
 
@@ -58,7 +58,7 @@ Replay examples:
 - The page's data channel is locked down (`client.data_channel`): it can't send any client event, so a visitor can't append instructions. It only receives `session.closed`.
 - Cost caps (`config/public.yaml`): a 10-minute call length, 3 calls at once, 10 calls per IP a day, and a rolling-24 h budget. A call is admitted only if it fits even if it and every live public call run the full 10 minutes.
 - During the call the page shows a meter whose needle leans from genuine to scam/spam (P(scam) + P(spam) − P(genuine); an unclear verdict pulls it to the middle) and the call-flow stage, streamed as server-sent events from `/call/:id/events`.
-- Luna's tools are live (`public.yaml → tools`): a genuine caller's message can reach the owner by SMS. Calls are recorded and listed with the caller `public` and the visitor's IP (`CF-Connecting-IP`, stored with the call).
+- Luna's tools are live (`public.yaml → tools`): a genuine caller's message can reach the owner on Telegram. Calls are recorded and listed with the caller `public` and the visitor's IP (`CF-Connecting-IP`, stored with the call).
 - Why the admin test call uses a WebSocket relay instead: it exercises the Telnyx media-stream path that real calls take. The public page is the only caller that really arrives over WebRTC.
 
 **Call page:** a live status strip, and an aligned timeline with one row per utterance: transcript | Jev classifications | Luna, call-flow stages, tools and errors.
@@ -68,14 +68,16 @@ Replay examples:
 1. **Telnyx**
    - Create a Call Control application with webhook URL `https://hooks.<domain>/telnyx/webhook` and assign your UK number to it.
    - Copy the webhook public key into `TELNYX_PUBLIC_KEY`.
-   - For SMS, use a +447 number, or an alphanumeric sender with a messaging profile (Level 2 verification).
-2. **Cloudflare tunnel:** see [deploy/cloudflared.example.yml](deploy/cloudflared.example.yml).
+2. **Telegram** (optional; Luna's `send_telegram_to_owner` tool is only offered when set up)
+   - Create a bot with [@BotFather](https://t.me/BotFather) and put its token in `TELEGRAM_BOT_TOKEN`.
+   - Send the bot any message from the owner's account, then read `message.chat.id` from `https://api.telegram.org/bot<token>/getUpdates` into `TELEGRAM_CHAT_ID`. A bot can't message someone who hasn't started a chat with it.
+3. **Cloudflare tunnel:** see [deploy/cloudflared.example.yml](deploy/cloudflared.example.yml).
    - `hooks.<domain>` is public, but only the webhook, media and public-page paths are routed.
    - `admin.<domain>` serves the admin UI (call list, call pages, test call) at its root, behind Cloudflare Access. The app verifies the Access JWT itself (`ADMIN_AUTH=access`, with `ADMIN_HOST`, `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`), so a direct `127.0.0.1` request gets 403.
    - The admin UI has its own hostname so it never shares a browser origin with the public host, whose root serves the public page.
    - For offline dev, set `ADMIN_AUTH=none`. The admin UI is then served on loopback only; Host and Origin are still checked.
    - Copy it to `deploy/cloudflared.yml` (gitignored, since it has machine-specific paths and IDs) and run `bun run tunnel`.
-3. **Divert your mobile** to the Telnyx number (this is a phone setting).
+4. **Divert your mobile** to the Telnyx number (this is a phone setting).
 
 **Production** runs on an OVH VPS in Docker, deployed by GitHub Actions on every push to `main`: see [docs/deploy.md](docs/deploy.md).
 
@@ -162,7 +164,7 @@ These differ from the original plan:
 - **Delegation events carry only an id.** `session.delegation.created` has no task text, so Luna gets the transcript, and her answer goes back with that `delegation_id` ([live-delegation](https://developers.openai.com/api/docs/guides/live-delegation)).
 - **Luna keeps one conversation per call.** Each run continues the previous one with `previous_response_id`, so she sees her earlier guidance and tool results. Every run still sends the full transcript and her instructions, which a chain doesn't carry ([conversation-state](https://developers.openai.com/api/docs/guides/conversation-state)). Runs are serialized so the chain can't fork, and the end-of-call summary continues it.
 - **The greeting is a recording of Live itself.** Asked to greet, Live takes a few seconds to connect and speak. So `src/core/greeting.ts` records Live saying the greeting in the background, and calls play it the moment media connects while Live connects in parallel and continues from it.
-- **Luna may finish after hangup.** A running Luna call gets up to `luna.drain_timeout_ms` to complete (she can still text the owner or take a message); her guidance is dropped. `call.ended` and the summary wait for it.
+- **Luna may finish after hangup.** A running Luna call gets up to `luna.drain_timeout_ms` to complete (she can still message the owner or take a message); her guidance is dropped. `call.ended` and the summary wait for it.
 - **The SDK's `LiveWS` requires the `ws` package.** The adapter uses Bun's built-in `WebSocket` with an auth header, and only the SDK *types*.
 - **Jev Noul answers have no confidence** (docs.typesafe.ai/confidence). The verdict is therefore a Choice (scam/spam/genuine/unclear). Confidence is the probability mass of the chosen family: for a scam or spam verdict it is P(scam)+P(spam), for genuine it is P(genuine). Urgency is a Score question normalised to 0..1.
 - **Telnyx `answer` has no bidirectional sampling-rate option.** It exists only on `dial` and `streaming_start`, so `l16` answers first and then calls `streaming_start` at 16 kHz.

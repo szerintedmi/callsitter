@@ -5,7 +5,8 @@
 //                                                           no calls are left (exit 75 and resume if
 //                                                           they don't end in time)
 //   bun scripts/control.ts resume
-const port = Number(process.env.CONTROL_PORT ?? 8788);
+// Blank counts as unset, as in src/runtime/env.ts.
+const port = Number(process.env.CONTROL_PORT || 8788);
 const base = `http://127.0.0.1:${port}`;
 const [cmd, ...rest] = Bun.argv.slice(2);
 

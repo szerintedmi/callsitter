@@ -11,9 +11,6 @@ const Env = z.object({
   TELNYX_API_KEY: z.string().min(1),
   /** Mission Control → Keys & Credentials → Public Key (base64) */
   TELNYX_PUBLIC_KEY: z.string().min(1),
-  /** +447 number or alphanumeric sender ID; SMS to the owner is disabled when unset */
-  TELNYX_SMS_FROM: z.string().trim().min(1).optional(),
-  TELNYX_MESSAGING_PROFILE_ID: z.string().optional(),
   OPENAI_API_KEY: z.string().min(1),
   /** OpenAI SIP: project the carrier dials (sip:proj_…@sip.api.openai.com); SIP is off unless both are set */
   OPENAI_PROJECT_ID: z.string().regex(/^proj_[A-Za-z0-9]+$/, "e.g. proj_abc123 (Settings → Project → General)").optional(),
@@ -25,7 +22,10 @@ const Env = z.object({
   TELNYX_SIP_CONNECTION_ID: z.string().min(1).optional(),
   TYPESAFE_API_KEY: z.string().min(1),
   MEDIA_TOKEN_SECRET: z.string().min(32, "use at least 32 random characters"),
-  OWNER_NUMBER: z.string().regex(/^\+[1-9][0-9]{6,14}$/, "E.164, e.g. +447700900123").optional(),
+  /** Telegram bot (@BotFather) that messages the owner; messages to the owner are off unless both are set */
+  TELEGRAM_BOT_TOKEN: z.string().regex(/^[0-9]+:[A-Za-z0-9_-]+$/, "e.g. 123456789:AA… (from @BotFather)").optional(),
+  /** the owner's chat with the bot (numeric id, negative for groups) or a channel's @username */
+  TELEGRAM_CHAT_ID: z.string().regex(/^(-?[0-9]+|@[A-Za-z0-9_]{5,})$/, "a numeric chat id, or @channelname").optional(),
   /** first name callers may ask for; lets the voice agent and Luna recognise requests for the owner */
   OWNER_NAME: z.string().trim().optional(),
   /** languages the voice agent speaks, e.g. "English and Hungarian" */
@@ -49,6 +49,9 @@ const Env = z.object({
     for (const k of ["ADMIN_HOST", "CF_ACCESS_TEAM_DOMAIN", "CF_ACCESS_AUD"] as const) {
       if (!e[k]) ctx.addIssue({ code: "custom", path: [k], message: "required when ADMIN_AUTH=access (or set ADMIN_AUTH=none for local-only)" });
     }
+  }
+  if (!!e.TELEGRAM_BOT_TOKEN !== !!e.TELEGRAM_CHAT_ID) {
+    ctx.addIssue({ code: "custom", path: ["TELEGRAM_CHAT_ID"], message: "set both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID for Telegram, or neither" });
   }
   if (!!e.OPENAI_PROJECT_ID !== !!e.OPENAI_WEBHOOK_SECRET) {
     ctx.addIssue({ code: "custom", path: ["OPENAI_WEBHOOK_SECRET"], message: "set both OPENAI_PROJECT_ID and OPENAI_WEBHOOK_SECRET for SIP, or neither" });

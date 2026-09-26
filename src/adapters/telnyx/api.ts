@@ -1,5 +1,5 @@
 import type { Codec } from "../../core/audio";
-import type { Notifier, Telephony } from "../../core/ports";
+import type { Telephony } from "../../core/ports";
 
 // Telnyx Call Control v2 REST (https://developers.telnyx.com/api-reference/call-commands).
 
@@ -27,13 +27,10 @@ export class TelnyxApiError extends Error {
 
 export interface TelnyxApiOptions {
   apiKey: string;
-  /** SMS sender: a +447 number or an alphanumeric sender ID; sms() throws when unset */
-  smsFrom?: string;
-  messagingProfileId?: string;
   fetch?: typeof fetch;
 }
 
-export class TelnyxApi implements Telephony, Notifier {
+export class TelnyxApi implements Telephony {
   private f: typeof fetch;
 
   constructor(private o: TelnyxApiOptions) {
@@ -140,16 +137,6 @@ export class TelnyxApi implements Telephony, Notifier {
       if (err instanceof TelnyxApiError && err.status === 422) return;
       throw err;
     }
-  }
-
-  async sms(to: string, text: string) {
-    if (!this.o.smsFrom) throw new Error("SMS not configured (TELNYX_SMS_FROM)");
-    await this.post("/messages", {
-      from: this.o.smsFrom,
-      to,
-      text,
-      ...(this.o.messagingProfileId ? { messaging_profile_id: this.o.messagingProfileId } : {}),
-    });
   }
 
   /**

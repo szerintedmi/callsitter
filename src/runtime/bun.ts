@@ -8,6 +8,7 @@ import { OpenAiSip } from "../adapters/openai-live/sip";
 import { OpenAiWebRtc } from "../adapters/openai-live/webrtc";
 import { FsBlobStore } from "../adapters/storage/fs-blob";
 import { openSqlite, SqliteRepo } from "../adapters/storage/sqlite";
+import { TelegramNotifier } from "../adapters/telegram/bot";
 import { TelnyxApi } from "../adapters/telnyx/api";
 import { TelnyxVerifier } from "../adapters/telnyx/signature";
 import { CallManager } from "../core/call-manager";
@@ -33,23 +34,19 @@ const configVars = { ownerName: env.OWNER_NAME, agentLanguages: env.AGENT_LANGUA
 const config = new ConfigStore(await loadConfig(new YamlDirSource(env.CONFIG_DIR), configVars));
 if (env.CONFIG_WATCH) watchConfig(env.CONFIG_DIR, config, configVars);
 
-// SMS to the owner needs both a recipient and a sender; otherwise Luna isn't offered the tool.
-const ownerNumber = env.OWNER_NUMBER && env.TELNYX_SMS_FROM ? env.OWNER_NUMBER : "";
-if (!ownerNumber) {
-  const missing = [!env.OWNER_NUMBER && "OWNER_NUMBER", !env.TELNYX_SMS_FROM && "TELNYX_SMS_FROM"].filter(Boolean);
-  console.warn(`[startup] SMS to owner disabled (${missing.join(", ")} not set)`);
-}
+// Telegram to the owner (env.ts checks both are set, or neither); otherwise Luna isn't offered the tool.
+const notifier =
+  env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID
+    ? new TelegramNotifier({ botToken: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID })
+    : undefined;
+if (!notifier) console.warn("[startup] Telegram to owner disabled (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID not set)");
 
 const repo = new SqliteRepo(openSqlite(join(env.DATA_DIR, "scamsitter.db")));
 const blobs = new FsBlobStore(env.DATA_DIR);
 const bus = new MemoryEventBus();
 const persistence = attachPersistence(bus, repo);
 
-const telnyx = new TelnyxApi({
-  apiKey: env.TELNYX_API_KEY,
-  smsFrom: env.TELNYX_SMS_FROM,
-  messagingProfileId: env.TELNYX_MESSAGING_PROFILE_ID,
-});
+const telnyx = new TelnyxApi({ apiKey: env.TELNYX_API_KEY });
 
 const browserCalls = new BrowserCalls();
 
@@ -84,10 +81,9 @@ const manager = new CallManager({
   classifier: new JevClassifier({ apiKey: env.TYPESAFE_API_KEY }),
   agent: new LunaAgent({ apiKey: env.OPENAI_API_KEY, config: () => config.get().luna }),
   bus,
-  notifier: telnyx,
+  notifier,
   telephony: routeTelephony(telnyx, browserCalls, sip),
   clock: { now: () => Date.now() },
-  ownerNumber,
   repo,
   blobs,
 });

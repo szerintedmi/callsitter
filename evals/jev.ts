@@ -28,10 +28,8 @@ export async function runJevCase(c: { transcript: string }, cfg: AppConfig, apiK
     classifier: new JevClassifier({ apiKey }),
     agent: stubAgent,
     bus,
-    notifier: { sms: async () => {} },
     steer: { tellLive: () => {}, hangup: async () => {} },
     clock: { now: () => now },
-    ownerNumber: "",
     dryRun: true,
   });
 
