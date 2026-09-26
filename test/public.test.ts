@@ -189,7 +189,8 @@ describe("public page (fake OpenAI)", () => {
     expect(sidebands.get(sessionId)!.sent[0]).toMatchObject({ type: "session.instructions.append" });
 
     await hangUp(callId);
-    expect(sidebands.get(sessionId)!.sent.at(-1)).toEqual({ type: "session.close" });
+    // The call ends before the fake Live server has read the close frame.
+    await until(() => sidebands.get(sessionId)!.sent.at(-1)?.type === "session.close");
     // The page's connection doesn't outlive the sideband.
     await until(() => hungUp.includes(sessionId));
   });
