@@ -82,6 +82,7 @@ const manager = new CallManager({
   agent: new LunaAgent({ apiKey: env.OPENAI_API_KEY, config: () => config.get().luna }),
   bus,
   notifier,
+  callLink: env.ADMIN_HOST ? (id) => `https://${env.ADMIN_HOST}/calls/${encodeURIComponent(id)}` : undefined,
   telephony: routeTelephony(telnyx, browserCalls, sip),
   clock: { now: () => Date.now() },
   repo,

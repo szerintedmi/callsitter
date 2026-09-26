@@ -68,7 +68,6 @@ export class Orchestrator {
   lunaCalls = 0;
   jevTicks = 0;
   jevInputTokens = 0;
-  readonly messages: { name?: string; callback?: string; message: string }[] = [];
   readonly actions: FlowAction[] = [];
 
   /**
@@ -308,12 +307,12 @@ export class Orchestrator {
     }
   }
 
-  private async callLuna(reason: string, c: Classification | null, target: LunaTarget, afterCall = false): Promise<string> {
+  private async callLuna(reason: string, c: Classification | null, target: LunaTarget): Promise<string> {
     const cfg = this.d.config();
     const help = cfg.flow.when_live_asks_for_help;
-    const template = afterCall ? undefined : target.delegationId ? help.tell_live : target.rule?.message;
-    const trigger: LunaTrigger = afterCall ? "after_call" : target.delegationId ? "delegation" : "rule";
-    if (!afterCall && this.lunaCalls >= cfg.luna.limits.max_calls) {
+    const template = target.delegationId ? help.tell_live : target.rule?.message;
+    const trigger: LunaTrigger = target.delegationId ? "delegation" : "rule";
+    if (this.lunaCalls >= cfg.luna.limits.max_calls) {
       this.note("info", `Luna not called (${reason}): limit of ${cfg.luna.limits.max_calls} calls reached`);
       return "";
     }
@@ -338,7 +337,7 @@ export class Orchestrator {
         classification: c,
         reason,
         // No notifier means messages to the owner are off; don't offer Luna a tool that can only fail.
-        enabledTools: (afterCall ? cfg.luna.after_call.tools : cfg.luna.tools).filter((t) => this.d.notifier || t !== "send_telegram_to_owner"),
+        enabledTools: cfg.luna.tools.filter((t) => this.d.notifier || t !== "send_telegram_to_owner"),
         tools: this.toolContext(),
         signal: ac.signal,
         previousResponseId: this.lunaChain,
@@ -357,7 +356,7 @@ export class Orchestrator {
           : this.ended
             ? "the call had ended"
             : stale
-              ? `the call moved to ${this.stage ?? "a new stage"} while Luna ran`
+              ? `the call flow moved to ${this.decision ?? "another rule"} while Luna ran`
               : undefined;
       const guidance = instructions && !dropped ? instructions : "";
       if (guidance) {
@@ -413,24 +412,6 @@ export class Orchestrator {
     return fallback.text;
   }
 
-  /**
-   * After hangup: one Luna run that saves the caller's message and messages the owner if needed
-   * (luna.yaml after_call). Nothing goes to Live. Waits up to timeoutMs, then cancels it.
-   */
-  async afterCall(timeoutMs: number) {
-    const a = this.d.config().luna.after_call;
-    if (!a.enabled || !this.transcript.all().some((e) => e.speaker === "caller")) return;
-    if (this.lastClassification && a.skip_verdicts.includes(this.lastClassification.verdict)) return;
-    await this.idle();
-    const run = this.callLuna(a.task, this.lastClassification, {}, true);
-    this.lunaInFlight = run;
-    // callLuna never rejects; drain() waits for this to clear.
-    void run.finally(() => {
-      if (this.lunaInFlight === run) this.lunaInFlight = null;
-    });
-    await this.drain(timeoutMs);
-  }
-
   private toolContext(): ToolContext {
     const record = (call: ToolCallRecord) =>
       this.emit({ type: "tool", callId: this.d.meta.callId, at: this.elapsed(), call });
@@ -459,11 +440,6 @@ export class Orchestrator {
         if (result === "ending call") void this.d.steer.hangup(`Luna: ${reason}`);
         return result;
       },
-      takeMessage: async (msg) => {
-        this.messages.push(msg);
-        record({ name: "take_message", args: { ...msg }, result: "recorded" });
-        return "recorded";
-      },
     };
   }
 
@@ -479,8 +455,7 @@ export class Orchestrator {
 
   /**
    * Stops classifying: cancels the Jev call in flight and any Luna call not yet started. A Luna
-   * call already running is left to finish (see drain), as it may still message the owner or take
-   * a message.
+   * call already running is left to finish (see drain), as it may still message the owner.
    */
   end() {
     this.ended = true;

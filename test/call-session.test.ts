@@ -5,7 +5,7 @@ import { MemoryEventBus } from "../src/core/event-bus";
 import type { AppConfig, TellLive } from "../src/core/config";
 import type { Agent, VoiceSessionHandlers } from "../src/core/ports";
 import type { CallEvent } from "../src/core/types";
-import { loadRepoConfig, scripted } from "./helpers";
+import { cls, loadRepoConfig, scripted } from "./helpers";
 
 const FALLBACK = "No specific guidance; carry on naturally.";
 /** A tell_live on the repo's defaults (send: when_agent_idle, max_hold_ms: 8000), unless overridden. */
@@ -17,10 +17,11 @@ const msg = (as: TellLive["as"], text: string, o: Partial<TellLive> = {}): TellL
   ...o,
 });
 
-async function rig(opts: { agent?: Agent; sip?: boolean; afterCall?: boolean; config?: (c: AppConfig) => void } = {}) {
+async function rig(
+  opts: { agent?: Agent; sip?: boolean; config?: (c: AppConfig) => void } & Pick<CallSessionDeps, "notifier" | "callLink" | "dryRun"> = {},
+) {
   const config = await loadRepoConfig();
   opts.config?.(config);
-  config.luna.after_call = { ...config.luna.after_call, enabled: opts.afterCall ?? false };
   config.flow.silence = { ...config.flow.silence, enabled: true, after_ms: 7000, max_prompts: 2, hang_up: true };
   config.connection.speech_detection = { caller_dbfs: -40, agent_dbfs: -50 };
   let now = 1_000_000;
@@ -58,6 +59,9 @@ async function rig(opts: { agent?: Agent; sip?: boolean; afterCall?: boolean; co
     clock: { now: () => now },
     media: { sendAudio() {}, clear() {}, close() {} },
     mediaViaVoice: opts.sip,
+    notifier: opts.notifier,
+    callLink: opts.callLink,
+    dryRun: opts.dryRun,
   });
   await session.start(opts.sip ? "pcm24" : "pcma");
   return {
@@ -83,6 +87,57 @@ async function rig(opts: { agent?: Agent; sip?: boolean; afterCall?: boolean; co
     prompt: config.flow.silence.tell_live.text,
   };
 }
+
+describe("summary to the owner", () => {
+  async function summaryRig(o: { summarize?: Agent["summarize"]; dryRun?: boolean; config?: (c: AppConfig) => void } = {}) {
+    const sent: string[] = [];
+    const r = await rig({
+      agent: { run: async () => ({ toolCalls: [] }), summarize: o.summarize ?? (async () => "Sarah called about dinner; call her back on 0207 946 0000.") },
+      notifier: { send: async (t) => void sent.push(t) },
+      callLink: (id) => `https://admin.example.com/calls/${id}`,
+      dryRun: o.dryRun,
+      config: o.config,
+    });
+    r.handlers().onTranscriptDelta("caller", "c1", "It's Sarah, please ask him to call me back.");
+    return { ...r, sent };
+  }
+
+  test("after the summary, it goes to the owner with the caller, verdict, length and a link to the call", async () => {
+    const r = await summaryRig();
+    r.session.orch.lastClassification = cls({ verdict: "genuine" });
+    await r.session.stop("caller hung up");
+    expect(r.sent).toHaveLength(1);
+    const [head, summary, link] = r.sent[0]!.split("\n\n");
+    expect(head).toContain("+441");
+    expect(head).toContain("genuine");
+    expect(summary).toBe("Sarah called about dinner; call her back on 0207 946 0000.");
+    expect(link).toBe("https://admin.example.com/calls/c1");
+    expect(r.notes).toContain("summary sent to the owner on Telegram");
+  });
+
+  test("a failed summary still tells the owner about the call", async () => {
+    const r = await summaryRig({ summarize: async () => Promise.reject(new Error("boom")) });
+    await r.session.stop("caller hung up");
+    expect(r.sent).toHaveLength(1);
+    expect(r.sent[0]).toContain("https://admin.example.com/calls/c1");
+  });
+
+  test("nothing is sent for skipped verdicts, on dry runs, or when the caller never spoke", async () => {
+    const skipped = await summaryRig({ config: (c) => (c.luna.summary_to_owner.skip_verdicts = ["scam"]) });
+    skipped.session.orch.lastClassification = cls({ verdict: "scam" });
+    await skipped.session.stop("caller hung up");
+    expect(skipped.sent).toEqual([]);
+
+    const dry = await summaryRig({ dryRun: true });
+    await dry.session.stop("caller hung up");
+    expect(dry.sent).toEqual([]);
+
+    const sent: string[] = [];
+    const silent = await rig({ agent: { run: async () => ({ toolCalls: [] }), summarize: async () => "x" }, notifier: { send: async (t) => void sent.push(t) } });
+    await silent.session.stop("caller hung up");
+    expect(sent).toEqual([]);
+  });
+});
 
 describe("call session over OpenAI SIP (caller audio only reflected by the sideband)", () => {
   /** 100 ms of 24 kHz PCM16LE at a speech-like level (about -12 dBFS). */
@@ -164,8 +219,8 @@ describe("call session: Luna around hangup", () => {
     const agent: Agent = {
       async run(input) {
         await new Promise<void>((r) => (release = r));
-        const result = await input.tools.takeMessage({ name: "Sarah", callback: "02079460000", message: "Call back re dinner" });
-        return { instructions: "Say goodbye.", toolCalls: [{ name: "take_message", args: {}, result }], responseId: "resp_1" };
+        const result = await input.tools.sendTelegramToOwner("Sarah: call back re dinner");
+        return { instructions: "Say goodbye.", toolCalls: [{ name: "send_telegram_to_owner", args: {}, result }], responseId: "resp_1" };
       },
       summarize: async (_m, _t, o) => (summarized.push(o?.previousResponseId), "Sarah called about dinner."),
     };
@@ -183,42 +238,6 @@ describe("call session: Luna around hangup", () => {
     expect(order.filter((t) => ["tool", "luna", "call.ended", "summary"].includes(t))).toEqual(["tool", "luna", "call.ended", "summary"]);
     expect(r.appended.some((a) => a.includes("Say goodbye."))).toBe(false); // no voice session to guide
     expect(summarized).toEqual(["resp_1"]);
-  });
-
-  test("after the call, Luna saves the message once with her after-call tools; nothing goes to Live", async () => {
-    const runs: { reason: string; tools: readonly string[] }[] = [];
-    const summarized: (string | undefined)[] = [];
-    const agent: Agent = {
-      async run(input) {
-        runs.push({ reason: input.reason, tools: input.enabledTools });
-        const result = await input.tools.takeMessage({ name: "Sarah", callback: "02079460000", message: "Call back re dinner" });
-        return { instructions: "Thanks.", toolCalls: [{ name: "take_message", args: {}, result }], responseId: "resp_after" };
-      },
-      summarize: async (_m, _t, o) => (summarized.push(o?.previousResponseId), "Sarah called about dinner."),
-    };
-    const r = await rig({ agent, afterCall: true });
-    const order: string[] = [];
-    r.bus.subscribe((e) => void order.push(e.type === "luna.started" ? `luna.started:${e.trigger}` : e.type));
-    r.handlers().onTranscriptDelta("caller", "c1", "It's Sarah, please ask him to call me back.");
-    await r.session.stop("caller hung up");
-    expect(runs).toEqual([{ reason: r.config.luna.after_call.task, tools: ["take_message"] }]); // no notifier: no Telegram
-    expect(order.filter((t) => t.startsWith("luna") || ["tool", "call.ended", "summary"].includes(t))).toEqual([
-      "luna.started:after_call",
-      "tool",
-      "luna",
-      "call.ended",
-      "luna.started:summary",
-      "summary",
-    ]);
-    expect(r.appended.some((a) => a.includes("Thanks."))).toBe(false);
-    expect(summarized).toEqual(["resp_after"]);
-  });
-
-  test("no after-call Luna when the caller never spoke", async () => {
-    let runs = 0;
-    const r = await rig({ agent: { run: async () => (runs++, { toolCalls: [] }), summarize: async () => "" }, afterCall: true });
-    await r.session.stop("caller hung up");
-    expect(runs).toBe(0);
   });
 
   test("a Luna call still running after drain_timeout_ms is cancelled", async () => {

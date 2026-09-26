@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import type { Agent } from "../src/core/ports";
 import { parseTranscript, replay } from "../src/replay/harness";
 import { KeywordClassifier } from "../src/replay/keyword-classifier";
 import { loadRepoConfig, scripted } from "./helpers";
@@ -27,29 +26,15 @@ describe("replay harness", () => {
     expect(res.lunaCalls).toBe(0);
   });
 
-  test("genuine fixture → no Luna during the call; after it she messages the owner (dry run)", async () => {
-    const agent: Agent = {
-      async run(input) {
-        const r = await input.tools.sendTelegramToOwner("Sarah at Parkside Dental: appointment moved to 11:30. 020 7946 0321");
-        return { instructions: "Thank her and say Alex will call back.", toolCalls: [{ name: "send_telegram_to_owner", args: {}, result: r }] };
-      },
-      async summarize() {
-        return "";
-      },
-    };
+  test("genuine fixture → the genuine stage text, no Luna", async () => {
     const res = await replay({
       utterances: await fixture("genuine-dentist.txt"),
       config: await loadRepoConfig(),
       classifier: new KeywordClassifier(),
-      agent,
     });
-    expect(res.lunaCalls).toBe(1);
-    expect(res.events.find((e) => e.type === "luna.started")).toMatchObject({ trigger: "after_call" });
     expect(res.finalStage).toBe("genuine");
-    // Only the genuine stage text: her reply after the call goes nowhere.
+    expect(res.lunaCalls).toBe(0);
     expect(res.appended.map((m) => m.as)).toEqual(["thinking"]);
-    const tool = res.events.find((e) => e.type === "tool");
-    expect(tool?.type === "tool" && tool.call.result).toBe("dry run: not sent");
   });
 
   test("the time-wasting text is sent once while the call stays a scam", async () => {

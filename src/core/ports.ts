@@ -90,7 +90,6 @@ export interface Classifier {
 export interface ToolContext {
   sendTelegramToOwner(text: string): Promise<string>;
   endCall(reason: string): Promise<string>;
-  takeMessage(message: { name?: string; callback?: string; message: string }): Promise<string>;
 }
 
 export interface AgentInput {

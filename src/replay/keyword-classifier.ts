@@ -40,7 +40,7 @@ export class KeywordClassifier implements Classifier {
     return {
       verdict,
       confidence,
-      urgency: verdict === "genuine" ? 0.7 : 0.1,
+      urgency: verdict === "genuine" ? 0.5 : 0.1,
       answers,
       latencyMs: 0,
     };

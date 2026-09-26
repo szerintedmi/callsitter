@@ -49,9 +49,9 @@ export interface CallMeta {
 
 export type CallStatus = "ringing" | "active" | "ended";
 
-/** Who asked Luna: a call-flow rule (on Jev's answers), Live itself (a delegation), or the after-call run. */
+/** Who asked Luna: a call-flow rule (on Jev's answers) or Live itself (a delegation). */
 /** summary: the end-of-call summary, which ends with a summary event rather than a luna one */
-export type LunaTrigger = "rule" | "delegation" | "after_call" | "summary";
+export type LunaTrigger = "rule" | "delegation" | "summary";
 
 /** What a text sent to Live answers: a rule's stage text, Luna's reply, the silence watchdog, or Live's delegation. */
 export type AppendSource = "stage" | "luna" | "silence" | "delegation";

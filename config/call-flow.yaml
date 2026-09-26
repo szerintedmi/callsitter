@@ -8,6 +8,7 @@
 #   <question>: <answer> | [answers]          Jev's chosen answer is one of these
 #   <question>: { is: [answers], min: 0.75 }  Jev's probabilities for these answers add up to at least 0.75
 #   <question>: { unsure: 0.4 }               Jev's chosen answer has a probability below 0.4
+#   urgency: { min: 0.8 }                     Jev's urgency score (0..1) is at least 0.8
 #   stage: <stage> | [stages] | none          the call's current stage (none: nothing told yet)
 # then (omit it to stop here and do nothing):
 #   tell_live:             appended to the live call, which enters this stage. A fixed text isn't
@@ -150,6 +151,22 @@ rules:
     when:
       stage: wrap_up
 
+  # Jev says the owner should hear about this right away: Luna decides whether to message the
+  # owner now and tells the agent what to say. Any verdict short of a confident scam or spam: an
+  # urgent friend stayed "unclear" for two minutes, and someone at the door leaned scam. At 0.8
+  # a caller locked in a car (peak 0.79) got nothing.
+  # Once per call: the call then stays out of the stages it starts from. `genuine` doesn't start
+  # from `urgent`, or the two would take turns; not from `low_confidence` either, where Luna is
+  # already asked on every new caller turn.
+  - stage: urgent
+    when:
+      urgency: { min: 0.7 }
+      stage: [none, resist_manipulation, genuine]
+    then:
+      ask_luna: true
+      tell_live:
+        as: commentary
+        text: "SUPERVISOR: {luna_response}"
   # A real call that has everything it needs.
   - stage: wrap_up
     when:
@@ -183,8 +200,8 @@ rules:
       verdict: unclear
 
   # Jev can't tell what kind of call this is: Luna judges and says what the agent should do next.
-  # A genuine caller needs no Luna: Live collects the message itself, and Luna saves it after
-  # the call (luna.yaml after_call).
+  # A genuine caller needs no Luna: Live collects the message itself, and the call summary
+  # passes it on.
   # Luna's reply is sent as a SUPERVISOR line: the Live prompt says those override its own plan.
   # Appends can't be withdrawn and stay in Live's context, so the step is framed as one-off: as a
   # standing order, Live re-asked for details the caller had already confirmed.

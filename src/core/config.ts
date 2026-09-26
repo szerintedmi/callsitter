@@ -57,7 +57,7 @@ export const JevConfig = z.object({
     .catchall(ChoiceQuestion),
 });
 
-export const LunaTool = z.enum(["send_telegram_to_owner", "end_call", "take_message"]);
+export const LunaTool = z.enum(["send_telegram_to_owner", "end_call"]);
 
 export const LunaConfig = z.object({
   model: z.string().default("gpt-6-luna"),
@@ -76,28 +76,20 @@ export const LunaConfig = z.object({
     })
     .default({ max_calls: 4, cooldown_ms: 15000 }),
   instructions: z.string().min(1),
-  // After hangup, before the summary: one Luna run that saves the caller's message and messages
-  // the owner on Telegram if needed; nothing goes to Live. `task` is why she is consulted.
-  after_call: z
-    .object({
-      enabled: z.boolean().default(true),
-      tools: z.array(LunaTool).default(["take_message", "send_telegram_to_owner"]),
-      // No run when Jev's last verdict is one of these: there's no message to save.
-      skip_verdicts: z.array(z.enum(["scam", "spam", "genuine", "unclear"])).default(["scam", "spam"]),
-      task: z
-        .string()
-        .min(1)
-        .default(
-          "The call has ended. Don't write guidance. If the caller is genuine, record their message with take_message, and message the owner on Telegram if they should know soon. Do nothing for scam or spam calls.",
-        ),
-    })
-    .prefault({}),
   summarize_on_hangup: z.boolean().default(true),
   summary_instructions: z
     .string()
     .default("Summarise this phone call for the owner in 2–3 sentences: who called, what they wanted, and whether it was a scam."),
-  // After hangup, a running Luna call may finish (it can still message the owner or take a
-  // message) for up to this long before it's cancelled.
+  // The summary goes to the owner on Telegram (with a link to the call page) unless Jev's last
+  // verdict is in skip_verdicts. Needs summarize_on_hangup and Telegram configured.
+  summary_to_owner: z
+    .object({
+      enabled: z.boolean().default(true),
+      skip_verdicts: z.array(z.enum(["scam", "spam", "genuine", "unclear"])).default([]),
+    })
+    .prefault({}),
+  // After hangup, a running Luna call may finish (it can still message the owner) for up to this
+  // long before it's cancelled.
   drain_timeout_ms: z.number().int().min(0).default(20000),
 });
 
@@ -197,7 +189,8 @@ const Rule = z
   .strictObject({
     // The rule's name. When it tells Live something, the call enters this stage.
     stage: labelName,
-    // All must hold. `stage: …` checks the call's current stage (`none` before any).
+    // All must hold. `stage: …` checks the call's current stage (`none` before any);
+    // `urgency: { min }` Jev's urgency score (0..1).
     when: z.record(z.string(), z.unknown()).default({}),
     // Omitted: the flow stops here and does nothing.
     then: z
@@ -223,7 +216,14 @@ const Rule = z
   .transform((r, ctx) => {
     const when: Record<string, z.infer<typeof Condition>> = {};
     let inStage: string[] | undefined;
+    let minUrgency: number | undefined;
     for (const [key, value] of Object.entries(r.when)) {
+      if (key === "urgency") {
+        const u = z.strictObject({ min: unit }).safeParse(value);
+        if (u.success) minUrgency = u.data.min;
+        else ctx.addIssue({ code: "custom", path: ["when", key], message: "expected { min: 0..1 } (urgency is a score)" });
+        continue;
+      }
       if (key === "stage") {
         const s = oneOrMany.safeParse(value);
         if (s.success) inStage = typeof s.data === "string" ? [s.data] : s.data;
@@ -234,7 +234,7 @@ const Rule = z
       if (c.success) when[key] = c.data;
       else ctx.addIssue({ code: "custom", path: ["when", key], message: "expected an answer, a list of answers, { is, min } or { unsure }" });
     }
-    return { stage: r.stage, when, inStage, then: r.then };
+    return { stage: r.stage, when, inStage, minUrgency, then: r.then };
   });
 
 /** The stage timing.time_up puts the call in. */

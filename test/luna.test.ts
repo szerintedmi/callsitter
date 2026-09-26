@@ -26,31 +26,29 @@ async function rig(replies: (object | { status: number; error: string })[]) {
     return Response.json(r);
   }) as unknown as typeof globalThis.fetch;
   const agent = new LunaAgent({ apiKey: "k", config: () => config.luna, fetch });
-  const messages: unknown[] = [];
   const input = (p: Partial<AgentInput> = {}): AgentInput => ({
     meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
     transcript: [{ seq: 1, speaker: "caller", text: "It's Sarah, ask him to call me back.", at: 0, final: true }],
     classification: null,
     reason: "genuine caller",
-    enabledTools: ["take_message"],
+    enabledTools: ["send_telegram_to_owner"],
     tools: {
       sendTelegramToOwner: async () => "sent",
       endCall: async () => "ending call",
-      takeMessage: async (m) => (messages.push(m), "recorded"),
     },
     ...p,
   });
-  return { agent, requests, input, messages, config };
+  return { agent, requests, input, config };
 }
 
 describe("Luna adapter", () => {
   test("a run returns the final response id; tool rounds chain within the run", async () => {
-    const r = await rig([toolCall("r1", "take_message", { name: "Sarah", callback: null, message: "call back" }), text("r2", "Say goodbye.")]);
+    const r = await rig([toolCall("r1", "send_telegram_to_owner", { text: "Sarah asks you to call back." }), text("r2", "Say goodbye.")]);
     const res = await r.agent.run(r.input());
     expect(res).toMatchObject({ instructions: "Say goodbye.", responseId: "r2" });
     expect(r.requests[0].previous_response_id).toBeUndefined();
     expect(r.requests[1].previous_response_id).toBe("r1");
-    expect(r.requests[1].input).toEqual([{ type: "function_call_output", call_id: "call_r1", output: "recorded" }]);
+    expect(r.requests[1].input).toEqual([{ type: "function_call_output", call_id: "call_r1", output: "sent" }]);
     // Not inherited along a chain; {current_time} is filled per run.
     expect(new Set(r.requests.map((q) => q.instructions)).size).toBe(1);
     expect(r.requests[0].instructions).toStartWith(r.config.luna.instructions.split("{current_time}")[0]!);

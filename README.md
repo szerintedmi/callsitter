@@ -3,8 +3,10 @@
 An AI call screener for a personal phone number. Divert your calls to a Telnyx number, and an OpenAI **gpt-live-1** agent answers them. **TypeSafe Jev** classifies the growing transcript, and a deterministic call flow (`config/call-flow.yaml`) steers the agent:
 
 - **Scam or spam:** it tells the voice agent to waste their time, mixing a few tactics.
-- **Genuine caller:** the agent takes a message itself; after the call **GPT-6 Luna** saves it and can message the owner on Telegram.
-- **The classifier is unsure, or the agent asks for help:** Luna judges and returns guidance, and can call tools such as a Telegram message to the owner.
+- **Genuine caller:** the agent takes a message itself; it reaches the owner in the call summary.
+- **The classifier is unsure, or the agent asks for help:** **GPT-6 Luna** judges and returns guidance, and can call tools such as an urgent Telegram message to the owner.
+- **Urgent** (Jev's urgency ≥ 0.7, anything short of a confident scam or spam): Luna decides whether to message the owner right away and tells the agent what to say.
+- **After every call** where the caller spoke, Luna's summary goes to the owner on Telegram with a link to the call page (`luna.yaml → summary_to_owner`).
 
 ## Run
 
@@ -58,7 +60,7 @@ Replay examples:
 - The page's data channel is locked down (`client.data_channel`): it can't send any client event, so a visitor can't append instructions. It only receives `session.closed`.
 - Cost caps (`config/public.yaml`): a 10-minute call length, 3 calls at once, 10 calls per IP a day, and a rolling-24 h budget. A call is admitted only if it fits even if it and every live public call run the full 10 minutes.
 - During the call the page shows a meter whose needle leans from genuine to scam/spam (P(scam) + P(spam) − P(genuine); an unclear verdict pulls it to the middle) and the call-flow stage, streamed as server-sent events from `/call/:id/events`.
-- Luna's tools are live (`public.yaml → tools`): a genuine caller's message can reach the owner on Telegram. Calls are recorded and listed with the caller `public` and the visitor's IP (`CF-Connecting-IP`, stored with the call).
+- Luna's tools are live (`public.yaml → tools`), and the call's summary goes to the owner on Telegram. Calls are recorded and listed with the caller `public` and the visitor's IP (`CF-Connecting-IP`, stored with the call).
 - Why the admin test call uses a WebSocket relay instead: it exercises the Telnyx media-stream path that real calls take. The public page is the only caller that really arrives over WebRTC.
 
 **Call page:** a live status strip, and an aligned timeline with one row per utterance: transcript | Jev classifications | Luna, call-flow stages, tools and errors.
@@ -68,7 +70,7 @@ Replay examples:
 1. **Telnyx**
    - Create a Call Control application with webhook URL `https://hooks.<domain>/telnyx/webhook` and assign your UK number to it.
    - Copy the webhook public key into `TELNYX_PUBLIC_KEY`.
-2. **Telegram** (optional; Luna's `send_telegram_to_owner` tool is only offered when set up)
+2. **Telegram** (optional; without it there are no call summaries on Telegram, and Luna isn't offered `send_telegram_to_owner`)
    - Create a bot with [@BotFather](https://t.me/BotFather) and put its token in `TELEGRAM_BOT_TOKEN`.
    - Send the bot any message from the owner's account, then read `message.chat.id` from `https://api.telegram.org/bot<token>/getUpdates` into `TELEGRAM_CHAT_ID`. A bot can't message someone who hasn't started a chat with it.
 3. **Cloudflare tunnel:** see [deploy/cloudflared.example.yml](deploy/cloudflared.example.yml).
@@ -140,7 +142,7 @@ What reaches Live, and when:
 - **Live asks for help:** Luna answers, or a fallback does.
 - **Silence:** the agent is nudged; after the goodbyes, or repeated silence, the call ends.
 - **Time up:** 30 s before `max_call_seconds` (`call-flow.yaml → timing.time_up`), the agent is told to say goodbye and the call enters `time_up`, where no rule sends anything. At the limit, the call ends once the goodbye has played, or at the first silence after it.
-- **Hangup:** nothing more reaches Live; Luna saves the caller's message and writes the summary.
+- **Hangup:** nothing more reaches Live; Luna writes the summary, which goes to the owner on Telegram.
 
 Any config text can use `{owner_name}` (`OWNER_NAME` from `.env`, or "the owner" if unset) and `{agent_languages}` (`AGENT_LANGUAGES`, or "English"); it is filled in when the config loads, and other placeholders are rejected.
 
@@ -164,7 +166,7 @@ These differ from the original plan:
 - **Delegation events carry only an id.** `session.delegation.created` has no task text, so Luna gets the transcript, and her answer goes back with that `delegation_id` ([live-delegation](https://developers.openai.com/api/docs/guides/live-delegation)).
 - **Luna keeps one conversation per call.** Each run continues the previous one with `previous_response_id`, so she sees her earlier guidance and tool results. Every run still sends the full transcript and her instructions, which a chain doesn't carry ([conversation-state](https://developers.openai.com/api/docs/guides/conversation-state)). Runs are serialized so the chain can't fork, and the end-of-call summary continues it.
 - **The greeting is a recording of Live itself.** Asked to greet, Live takes a few seconds to connect and speak. So `src/core/greeting.ts` records Live saying the greeting in the background, and calls play it the moment media connects while Live connects in parallel and continues from it.
-- **Luna may finish after hangup.** A running Luna call gets up to `luna.drain_timeout_ms` to complete (she can still message the owner or take a message); her guidance is dropped. `call.ended` and the summary wait for it.
+- **Luna may finish after hangup.** A running Luna call gets up to `luna.drain_timeout_ms` to complete (she can still message the owner); her guidance is dropped. `call.ended` and the summary wait for it.
 - **The SDK's `LiveWS` requires the `ws` package.** The adapter uses Bun's built-in `WebSocket` with an auth header, and only the SDK *types*.
 - **Jev Noul answers have no confidence** (docs.typesafe.ai/confidence). The verdict is therefore a Choice (scam/spam/genuine/unclear). Confidence is the probability mass of the chosen family: for a scam or spam verdict it is P(scam)+P(spam), for genuine it is P(genuine). Urgency is a Score question normalised to 0..1.
 - **Telnyx `answer` has no bidirectional sampling-rate option.** It exists only on `dial` and `streaming_start`, so `l16` answers first and then calls `streaming_start` at 16 kHz.
