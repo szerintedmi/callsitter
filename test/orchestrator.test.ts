@@ -57,7 +57,6 @@ describe("orchestrator", () => {
     await orch.runLuna("test", { rule: { stage: rule.stage, message: rule.then!.tell_live } });
     const reply = "Ask for their name and the best callback number.";
     expect(appended).toEqual([{ ...rule.then!.tell_live, text: rule.then!.tell_live!.text.replace("{luna_response}", reply) }]);
-    expect((appended[0] as { text: string }).text).toStartWith(`SUPERVISOR: ${reply} Do this once`);
     expect(orch.stage).toBe("low_confidence");
     expect(stages).toEqual(["low_confidence"]);
     // A second reply in the same stage is sent, but the stage doesn't change again.
@@ -363,7 +362,7 @@ describe("orchestrator", () => {
         await orch.classify();
         expect(orch.stage).toBe("waste_time");
       };
-      return { orch, sent, notes, releases, turnsScam, fallback: config.flow.when_live_asks_for_help.fallback };
+      return { orch, sent, notes, releases, turnsScam, fallback: config.flow.when_live_asks_for_help.fallback, help: config.flow.when_live_asks_for_help.tell_live };
     }
 
     test("Luna's guidance is dropped when the call flow moved on while Luna ran", async () => {
@@ -413,7 +412,7 @@ describe("orchestrator", () => {
       expect(await out).toBe("Ask for their callback number.");
       expect(r.sent).toHaveLength(1);
       expect(r.sent[0]!.delegation).toEqual({ id: "d1", fallback: r.fallback });
-      expect(r.sent[0]!.message.text).toStartWith("SUPERVISOR: Ask for their callback number. Do this once");
+      expect(r.sent[0]!.message.text).toBe(r.help.text.replace("{luna_response}", "Ask for their callback number."));
       expect(r.orch.stage).toBeNull(); // answering Live's request enters no stage
     });
   });

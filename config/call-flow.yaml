@@ -47,8 +47,19 @@ defaults:
     max_hold_ms: 8000
 
 timing:
-  # Hang up after this long, whatever the rules say.
+  # Hang up after this long, whatever the rules say (public calls: public.yaml caps it lower).
   max_call_seconds: 900
+  # When seconds_left remain, the call enters the time_up stage and Live is told to say
+  # goodbye. At max_call_seconds it ends once the goodbye has played (at most
+  # agent_idle.max_hangup_wait_ms), or at the first silence after it (silence.hang_up_in).
+  time_up:
+    seconds_left: 30
+    tell_live:
+      as: commentary
+      send: now
+      text: |
+        You have to go now. Finish what you're saying, then end the call politely in one short
+        sentence, say goodbye, and stay quiet.
   # When Jev runs. Driven by Live's caller transcript, not a fixed timer: Jev runs once the
   # caller pauses (no new caller words for settle_ms), and at least every max_wait_ms while they
   # keep talking. Words arriving during a Jev call trigger the next one straight after.
@@ -86,7 +97,7 @@ silence:
       If they start talking, stop and listen.
   max_prompts: 2
   hang_up: true
-  hang_up_in: [wrap_up]
+  hang_up_in: [wrap_up, time_up]
 
 rules:
   # Someone said to hang up, or both sides said a final goodbye. Any verdict.
@@ -95,6 +106,11 @@ rules:
       ended: { is: ended, min: 0.85 }
     then:
       hang_up: true
+
+  # timing.time_up has asked for the goodbye: nothing else is sent until the call ends.
+  - stage: keep_time_up
+    when:
+      stage: time_up
 
   # Jailbreak attempts: changing the agent's role or rules, or getting its instructions. Any
   # verdict: Jev calls most jailbreaks scams, and the time-wasting role doesn't stop the agent
@@ -179,7 +195,7 @@ rules:
       ask_luna: true
       tell_live: &supervisor
         as: commentary
-        text: "SUPERVISOR: {luna_response} Do this once, then carry on naturally."
+        text: "SUPERVISOR: {luna_response}"
 
 # Live asked for help itself (session.delegation.created): Luna answers, with her reply in
 # {luna_response}. Live is waiting, so it always gets an answer: the fallback when Luna has none,

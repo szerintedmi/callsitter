@@ -10,6 +10,7 @@ import { CODECS } from "./audio";
 //   call-flow.yaml   what happens: timing, silence, and rules over Jev's answers
 //   connection.yaml  how the call's audio reaches the agent (OpenAI SIP or Telnyx media stream)
 //   cost.yaml        rough per-call cost estimate
+//   public.yaml      the public "Scam me" page: limits that cap what strangers can spend
 
 /** gpt-live-1 built-in voices (openai BuiltInVoice in resources/live/live.d.ts). */
 export const LIVE_VOICES = [
@@ -236,6 +237,9 @@ const Rule = z
     return { stage: r.stage, when, inStage, then: r.then };
   });
 
+/** The stage timing.time_up puts the call in. */
+export const TIME_UP = "time_up";
+
 export const CallFlowConfig = z
   .object({
     // Every tell_live key except as and text. Applied when the config loads.
@@ -254,6 +258,15 @@ export const CallFlowConfig = z
     timing: z
       .object({
         max_call_seconds: z.number().int().positive().default(900),
+        // With seconds_left of max_call_seconds to go, the call enters the time_up stage and Live is
+        // told tell_live (say goodbye). At max_call_seconds the call ends once the goodbye has
+        // played. Omitted: the call just ends at max_call_seconds.
+        time_up: z
+          .strictObject({
+            seconds_left: z.number().int().positive(),
+            tell_live: TellLiveInput,
+          })
+          .optional(),
         // Jev runs once the caller pauses, and periodically during long monologues.
         classify: z
           .object({
@@ -322,6 +335,7 @@ export const CallFlowConfig = z
     for (const [path, text] of [
       [["silence", "tell_live", "text"], c.silence.tell_live.text],
       [["when_live_asks_for_help", "fallback"], c.when_live_asks_for_help.fallback],
+      [["timing", "time_up", "tell_live", "text"], c.timing.time_up?.tell_live.text ?? ""],
     ] as const) {
       if (text.includes(LUNA_RESPONSE)) ctx.addIssue({ code: "custom", path: [...path], message: `${LUNA_RESPONSE} is only filled in with ask_luna` });
     }
@@ -331,8 +345,10 @@ export const CallFlowConfig = z
       if (names.has(r.stage)) ctx.addIssue({ code: "custom", path: ["rules", i, "stage"], message: `duplicate stage ${r.stage}` });
       names.add(r.stage);
     }
-    // Only tell_live moves the call into a stage, so only those can be checked for.
+    if (names.has(TIME_UP)) ctx.addIssue({ code: "custom", path: ["rules"], message: `${TIME_UP} is reserved for timing.time_up` });
+    // Only tell_live (and timing.time_up) moves the call into a stage, so only those can be checked for.
     const stages = new Set(["none", ...c.rules.filter((r) => r.then?.tell_live !== undefined).map((r) => r.stage)]);
+    if (c.timing.time_up) stages.add(TIME_UP);
     for (const [i, r] of c.rules.entries()) {
       for (const s of r.inStage ?? []) {
         if (!stages.has(s)) {
@@ -354,8 +370,10 @@ export const CallFlowConfig = z
     });
     const help = c.when_live_asks_for_help;
     const helpTell = tell(help.tell_live);
+    const tu = c.timing.time_up;
     return {
       ...c,
+      timing: { ...c.timing, time_up: tu ? { ...tu, tell_live: tell(tu.tell_live) } : undefined },
       silence: { ...c.silence, tell_live: tell(c.silence.tell_live) },
       rules: c.rules.map((r) => ({
         ...r,
@@ -430,6 +448,26 @@ export const CostConfig = z.object({
   jev_usd_per_mtok: z.number().min(0).default(0.042),
 });
 
+// The public page (src/web/public.ts): anyone with the link can call, so these bound the cost.
+export const PublicConfig = z.object({
+  enabled: z.boolean().default(true),
+  // Public calls end after this long, whatever the call flow says (flow.timing.max_call_seconds
+  // still applies if it is shorter).
+  max_call_seconds: z.number().int().positive().default(300),
+  max_concurrent: z.number().int().min(0).default(3),
+  // Estimated spend (cost.yaml) on public calls over a rolling 24 h. A new call is admitted only
+  // if it fits even if it and every live public call run to max_call_seconds.
+  daily_usd: z.number().min(0).default(10),
+  // Calls per client IP (Cloudflare's CF-Connecting-IP) over a rolling 24 h; kept in memory, so a
+  // restart resets it.
+  per_ip_per_day: z.number().int().min(0).default(10),
+  // Luna's tools are live on public calls: she can text the owner (at most a few SMS per call)
+  // and end the call. false: they run dry, as on admin test calls.
+  tools: z.boolean().default(true),
+  // Live greets once the page reports its audio connected, or after this long.
+  greeting_wait_ms: z.number().int().min(0).max(10_000).default(3000),
+});
+
 export type LiveConfig = z.infer<typeof LiveConfig>;
 export type JevConfig = z.infer<typeof JevConfig>;
 export type LunaTool = z.infer<typeof LunaTool>;
@@ -437,6 +475,7 @@ export type LunaConfig = z.infer<typeof LunaConfig>;
 export type CallFlowConfig = z.infer<typeof CallFlowConfig>;
 export type ConnectionConfig = z.infer<typeof ConnectionConfig>;
 export type CostConfig = z.infer<typeof CostConfig>;
+export type PublicConfig = z.infer<typeof PublicConfig>;
 
 export interface AppConfig {
   live: LiveConfig;
@@ -445,6 +484,7 @@ export interface AppConfig {
   flow: CallFlowConfig;
   connection: ConnectionConfig;
   cost: CostConfig;
+  public: PublicConfig;
 }
 
 const schemas = {
@@ -454,6 +494,7 @@ const schemas = {
   flow: CallFlowConfig,
   connection: ConnectionConfig,
   cost: CostConfig,
+  public: PublicConfig,
 } as const;
 
 export type ConfigName = keyof typeof schemas;
@@ -466,6 +507,7 @@ export const CONFIG_FILES: Record<ConfigName, string> = {
   flow: "call-flow.yaml",
   connection: "connection.yaml",
   cost: "cost.yaml",
+  public: "public.yaml",
 };
 
 /** Supplies the raw (already YAML-parsed) value for each config file. */

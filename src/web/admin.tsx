@@ -242,6 +242,7 @@ export function adminRoutes(d: AdminDeps) {
                   <td>
                     {r.from || "unknown"}
                     {r.divertedFrom && <span class="muted"> via {r.divertedFrom}</span>}
+                    {r.callerIp && <span class="muted"> {r.callerIp}</span>}
                   </td>
                   <td>
                     <Verdict v={r.verdict} />
@@ -274,7 +275,10 @@ export function adminRoutes(d: AdminDeps) {
           <h1>
             {call.from || "Unknown caller"} <Verdict v={call.verdict} />
           </h1>
-          <p class="muted">{fmtTime(call.startedAt)}</p>
+          <p class="muted">
+            {fmtTime(call.startedAt)}
+            {call.callerIp && ` · IP ${call.callerIp}`}
+          </p>
           {call.summary && <p>{call.summary}</p>}
           {call.recordingPath && <audio controls preload="none" src={`/recordings/${call.id}`} />}
           <SipHeaders events={events} />

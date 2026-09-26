@@ -4,7 +4,7 @@ ScamSitter runs on an OVHcloud VPS (Debian 13) as one Docker container. GitHub A
 
 - **App**: `deploy/compose.yaml`, image `ghcr.io/szerintedmi/scamsitter` (private) pinned by digest. It listens on `127.0.0.1:8787`, with no public ports. SQLite, recordings and greetings live in `/var/lib/scamsitter` (`/data` in the container).
 - **Tunnel**: `cloudflared` runs on the host as a systemd service (`deploy/vps/cloudflared.yml`):
-  - `scamsitter.geekmango.com` (public): only the Telnyx/OpenAI webhooks, media streams and `/healthz`.
+  - `scamsitter.geekmango.com` (public): the Telnyx/OpenAI webhooks, media streams, `/healthz` and the public page (`/`, `/call…`, `/assets/public.js`).
   - `scamsitter-admin.geekmango.com`: the admin UI behind Cloudflare Access. The app also verifies the Access JWT.
   - `scamsitter-ssh.geekmango.com`: SSH behind Cloudflare Access. Once `lock-ssh` has run, sshd listens on loopback only, so SSH works only through the tunnel.
 - **Deploys**: `.github/workflows/deploy.yml` runs CI, builds the image (tagged `sha-<commit>`), then SSHes in with a deploy key. The key can only run `scamsitter-deploy`, with a GitHub Access service token.
@@ -165,6 +165,8 @@ sudo scamsitter-deploy resume     # after reconnecting
 ```
 
 Reboots, e.g. after a kernel update, work the same way: `drain`, then `sudo reboot`. The container starts again on boot.
+
+**Tunnel routes** (`deploy/vps/cloudflared.yml`, e.g. the public page's paths) aren't deployed by a push. Copy `deploy/vps` to the VPS and re-run `sudo ./scamsitter-vps/bootstrap.sh` between calls (`drain` first): it restarts cloudflared, which drops calls and this SSH session.
 
 **Rotations**:
 - The Access service token expires; create a new one, then update both `CF_ACCESS_*` secrets.

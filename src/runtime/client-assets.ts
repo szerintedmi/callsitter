@@ -3,7 +3,7 @@ import type { ClientAssets } from "../web/admin";
 
 const CLIENT_DIR = join(import.meta.dir, "../web/client");
 /** One classic script per page, served as /assets/<name>.js; shared modules are bundled into each. */
-const ENTRIES = ["calls", "call", "test-call", "test-call-worklet"];
+const ENTRIES = ["calls", "call", "test-call", "test-call-worklet", "public"];
 
 /** Compiles the browser code in src/web/client (TypeScript) to browser JavaScript, by file name. */
 export async function buildClient(): Promise<Map<string, string>> {

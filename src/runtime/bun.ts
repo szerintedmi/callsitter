@@ -5,6 +5,7 @@ import { JevClassifier } from "../adapters/jev/classifier";
 import { LunaAgent } from "../adapters/luna/agent";
 import { OpenAiLiveAgent } from "../adapters/openai-live/session";
 import { OpenAiSip } from "../adapters/openai-live/sip";
+import { OpenAiWebRtc } from "../adapters/openai-live/webrtc";
 import { FsBlobStore } from "../adapters/storage/fs-blob";
 import { openSqlite, SqliteRepo } from "../adapters/storage/sqlite";
 import { TelnyxApi } from "../adapters/telnyx/api";
@@ -18,9 +19,10 @@ import { createApp } from "../web/app";
 import { controlRoutes } from "../web/control";
 import { LogBuffer, mirrorConsole } from "../web/debug-log";
 import { BrowserSipCalls } from "../web/openai-sip";
+import { PublicGate } from "../web/public";
 import { BrowserCalls, routeTelephony, type BrowserSipDeps } from "../web/test-call";
 import { clientAssets } from "./client-assets";
-import { readEnv, adminAuthFrom } from "./env";
+import { readEnv, adminAuthFrom, publicHostOf } from "./env";
 
 // Mirror console output into a buffer the test-call page's debug log shows.
 const debugLog = new LogBuffer();
@@ -106,6 +108,12 @@ const app = createApp({
   openAiSip: sip ? { sip } : undefined,
   debugLog,
   browserSip,
+  publicPage: {
+    host: publicHostOf(env),
+    config: () => config.get(),
+    gate: new PublicGate({ repo, config: () => config.get(), clock: { now: () => Date.now() } }),
+    webrtc: new OpenAiWebRtc({ apiKey: env.OPENAI_API_KEY }),
+  },
   clientAssets: await clientAssets({ rebuild: process.env.NODE_ENV !== "production" }),
 });
 

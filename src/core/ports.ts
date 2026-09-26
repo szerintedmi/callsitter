@@ -125,6 +125,8 @@ export interface CallRecord {
   from: string;
   to: string;
   divertedFrom: string | null;
+  /** public page calls: the visitor's IP */
+  callerIp: string | null;
   status: CallStatus;
   startedAt: number;
   endedAt: number | null;
@@ -146,13 +148,15 @@ export interface StoredEvent {
 }
 
 export interface Repo {
-  createCall(rec: Pick<CallRecord, "id" | "callControlId" | "from" | "to" | "divertedFrom" | "startedAt">): Promise<void>;
+  createCall(rec: Pick<CallRecord, "id" | "callControlId" | "from" | "to" | "divertedFrom" | "startedAt"> & { callerIp?: string | null }): Promise<void>;
   updateCall(id: string, patch: Partial<Omit<CallRecord, "id">>): Promise<void>;
   getCall(id: string): Promise<CallRecord | null>;
   findByCallControlId(callControlId: string): Promise<CallRecord | null>;
   listCalls(limit: number): Promise<CallRecord[]>;
   /** calls not yet ended */
   listOpenCalls(): Promise<CallRecord[]>;
+  /** calls from `from` that started at or after `since` */
+  listCallsFrom(from: string, since: number): Promise<CallRecord[]>;
   /** stores the event and, in the same transaction, applies `patch` to its call row */
   appendEvent(ev: CallEvent, patch?: Partial<Omit<CallRecord, "id">>): Promise<void>;
   listEvents(callId: string): Promise<StoredEvent[]>;

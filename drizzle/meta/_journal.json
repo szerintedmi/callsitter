@@ -8,6 +8,13 @@
       "when": 1790369386942,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1790384976320,
+      "tag": "0001_caller_ip",
+      "breakpoints": true
     }
   ]
 }

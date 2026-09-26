@@ -1,4 +1,4 @@
-import { fillCurrentTime, LUNA_RESPONSE, type AppConfig, type TellLive } from "./config";
+import { fillCurrentTime, LUNA_RESPONSE, TIME_UP, type AppConfig, type TellLive } from "./config";
 import { decide, matchRule, type FlowAction } from "./flow";
 import type { Agent, Classifier, Clock, DelegationRequest, EventBus, Notifier, ToolContext } from "./ports";
 import { TranscriptBuffer } from "./transcript";
@@ -233,6 +233,20 @@ export class Orchestrator {
     this.emit({ type: "classification", callId: this.d.meta.callId, at: this.elapsed(), classification: shown, decision: this.describe(rule, action) });
     await this.apply(action);
     return action;
+  }
+
+  /**
+   * timing.time_up: the call is nearly over. Live is told to say goodbye, and the call enters the
+   * time_up stage (rules in that stage keep it there); pending Luna guidance is dropped.
+   */
+  timeUp() {
+    const tu = this.d.config().flow.timing.time_up;
+    if (this.ended || !tu) return;
+    this.decision = TIME_UP;
+    if (this.deferredLuna) this.note("info", `queued Luna call (${this.deferredLuna.reason}) cancelled: time is up`);
+    this.deferredLuna = null;
+    this.revision++;
+    void this.apply({ kind: "tell_live", stage: TIME_UP, message: tu.tell_live });
   }
 
   /** What the call flow does with a Jev result, as the timeline shows it. */
