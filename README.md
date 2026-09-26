@@ -56,7 +56,7 @@ Replay examples:
 
 - The browser talks to gpt-live-1 over **WebRTC**. The server exchanges the SDP offer with `POST /v1/live/sessions` ([voice-webrtc](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live): "we recommend using WebRTC rather than WebSockets for more consistent performance") and attaches a sideband, as for a SIP call. The API key and the prompt stay on the server.
 - The page's data channel is locked down (`client.data_channel`): it can't send any client event, so a visitor can't append instructions. It only receives `session.closed`.
-- Cost caps (`config/public.yaml`): a 5-minute call length, 3 calls at once, 10 calls per IP a day, and a rolling-24 h budget. A call is admitted only if it fits even if it and every live public call run the full 5 minutes.
+- Cost caps (`config/public.yaml`): a 10-minute call length, 3 calls at once, 10 calls per IP a day, and a rolling-24 h budget. A call is admitted only if it fits even if it and every live public call run the full 10 minutes.
 - During the call the page shows a meter whose needle leans from genuine to scam/spam (P(scam) + P(spam) − P(genuine); an unclear verdict pulls it to the middle) and the call-flow stage, streamed as server-sent events from `/call/:id/events`.
 - Luna's tools are live (`public.yaml → tools`): a genuine caller's message can reach the owner by SMS. Calls are recorded and listed with the caller `public` and the visitor's IP (`CF-Connecting-IP`, stored with the call).
 - Why the admin test call uses a WebSocket relay instead: it exercises the Telnyx media-stream path that real calls take. The public page is the only caller that really arrives over WebRTC.
