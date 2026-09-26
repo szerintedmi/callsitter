@@ -89,7 +89,10 @@ Don't move the public and admin hostnames yet; that's step 5.
 
    Then run `ssh scamsitter-vps`; the first time, it opens the browser for Access.
 
-6. Close public SSH: `sudo ./scamsitter-vps/bootstrap.sh lock-ssh --confirm`. If the tunnel is ever down, use OVH's control-panel console and run `bootstrap.sh unlock-ssh`.
+6. Close public SSH: `sudo ./scamsitter-vps/bootstrap.sh lock-ssh --confirm`. If the tunnel is ever down:
+   - Use OVH's control-panel console and log in as **`debian`** with its password (`root` has none).
+   - Run `sudo ~/scamsitter-vps/bootstrap.sh unlock-ssh`.
+   - Without a password, the fallback is OVH rescue mode: mount the disk and delete `/etc/ssh/sshd_config.d/20-scamsitter-listen.conf`.
 
 ### 3. GitHub (repository secrets and variables)
 
@@ -130,9 +133,10 @@ Telnyx, and the OpenAI webhook if SIP is set up, already point at these hostname
 
 ### 6. Dev after the cutover
 
-- The old tunnel (`b190c780…`) becomes dev. Pick new hostnames, route them to that tunnel, and update:
-  - `deploy/cloudflared.yml`;
-  - `.env`: `PUBLIC_WS_BASE`, `ADMIN_HOST`, and `CF_ACCESS_AUD` from a new Access app for the dev admin host.
+- The old tunnel (`scamsitter`, `b190c780…`) is dev, with its own hostnames:
+  - `scamsitter-dev.geekmango.com`: public, same paths as production;
+  - `scamsitter-dev-admin.geekmango.com`: its own Access app, so its own `CF_ACCESS_AUD` in `.env`.
+- `deploy/cloudflared.yml` and `.env` (`PUBLIC_WS_BASE`, `ADMIN_HOST`, `CF_ACCESS_AUD`) point at them. Dev needs no service token.
 - Dev gets no real phone calls. Use the browser test call (`/test-call`).
 - The browser **SIP** test in dev would need its own Telnyx credential connection and OpenAI webhook pointed at the dev hostnames (`scripts/setup-sip.ts`).
 
