@@ -5,8 +5,14 @@ import type { Answer, Classification, TranscriptEntry, Verdict } from "../../cor
 // TypeSafe Jev adapter. One systemOne call per tick with all questions
 // (https://docs.typesafe.ai/api.md). Retries are disabled: a retried answer would be stale.
 
-export function renderTranscript(entries: readonly TranscriptEntry[]): string {
-  return entries.map((e) => `${e.speaker}: ${e.text}`).join("\n");
+/** One line per utterance; with `mark`, its line goes after the entries up to seq `mark.after`. */
+export function renderTranscript(entries: readonly TranscriptEntry[], mark?: { after: number; line: string }): string {
+  const lines = entries.map((e) => `${e.speaker}: ${e.text}`);
+  if (mark) {
+    const i = entries.findIndex((e) => e.seq > mark.after);
+    lines.splice(i < 0 ? lines.length : i, 0, mark.line);
+  }
+  return lines.join("\n");
 }
 
 export function buildRequest(input: ClassifierInput) {
@@ -20,7 +26,11 @@ export function buildRequest(input: ClassifierInput) {
     state: {
       context: input.config.context,
       caller_number: input.meta.from,
-      transcript: renderTranscript(input.transcript),
+      // Where the owner's last status update was written (the owner_update question).
+      transcript: renderTranscript(
+        input.transcript,
+        input.ownerUpdatedThrough === undefined ? undefined : { after: input.ownerUpdatedThrough, line: input.config.owner_update_marker },
+      ),
     },
     questions: {
       verdict: choice(verdict.prompt, { ...verdict.labels }),

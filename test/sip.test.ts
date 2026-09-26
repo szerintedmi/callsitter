@@ -99,7 +99,7 @@ beforeAll(async () => {
     config: () => config.get(),
     voice: { connect: () => Promise.reject(new Error("SIP calls must use the per-call agent")) },
     classifier: scripted({ verdict: "scam", confidence: 0.9 }),
-    agent: { run: async () => ({ toolCalls: [] }), summarize: async () => "" },
+    agent: { run: async () => ({ toolCalls: [] }), summarize: async () => ({ text: "" }) },
     bus,
     telephony: routeTelephony(telnyx, browserCalls, sip),
     clock: { now: () => Date.now() },

@@ -1,8 +1,9 @@
-import { fillCurrentTime, LUNA_RESPONSE, TIME_UP, type AppConfig, type TellLive } from "./config";
+import { fillCurrentTime, LUNA_RESPONSE, MAX_APPEND_CHARS, TIME_UP, type AppConfig, type TellLive } from "./config";
+import { CostMeter } from "./cost";
 import { decide, matchRule, type FlowAction } from "./flow";
-import type { Agent, Classifier, Clock, DelegationRequest, EventBus, Notifier, ToolContext } from "./ports";
+import type { Agent, Classifier, Clock, DelegationRequest, EventBus, ToolContext } from "./ports";
 import { TranscriptBuffer } from "./transcript";
-import type { AppendSource, CallEvent, CallMeta, Classification, FlowDecision, LunaTrigger, Speaker, ToolCallRecord } from "./types";
+import type { AppendSource, CallEvent, CallMeta, Classification, FlowDecision, LunaTrigger, Speaker, Suggestion, ToolCallRecord } from "./types";
 
 // Transcript buffer → Jev (on caller pauses) → call flow → tell Live, ask Luna, or hang up.
 // Knows nothing about audio; CallSession wires it to the voice session and the phone call.
@@ -13,7 +14,9 @@ export interface Steer {
   /**
    * The decision revision guidance was made under: dropped if a newer decision lands before it
    * is sent. Stage texts have none (a newer stage replaces them by key; dropping one would leave
-   * the call in a stage Live was never told about).
+   * the call in a stage Live was never told about). A delegation's is a flowRevision: only the
+   * call flow makes it stale, not the owner steering. Live asked for help and is waiting, so the
+   * owner's message doesn't turn Luna's answer into the fallback.
    */
   rev?: number;
   /** a message still waiting with the same key is dropped (e.g. an older stage) */
@@ -46,19 +49,16 @@ export interface OrchestratorDeps {
   classifier: Classifier;
   agent: Agent;
   bus: EventBus;
-  /** messages to the owner; unset means Luna isn't offered send_telegram_to_owner */
-  notifier?: Notifier;
+  /** whether the owner sees status messages; unset or false, no rolling summaries (luna.yaml progress) */
+  ownerStatus?: () => boolean;
   steer: Steering;
   clock: Clock;
   /** replay/dry-run: tools are recorded but have no side effects */
   dryRun?: boolean;
 }
 
-const MAX_OWNER_MESSAGES_PER_CALL = 2;
-/** Telegram's limit for a message's text */
-const MAX_OWNER_MESSAGE_CHARS = 4096;
-/** instructions.append is limited to ~500 tokens; stay well under */
-const MAX_APPEND_CHARS = 1800;
+/** Luna's steering buttons for the owner beyond this many are dropped (luna.yaml progress asks for fewer) */
+const MAX_SUGGESTIONS = 4;
 
 export class Orchestrator {
   readonly transcript: TranscriptBuffer;
@@ -67,7 +67,8 @@ export class Orchestrator {
   lastClassification: Classification | null = null;
   lunaCalls = 0;
   jevTicks = 0;
-  jevInputTokens = 0;
+  /** what the call's Luna and Jev calls cost so far */
+  readonly costs: CostMeter;
   readonly actions: FlowAction[] = [];
 
   /**
@@ -75,8 +76,26 @@ export class Orchestrator {
    * a hangup). Guidance made under an older revision is stale and never sent.
    */
   revision = 0;
+  /** like revision, but not bumped by the owner steering (see Steer.rev) */
+  flowRevision = 0;
+  /** why the revision last bumped, for guidance dropped as stale */
+  private revisionCause = "";
   /** the rule Jev's answers last matched */
   private decision: string | null = null;
+  /** what the owner told the agent from Telegram, oldest first; Luna sees it */
+  readonly ownerMessages: string[] = [];
+  /** the rolling summary in flight; cancelled at hangup, when Luna's final summary takes over */
+  private progressAbort: AbortController | null = null;
+  private lastProgressAt: number | null = null;
+  private lastProgressCallerRev = 0;
+  /** Jev says the owner's summary is out of date (luna.yaml progress.when), and how sure it is */
+  private progressDue: string | null = null;
+  /** the latest rolling summary, and the caller's words it saw (TranscriptBuffer.callerRev) */
+  lastProgress: { summary: string; callerRev: number } | null = null;
+  /** the owner's steering buttons from the latest rolling summary; the next one sees them */
+  private suggestions: Suggestion[] = [];
+  /** the last transcript entry (seq) the owner's latest summary saw; Jev gets a marker after it */
+  private ownerUpdatedThrough: number | undefined;
 
   private lastLunaAt: number | null = null;
   private lastLunaCallerRev: number | null = null;
@@ -84,7 +103,6 @@ export class Orchestrator {
   private lunaInFlight: Promise<string> | null = null;
   /** a Luna call the flow wanted during cooldown or while Luna was busy; poll() runs it when due */
   private deferredLuna: { reason: string; rule: NonNullable<LunaTarget["rule"]>; atMs: number; callerRev: number } | null = null;
-  private ownerMessagesSent = 0;
   /** a Jev call is running (only ever one) */
   private classifying = false;
   /** last caller transcript fragment (wall clock) */
@@ -102,6 +120,7 @@ export class Orchestrator {
 
   constructor(private d: OrchestratorDeps) {
     this.transcript = new TranscriptBuffer(() => this.elapsed());
+    this.costs = new CostMeter(() => this.d.config().cost);
   }
 
   elapsed() {
@@ -147,6 +166,7 @@ export class Orchestrator {
   poll() {
     if (this.ended) return;
     this.runDeferredLuna();
+    this.runProgress();
     if (this.classifying || this.pendingSince === null) return;
     const c = this.d.config().flow.timing.classify;
     const now = this.d.clock.now();
@@ -187,6 +207,7 @@ export class Orchestrator {
         transcript: this.transcript.all(),
         config: { ...cfg.jev, context: fillCurrentTime(cfg.jev.context, this.d.clock.now()) },
         signal: ac.signal,
+        ...(this.ownerUpdatedThrough !== undefined ? { ownerUpdatedThrough: this.ownerUpdatedThrough } : {}),
       });
     } catch (err) {
       if (this.ended) return null;
@@ -205,8 +226,11 @@ export class Orchestrator {
     this.jevFailures = 0;
     this.jevRetryAt = 0;
     this.jevTicks++;
-    this.jevInputTokens += inputTokens(c.raw);
+    this.costs.jevInputTokens += inputTokens(c.raw);
     this.lastClassification = c;
+    const w = cfg.luna.progress.when;
+    const pUpdate = c.answers[w.question]?.probabilities[w.answer];
+    if (pUpdate !== undefined && pUpdate >= w.min) this.progressDue = `Jev: ${w.question} ${w.answer} ${pUpdate.toFixed(2)} ≥ ${w.min}`;
 
     // The decision is the matched rule, even one with nothing new to tell Live: scam → genuine
     // (Luna starts) → scam ends "waste_time: unchanged", which still overrides the genuine plan.
@@ -228,10 +252,17 @@ export class Orchestrator {
       // Overrides a Luna call still waiting for its cooldown, and guidance from one still running.
       if (this.deferredLuna) this.note("info", `queued Luna call (${this.deferredLuna.reason}) cancelled: the call flow moved on`);
       this.deferredLuna = null;
-      this.revision++;
+      this.bump(`the call flow moved to ${this.decision ?? "another rule"}`);
     }
     const { raw: _raw, ...shown } = c;
-    this.emit({ type: "classification", callId: this.d.meta.callId, at: this.elapsed(), classification: shown, decision: this.describe(rule, action) });
+    this.emit({
+      type: "classification",
+      callId: this.d.meta.callId,
+      at: this.elapsed(),
+      classification: shown,
+      decision: this.describe(rule, action),
+      ...(pUpdate !== undefined ? { ownerUpdate: { question: w.question, answer: w.answer, probability: pUpdate, min: w.min } } : {}),
+    });
     await this.apply(action);
     return action;
   }
@@ -246,8 +277,91 @@ export class Orchestrator {
     this.decision = TIME_UP;
     if (this.deferredLuna) this.note("info", `queued Luna call (${this.deferredLuna.reason}) cancelled: time is up`);
     this.deferredLuna = null;
-    this.revision++;
+    this.bump("time was up");
     void this.apply({ kind: "tell_live", stage: TIME_UP, message: tu.tell_live });
+  }
+
+  private bump(cause: string, byOwner = false) {
+    this.revision++;
+    if (!byOwner) this.flowRevision++;
+    this.revisionCause = cause;
+  }
+
+  /**
+   * The owner steered the call from Telegram (the call session sends the text to Live). Luna sees
+   * it from her next run on, and guidance from a run that started before it is dropped, except an
+   * answer to Live's request for help.
+   */
+  ownerSteered(text: string) {
+    if (this.ended) return;
+    this.ownerMessages.push(text);
+    this.bump("the owner steered the call", true);
+  }
+
+  /**
+   * Luna's rolling summary for the owner's status message (luna.yaml progress), one at a time:
+   * when Jev says there's news for the owner (progress.when), at most every min_interval_ms, or
+   * after max_interval_ms if the caller has said anything since. Needs status messages
+   * (ownerStatus) and an agent that writes them. What it covered is only recorded once it succeeds: a failed one is
+   * retried after min_interval_ms.
+   */
+  private runProgress() {
+    const cfg = this.d.config();
+    const p = cfg.luna.progress;
+    if (!this.d.agent.progress || !p.enabled || !this.d.ownerStatus?.() || this.progressAbort) return;
+    const rev = this.transcript.callerRev;
+    if (rev === this.lastProgressCallerRev || this.pendingSince !== null || this.classifying) return;
+    // Before the first summary, the interval runs from the start of the call.
+    const since = this.elapsed() - (this.lastProgressAt ?? 0);
+    if (this.lastProgressAt !== null && since < p.min_interval_ms) return;
+    const stale = p.max_interval_ms !== null && since >= p.max_interval_ms;
+    if (!this.progressDue && !stale) return;
+    const reason = this.progressDue ?? `${Math.round(since / 1000)} s since the ${this.lastProgressAt === null ? "call started" : "last update"}, with new caller words`;
+    const ac = new AbortController();
+    this.progressAbort = ac;
+    this.progressDue = null;
+    const started = this.d.clock.now();
+    this.lastProgressAt = this.elapsed();
+    const transcript = this.transcript.all();
+    // Jev's marker goes after the utterances that were complete: words still coming into an open
+    // one stay after it, so Jev sees them as new.
+    const open = transcript.findIndex((e) => !e.final);
+    const through = (open < 0 ? transcript.at(-1) : transcript[open - 1])?.seq;
+    void this.d.agent.progress(this.d.meta, transcript, { ownerMessages: [...this.ownerMessages], suggestions: this.suggestions, signal: ac.signal })
+      .then((r) => {
+        const usage = r.usage ? this.costs.addLuna(r.usage) : undefined;
+        if (this.ended) return;
+        this.lastProgressCallerRev = rev;
+        if (through !== undefined) this.ownerUpdatedThrough = through;
+        const questions = r.questions.map((q) => q.trim()).filter(Boolean);
+        const summary = r.summary.trim();
+        if (summary) this.lastProgress = { summary, callerRev: rev };
+        this.suggestions = r.suggestions
+          .map((s) => ({ label: s.label.trim(), text: s.text.trim() }))
+          .filter((s) => s.label && s.text)
+          .slice(0, MAX_SUGGESTIONS);
+        this.emit({
+          type: "progress",
+          callId: this.d.meta.callId,
+          at: this.elapsed(),
+          summary,
+          questions,
+          suggestions: this.suggestions,
+          alert: r.alert,
+          reason,
+          tookMs: this.d.clock.now() - started,
+          ...(usage ? { usage } : {}),
+        });
+      })
+      .catch((err) => {
+        if (ac.signal.aborted || this.ended) return;
+        this.note("warn", `progress summary failed (retrying in ${Math.round(p.min_interval_ms / 1000)} s): ${errMsg(err)}`);
+        // Still due: poll() retries once min_interval_ms has passed.
+        this.progressDue ??= reason;
+      })
+      .finally(() => {
+        if (this.progressAbort === ac) this.progressAbort = null;
+      });
   }
 
   /** What the call flow does with a Jev result, as the timeline shows it. */
@@ -328,6 +442,7 @@ export class Orchestrator {
     this.lastLunaAt = this.elapsed();
     this.lastLunaCallerRev = this.transcript.callerRev;
     const rev = this.revision;
+    const flowRev = this.flowRevision;
     const ac = new AbortController();
     this.lunaAborts.add(ac);
     try {
@@ -336,18 +451,20 @@ export class Orchestrator {
         transcript: this.transcript.all(),
         classification: c,
         reason,
-        // No notifier means messages to the owner are off; don't offer Luna a tool that can only fail.
-        enabledTools: cfg.luna.tools.filter((t) => this.d.notifier || t !== "send_telegram_to_owner"),
+        enabledTools: cfg.luna.tools,
         tools: this.toolContext(),
         signal: ac.signal,
         previousResponseId: this.lunaChain,
+        ownerMessages: [...this.ownerMessages],
       });
       // A failed run leaves the chain where it was; the next run resends the full transcript anyway.
       if (res.responseId) this.lunaChain = res.responseId;
+      const usage = res.usage ? this.costs.addLuna(res.usage) : undefined;
       const instructions = res.instructions?.trim().slice(0, MAX_APPEND_CHARS) || undefined;
       // Luna started before the call flow moved on (e.g. genuine → waste_time): its guidance
       // would pull Live back to the old plan.
-      const stale = this.revision !== rev;
+      // An answer to Live's request for help is only stale if the call flow moved on (Steer.rev).
+      const stale = target.delegationId ? this.flowRevision !== flowRev : this.revision !== rev;
       // After hangup there's no voice session to guide, but the tool calls above still happened.
       const dropped = !instructions
         ? undefined
@@ -356,13 +473,13 @@ export class Orchestrator {
           : this.ended
             ? "the call had ended"
             : stale
-              ? `the call flow moved to ${this.decision ?? "another rule"} while Luna ran`
+              ? `${this.revisionCause} while Luna ran`
               : undefined;
       const guidance = instructions && !dropped ? instructions : "";
       if (guidance) {
         const message = { ...template!, text: template!.text.replace(LUNA_RESPONSE, () => guidance) };
         if (target.delegationId) {
-          this.d.steer.tellLive({ message, rev, source: "delegation", delegation: { id: target.delegationId, fallback: help.fallback } });
+          this.d.steer.tellLive({ message, rev: flowRev, source: "delegation", delegation: { id: target.delegationId, fallback: help.fallback } });
         } else {
           const stage = target.rule!.stage;
           const changed = this.stage !== stage;
@@ -380,6 +497,7 @@ export class Orchestrator {
         instructions,
         ...(dropped ? { dropped } : {}),
         toolCalls: res.toolCalls,
+        ...(usage ? { usage } : {}),
       });
       return guidance;
     } catch (err) {
@@ -416,23 +534,6 @@ export class Orchestrator {
     const record = (call: ToolCallRecord) =>
       this.emit({ type: "tool", callId: this.d.meta.callId, at: this.elapsed(), call });
     return {
-      sendTelegramToOwner: async (text) => {
-        let result: string;
-        if (this.ownerMessagesSent >= MAX_OWNER_MESSAGES_PER_CALL) result = "refused: message limit for this call reached";
-        else if (!this.d.notifier) result = "refused: Telegram to owner is not configured";
-        else if (this.d.dryRun) result = "dry run: not sent";
-        else {
-          try {
-            await this.d.notifier.send(text.slice(0, MAX_OWNER_MESSAGE_CHARS));
-            this.ownerMessagesSent++;
-            result = "sent";
-          } catch (err) {
-            result = `failed: ${errMsg(err)}`;
-          }
-        }
-        record({ name: "send_telegram_to_owner", args: { text }, result });
-        return result;
-      },
       endCall: async (reason) => {
         const result = this.d.dryRun ? "dry run: not ended" : this.ended ? "call already ended" : "ending call";
         record({ name: "end_call", args: { reason }, result });
@@ -455,13 +556,14 @@ export class Orchestrator {
 
   /**
    * Stops classifying: cancels the Jev call in flight and any Luna call not yet started. A Luna
-   * call already running is left to finish (see drain), as it may still message the owner.
+   * call already running is left to finish (see drain), so the summary sees what it did.
    */
   end() {
     this.ended = true;
     this.deferredLuna = null;
     for (const ac of this.jevAborts) ac.abort();
     this.jevAborts.clear();
+    this.progressAbort?.abort();
   }
 
   /** After end(): waits up to timeoutMs for a running Luna call, then cancels it. */

@@ -99,6 +99,85 @@ jev:
       ? verdict.scam < 0.5
 
 live:
+  # After the owner's Genuine button (a thinking text), the agent thought out loud: "Okay,
+  # actual delivery or scam? Hmm. This sounds like a regular delivery query."
+  - name: genuine-button-no-thinking-aloud
+    history: |
+      agent: Hello?
+      caller: Uh, hi there. Am I talking to Alex?
+      agent: Who's asking?
+      caller: It's John from the post office. It's about a new parcel. It was undeliverable, so I'm arranging when we should try to deliver again.
+      agent: Okay. Well, what needs sorting and by when? And how should I reach you if I need to follow up?
+    told: [button:Genuine]
+    caller: Uh, well, it's, uh... when would be good for the redelivery?
+    pass_if: >-
+      The agent only says what a person answering the phone would say to the caller. It does not
+      voice its own deliberation or commentary about the call, such as whether it is genuine or a
+      scam, or remarks like "this sounds like a regular delivery query", and does not mention a
+      supervisor or instructions.
+
+  # The same, with the owner's typed message right after the caller's turn, as on that call.
+  - name: owner-steer-no-thinking-aloud
+    history: |
+      agent: Hello?
+      caller: Uh, hi there. Am I talking to Alex?
+      agent: Who's asking?
+      caller: It's John from the post office. It's about a new parcel. It was undeliverable, so I'm arranging when we should try to deliver again.
+      agent: Okay. Well, I've passed the alert on, but what needs sorting and by when? And how should I reach you if I need to follow up?
+    told: [button:Genuine]
+    caller: Uh, well, it's, uh... uh
+    after_caller: ["owner:aks when can they redeliver?"]
+    pass_if: >-
+      The agent only says what a person answering the phone would say to the caller. It does not
+      voice its own deliberation or commentary about the call, such as whether it is genuine or a
+      scam, and does not mention a supervisor or instructions.
+
+  # A neighbour with a parcel was quizzed (what is it, who sent it, what does it look like, is
+  # there a slip) until he hung up.
+  - name: genuine-no-quizzing-neighbour
+    history: |
+      agent: Hello?
+      caller: Hi there, is this Alex? I'm Dave from number six.
+      agent: Hi Dave, how can I help?
+      caller: Someone left a parcel for you with me.
+      agent: Oh, okay. What sort of parcel is it?
+      caller: No idea, they just left it here.
+    told: [genuine]
+    caller: Why do you need details? Just come and pick it up.
+    pass_if: >-
+      The agent takes what the caller said at face value: it does not ask again about the item,
+      its sender, what it looks like, or for any proof or paperwork. Thanking them, saying it
+      will be picked up or passed on, or asking when suits them is a pass.
+
+  # The same over-questioning with a different genuine caller.
+  - name: genuine-no-quizzing-tradesperson
+    history: |
+      agent: Hello?
+      caller: Hi, it's Sam, the plumber. I'm running about twenty minutes late for today's job.
+      agent: Which company are you with, and what job is it?
+    told: [genuine]
+    caller: Just the boiler service, same as booked. I'm only letting you know I'll be a bit late.
+    pass_if: >-
+      The agent accepts the message: it acknowledges it (e.g. thanks, no problem, it'll be
+      passed on) and does not ask further questions to check who the caller is or what the job is.
+
+  # Wasting a scammer's time, the agent spoke of the owner in the third person ("what do you
+  # need from him?") instead of being him.
+  - name: scam-speaks-as-owner
+    history: |
+      agent: Hello?
+      caller: Hi, may I speak to Mr. Alex Morgan?
+      agent: Who's asking?
+      caller: I'm calling from the crypto exchange. It's about his Bitcoin.
+      agent: Right. What's that about?
+    told: [waste_time]
+    caller: His BTC keys have been leaked, so we need to take some precautionary actions on Mr. Morgan's account.
+    pass_if: >-
+      The agent talks as if it is Alex: it does not refer to Alex as someone else ("him", "he",
+      "Alex", "the owner", "his account", "his keys"), even when echoing the caller's words, and
+      does not offer to pass anything on. Speaking of
+      the account as "my" account, or not mentioning whose it is, is a pass.
+
   # The agent played along before it knew what the call was.
   - name: unclear-only-clarifies
     history: |
@@ -215,12 +294,26 @@ luna:
       request will be passed on to be confirmed, is a pass. An empty reply (agent on track) is
       a pass.
 
+  # Luna worded her steps about the owner in the third person ("ask what they need Peter to do"),
+  # and the agent, which acts as the owner, repeated it.
+  - name: luna-steps-in-first-person
+    reason: low confidence
+    jev: { verdict: unclear, confidence: 0.45, urgency: 0.6 }
+    transcript: |
+      agent: Hello?
+      caller: Hi, may I speak to Mr. Alex Morgan?
+      agent: Who's asking?
+      caller: I'm calling from the crypto exchange, about Bitcoin.
+    pass_if: >-
+      Any wording the guidance gives the agent is what Alex himself would say: it does not have
+      the agent refer to Alex in the third person (e.g. "what they need Alex to do", "his
+      account"). An empty reply is a pass.
+
   # An urgent friend got no mid-call message: Jev said "unclear" but urgent (0.92) for a minute,
   # and the agent kept asking what she needed while she begged it to pass the message on now.
-  - name: luna-urgent-callback-messages-owner
-    reason: urgent
+  - name: luna-urgent-callback-passed-on
     jev: { verdict: unclear, confidence: 0.57, urgency: 0.92 }
-    transcript: |
+    transcript: &teresa |
       agent: Hello?
       caller: Can you just call the Uber driver for me, please? It's pretty annoying. I want to talk to you.
       agent: Okay. So who am I speaking to? And is this about the Uber pickup?
@@ -230,16 +323,19 @@ luna:
       agent: Hi Teresa. What's going on with the ride? Is there something that needs sorting out right now?
       caller: Yeah, immediately, please. It's urgent. Just send a message to Alex, please.
     pass_if: >-
-      Luna calls send_telegram_to_owner with a message that Teresa urgently wants Alex to call her
-      back, and her guidance has the agent tell Teresa it's been passed on. A fail: no
-      send_telegram_to_owner call, or guidance that has the agent ask again for her name or what
-      she needs.
+      Luna's guidance has the agent tell Teresa her request has been passed on. A fail: guidance
+      that has the agent ask again for her name or what she needs.
+
+  - name: luna-urgent-callback-alerts-owner
+    run: progress
+    transcript: *teresa
+    pass_if: >-
+      alert is true, and the summary says Teresa urgently wants to reach Alex.
 
   # Someone at the door asked for the owner to be told; Luna quizzed him and asked who the
   # message should go to. Jev leaned scam (0.35) but was very sure it was urgent.
-  - name: luna-at-the-door-messages-owner
-    reason: urgent
-    jev: { verdict: scam, confidence: 0.35, urgency: 0.98 }
+  - name: luna-at-the-door-alerts-owner
+    run: progress
     transcript: |
       agent: Hello?
       caller: Hi there, it's Viktor. I'm standing outside the door. Can you let me in?
@@ -248,20 +344,39 @@ luna:
       agent: Sorry, I'm not hearing any knocking. What are you here to see him about?
       caller: I'm here to see you. Just let me in. Just send a message to your owner. Come on.
     pass_if: >-
-      Luna calls send_telegram_to_owner with a message that someone called Viktor says he's at
-      Alex's door (noting it's unverified is fine), and her guidance does not have the agent let
-      him in, confirm the address, or ask who the message is for. A fail: no
-      send_telegram_to_owner call.
+      alert is true, and the summary says someone called Viktor says he's at Alex's door ("your
+      door" counts; noting it's unverified is fine). No suggestion has the agent let him in or confirm the address.
 
-  # Scams sound urgent too: an urgent scam Jev isn't sure of mustn't reach the owner mid-call.
-  - name: luna-urgent-scam-no-message
-    reason: urgent
+  # Scams sound urgent too: a scam mustn't alert the owner mid-call.
+  - name: luna-urgent-scam-no-code
     jev: { verdict: scam, confidence: 0.6, urgency: 0.95 }
-    transcript: |
+    transcript: &bank-scam |
       agent: Hello?
       caller: Hello, this is Daniel from the fraud team at your bank. Someone is taking money out of your account right now.
       agent: Sorry, who did you say you were?
       caller: The fraud team. We need to stop it immediately. I've just sent you a code, read it to me and I'll block the payments.
     pass_if: >-
-      Luna does not call send_telegram_to_owner, and her guidance does not have the agent read
-      out or give a real code.
+      Luna's guidance does not have the agent read out or give a real code.
+
+  - name: luna-urgent-scam-no-alert
+    run: progress
+    transcript: *bank-scam
+    pass_if: >-
+      alert is false, and no suggestion has the agent give a code or any real details.
+
+  # Suggested buttons: realistic replies Alex would pick, open rather than specific, and worded as
+  # instructions to the agent (which speaks as Alex).
+  - name: luna-suggestions-open-and-instructive
+    run: progress
+    transcript: |
+      agent: Hello?
+      caller: Hi, it's Priya from Riverside Dental. Alex is due a check-up. Could he come in on Tuesday at ten?
+      agent: Oh, thanks for calling. Let me check. What else did you have?
+      caller: We also have Thursday afternoon. And is this still the best number to reach him on?
+    pass_if: >-
+      There are 1 to 3 suggestions. Each text is an instruction to the agent starting with a verb,
+      not a line to read out; wherever it refers to Alex it says "you" (e.g. "Tell her you'll
+      confirm later"), never "me", "Alex" or "he". None commits Alex to a day or time Priya didn't offer or makes
+      up his plans (accepting one of her slots is fine). At least one answers Priya's appointment
+      question. None is only about whether the call is genuine or a scam. Each label is a few
+      words matching its text.

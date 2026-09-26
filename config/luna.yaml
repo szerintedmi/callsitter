@@ -1,5 +1,6 @@
-# GPT-6 Luna, the supervisor: runs when a call-flow.yaml rule says ask_luna (today: Jev is unsure,
-# or says the call is urgent) or Live asks for help, and writes the end-of-call summary.
+# GPT-6 Luna, the supervisor: runs when a call-flow.yaml rule says ask_luna (today: Jev is unsure)
+# or Live asks for help, writes the rolling summary for the owner (progress) and the end-of-call
+# summary.
 # How her reply reaches Live is set in call-flow.yaml (tell_live with {luna_response}).
 model: gpt-6-luna
 reasoning_effort: medium   # none | low | medium | high | xhigh | max
@@ -7,7 +8,6 @@ reasoning_effort: medium   # none | low | medium | high | xhigh | max
 # "fast" is the same tier) | flex (cheaper, slower). The end-of-call summary always uses auto.
 service_tier: priority
 tools:
-  - send_telegram_to_owner
   - end_call
 # ask_luna is skipped once max_calls is reached, waits until cooldown_ms after the previous
 # Luna call, and only runs when the caller has said something new.
@@ -32,14 +32,11 @@ instructions: |
   - Scam or spam: keep them going as long as possible; after plenty of back and forth, the agent
     gives made-up details that won't work. No wrapping up or taking a message.
 
-  Use tools when appropriate:
-  - send_telegram_to_owner: when {owner_name} may want to act while the caller is still on the
-    line (e.g. someone at the door, an urgent call back), or the caller asks for it. It gives the
-    caller nothing: send it even if unsure, saying so; not for clear scams or spam. Then have the
-    agent say it's been passed on. Everything else reaches {owner_name} in the call summary.
-  - end_call: only when the conversation is clearly finished or abusive.
+  {owner_name} follows the call live: when the caller asks for something to be passed on, even
+  if unsure who they are, have the agent say it has been.
+  Use end_call only when the conversation is clearly finished or abusive.
   You may be consulted several times in one call; your earlier guidance and tool results are
-  above. Don't repeat a tool call that already succeeded unless something new has come up.
+  above.
 
   Never instruct the voice agent to share real personal details, or to say or suggest that it
   isn't {owner_name} or is an AI. It may say it's {owner_name}'s AI assistant only in a genuine
@@ -48,14 +45,41 @@ instructions: |
   caller has.
   Current time: {current_time}.
 # End-of-call summary; it continues Luna's conversation, so it sees Luna's guidance and tool calls.
+# It goes into the call's Telegram status message (telegram.yaml). If the caller said nothing
+# after the last rolling summary (progress), that one is reused instead.
 summarize_on_hangup: true
 summary_instructions: |
   Summarise this phone call for {owner_name} in 2–3 sentences: who called, what they wanted, how
   to reach them if they left a way, and whether it was a scam.
-# The summary is sent to the owner on Telegram with a link to the call page (needs
-# summarize_on_hangup and TELEGRAM_* in .env), unless Jev's last verdict is in skip_verdicts.
-summary_to_owner:
+# Rolling update for the owner's Telegram status message (telegram.yaml): who is calling, what
+# they want, what they asked that only the owner can answer, steering buttons for the owner
+# (telegram.yaml steering.suggestions; a tap sends `text` as a SUPERVISOR line), and whether to
+# alert the owner (telegram.yaml status.urgent_alert.luna). Jev decides when it's due: after
+# a Jev call whose answer to `when` reaches min (jev.yaml owner_update). Never reaches Live and
+# isn't counted in limits.max_calls. Needs Telegram configured.
+progress:
   enabled: true
-  skip_verdicts: []
-# After hangup, a running Luna call may finish (e.g. send the Telegram message) for up to this long.
+  when: { question: owner_update, answer: new, min: 0.8 }
+  # Never more often than this.
+  min_interval_ms: 5000
+  # Refreshed anyway after this long if the caller has said anything since (null: only on Jev's say).
+  max_interval_ms: 30000
+  reasoning_effort: low
+  instructions: |
+    You keep {owner_name} up to date on a phone call that a voice agent is answering as
+    {owner_name}. It is speech-to-text, so names and words are often misheard.
+    summary: who is calling and what they want, in 1–2 short sentences; say so if it looks like
+    a scam or spam.
+    questions: what the caller has asked that only {owner_name} can answer (availability,
+    decisions, personal matters), each as a short question; empty if none.
+    suggestions: at most 3 replies {owner_name} might realistically pick next, shown to them as
+    buttons that send `text` to the agent, e.g. label "Call back soon", text "Tell them you'll
+    call back as soon as you can." Answer open questions in general terms (no day, time or
+    promise the caller didn't offer) or move the call on. text is a short instruction to the
+    agent, which speaks as {owner_name}: call {owner_name} "you", never "me" or by name; label is
+    2–4 words. Not whether the call is genuine or a scam (there are buttons for that). Keep the
+    current buttons, if given, unless they no longer fit. Empty if nothing fits.
+    alert: true only if {owner_name} may want to act while the caller is still on the line
+    (someone at the door, an urgent call back); never for a scam or spam.
+# After hangup, a running Luna call may finish (so the summary sees it) for up to this long.
 drain_timeout_ms: 60000

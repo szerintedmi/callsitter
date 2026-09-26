@@ -17,12 +17,26 @@ describe("Jev adapter", () => {
     expect(req.model).toBe("jev-latest");
     expect(req.state.transcript).toBe("agent: Hello?\ncaller: This is your bank.");
     expect(Object.keys(req.state)).toEqual(["context", "caller_number", "transcript"]); // no stage: it would bias the verdict
-    expect(Object.keys(q)).toEqual(["verdict", "urgency", "done", "ended", "manipulation"]);
+    expect(Object.keys(q)).toEqual(["verdict", "urgency", "done", "ended", "manipulation", "owner_update"]);
     expect(q.verdict).toMatchObject({ type: "choice" });
     expect(Object.keys(q.verdict!.criteria)).toEqual(["scam", "spam", "genuine", "unclear"]);
     expect(Object.keys(q.manipulation!.criteria)).toEqual(["attempt", "none"]);
     expect(q.urgency).toMatchObject({ type: "score" });
     expect(q.urgency!.criteria).toHaveLength(cfg.jev.questions.urgency.levels.length);
+  });
+
+  test("the owner's last status update is marked in the transcript", async () => {
+    const cfg = await loadRepoConfig();
+    const transcript = [
+      { seq: 1, speaker: "caller" as const, text: "It's Sarah.", at: 0, final: true },
+      { seq: 2, speaker: "agent" as const, text: "Hi Sarah.", at: 1000, final: true },
+      { seq: 3, speaker: "caller" as const, text: "Is he free Tuesday?", at: 2000, final: true },
+    ];
+    const meta = { callId: "c", from: "+441", to: "+442", startedAt: 0 };
+    const req = buildRequest({ meta, transcript, config: cfg.jev, ownerUpdatedThrough: 2 });
+    expect(req.state.transcript).toBe(`caller: It's Sarah.\nagent: Hi Sarah.\n${cfg.jev.owner_update_marker}\ncaller: Is he free Tuesday?`);
+    expect(buildRequest({ meta, transcript, config: cfg.jev, ownerUpdatedThrough: 3 }).state.transcript.endsWith(cfg.jev.owner_update_marker)).toBe(true);
+    expect(buildRequest({ meta, transcript, config: cfg.jev }).state.transcript).not.toContain(cfg.jev.owner_update_marker);
   });
 
   test("maps answers: scam+spam probability is the junk confidence; urgency normalised", () => {

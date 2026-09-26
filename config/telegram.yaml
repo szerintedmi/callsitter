@@ -1,0 +1,57 @@
+# Telegram to the owner (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env; nothing here applies
+# without them). Every call gets one status message, sent as the call comes in (so it notifies)
+# and edited in place as the call goes on (edits don't notify): verdict, stage, Luna's rolling
+# summary, the caller's open questions and suggested replies (luna.yaml progress), your steering,
+# and the transcript, newest first and collapsed to its first lines (tap to expand). Once the call
+# ends, Luna's summary replaces the rolling one and the call's cost is added.
+status:
+  enabled: true
+  # Telegram allows about one message per second in a chat, edits included.
+  min_edit_interval_ms: 3000
+  # Edits don't notify, so an urgent call (Jev's urgency ≥ min_urgency) also gets a reply to its
+  # status message, once per call, which does. Not when Jev says scam or spam with at least
+  # unless_junk: scams sound urgent too. With luna, Luna's rolling summary can also ask for it
+  # (luna.yaml progress: alert), e.g. someone at the door.
+  urgent_alert:
+    enabled: true
+    min_urgency: 0.85
+    unless_junk: 0.5
+    luna: true
+
+# Your messages steer the call: reply to a call's status message, or send a message while a call
+# is live (it goes to the newest one). Needs a numeric TELEGRAM_CHAT_ID; only that chat is heard.
+steering:
+  enabled: true
+  # Your messages older than this are ignored (sent while the server was down).
+  stale_after_ms: 60000
+  # How your message reaches Live (call-flow.yaml explains the kinds). It goes out at once:
+  # commentary and thinking never cut the agent off; instructions do.
+  default: commentary
+  # A message starting with one of these goes as that kind instead (the character is removed).
+  prefixes:
+    "!": instructions
+    "~": thinking
+  # What Live gets. The Live prompt already follows SUPERVISOR lines.
+  text: "SUPERVISOR: {owner_message}"
+  # Buttons under a live call's status message: a tap sends `text` (in `text` above) as `as`.
+  # Worded like the call flow's own verdict texts (call-flow.yaml), which never leaked into
+  # speech; as commentary, a bare "It's a genuine call." was once read out word for word.
+  buttons:
+    - label: Genuine
+      text: This is a genuine call. From now on handle it as one until instructed otherwise.
+      as: thinking
+    - label: Spam/Scam
+      text: This is a scam or spam call. From now on handle it as one.
+      as: thinking
+    # Ends the call once the goodbye has played (steering texts alone can't hang up); so does
+    # sending /hangup.
+    - label: Hang up
+      text: The call is over. Say a short, polite goodbye now, then stay quiet.
+      as: commentary
+      hang_up: true
+  # Luna's suggested replies (luna.yaml progress: suggestions), one button per row below these,
+  # replaced with each rolling summary. A tap sends the suggestion's instruction (in `text` above)
+  # as `as`: commentary, so the agent acts on it at once, in its own words.
+  suggestions:
+    enabled: true
+    as: commentary

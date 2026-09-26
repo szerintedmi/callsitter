@@ -7,10 +7,12 @@
 // A bar follows work under way: in Luna's lane while she runs (the summary too), in the flow's
 // from a decision to its effect: a text reaching Live (bold dashed: held until the agent is
 // idle), a Luna call starting, the hang-up. The Live lane takes the colour of the stage whose text it got last.
+// The owner's Telegram steering reaches Live as its own rows ("owner → Live").
 // Hovering a row shows its details: Jev's answers, Luna's task, reply, tool calls and what
 // reached Live, and full texts sent to Live.
 
-import type { CallEvent, Classification, FlowDecision, TranscriptEntry } from "../../core/types";
+import { describeCosts, describeLunaTokens } from "../../core/cost";
+import type { AppendSource, CallEvent, Classification, FlowDecision, PricedUsage, TranscriptEntry } from "../../core/types";
 
 /** Stored events from calls recorded before the call flow. */
 type LegacyEvent =
@@ -21,6 +23,7 @@ type LegacyEvent =
       at: number;
       classification: Omit<Classification, "answers"> & { answers?: Classification["answers"]; strategy?: string; category?: string };
       decision?: FlowDecision;
+      ownerUpdate?: undefined;
     };
 
 export type TimelineEvent = CallEvent | LegacyEvent;
@@ -85,6 +88,11 @@ function jevTip(ev: Cls) {
       return "<tr><th>" + esc(q) + "</th><td>" + cells.join(" · ") + "</td></tr>";
     });
   rows.push("<tr><th>urgency</th><td>" + c.urgency.toFixed(2) + "</td></tr>");
+  const ou = ev.ownerUpdate;
+  if (ou) {
+    const due = ou.probability >= ou.min;
+    rows.push("<tr><th>owner update</th><td>" + esc(ou.answer) + " " + ou.probability.toFixed(2) + (due ? " <b>≥ " + ou.min + ": summary due</b>" : ' <span class="muted">&lt; ' + ou.min + "</span>") + "</td></tr>");
+  }
   return (
     "<h4>Jev · " + fmt(ev.at) + ' <span class="muted">· ' + c.latencyMs + " ms</span></h4><table>" + rows.join("") + "</table>" +
     (d ? '<div class="sec">rule <b>' + esc(d.rule ?? "none") + "</b> → " + esc(d.action.replaceAll("_", " ")) + ' <span class="muted">(' + esc(d.reason) + ")</span></div>" : "")
@@ -99,6 +107,21 @@ function appendTip(ev: Append, ctx: number | null) {
     (ctx !== null ? '<div class="sec muted">Live context in use: ' + pct(ctx) + "%</div>" : "")
   );
 }
+
+/** A Luna call's tokens and cost, for its tooltip. */
+function usageTip(u: PricedUsage | undefined) {
+  if (!u) return "";
+  return '<div class="sec muted">$' + u.costUsd.toFixed(4) + " · " + esc(describeLunaTokens(u)) + (u.serviceTier ? " · " + esc(u.serviceTier) : "") + "</div>";
+}
+
+/** A live.append row's label, by where the text came from. */
+const APPEND_LABELS: Record<AppendSource, string> = {
+  stage: "→ Live",
+  silence: "silence prompt",
+  delegation: "answer to Live",
+  luna: "Luna → Live",
+  owner: "owner → Live",
+};
 
 /** events carry "at" (ms since call start); transcript entries carry entry.at (first word) */
 function atOf(ev: TimelineEvent) {
@@ -117,6 +140,8 @@ export function createTimeline(root: HTMLElement): Timeline {
     jev: q("jev"),
     status: q("status"),
     elapsed: q("elapsed"),
+    cost: q("cost"),
+    owner: q("owner"),
   };
   const bySeq: Record<number, HTMLElement> = {};
   let ticks = 0;
@@ -322,7 +347,13 @@ export function createTimeline(root: HTMLElement): Timeline {
     const d = ev.decision;
     const extra = answers(c);
     const tip = () => jevTip(ev);
-    const head = '<span class="tag ' + c.verdict + '">' + c.verdict + "</span> " + bar(c.confidence, c.verdict) + " " + c.confidence.toFixed(2);
+    // Jev's say on the owner's summary (luna.yaml progress.when): bold when it makes one due.
+    const ou = ev.ownerUpdate;
+    const ouBadge = ou
+      ? ' <span class="ou' + (ou.probability >= ou.min ? " due" : " muted") + '" title="owner update: ' + esc(ou.answer) + " " + ou.probability.toFixed(2) + " (due at ≥ " + ou.min + ')">📝 ' + ou.probability.toFixed(2) + "</span>"
+      : "";
+    if (ou) set(st.owner, bar(ou.probability) + " " + ou.probability.toFixed(2) + (ou.probability >= ou.min ? " <b>due</b>" : ""));
+    const head = '<span class="tag ' + c.verdict + '">' + c.verdict + "</span> " + bar(c.confidence, c.verdict) + " " + c.confidence.toFixed(2) + ouBadge;
     const outcome =
       !d || d.action === "none"
         ? ""
@@ -405,7 +436,7 @@ export function createTimeline(root: HTMLElement): Timeline {
       }
       case "live.append": {
         const how = [ev.as, ev.heldMs >= 200 ? "held " + secs(ev.heldMs) : "", ev.fallback ? "fallback" : "", ev.dropped ? "dropped" : ""].filter(Boolean);
-        const label = ev.source === "silence" ? "silence prompt" : ev.source === "delegation" ? "answer to Live" : ev.source === "luna" ? "Luna → Live" : "→ Live";
+        const label = APPEND_LABELS[ev.source] ?? "→ Live";
         const fromLuna = ev.source === "luna" || ev.source === "delegation";
         if (fromLuna) {
           // Luna's reply (or the fallback) reaching Live: shown with her call too.
@@ -415,7 +446,7 @@ export function createTimeline(root: HTMLElement): Timeline {
         const usage = ctx;
         // Every text reaches Live from the call flow (a stage text, Luna's reply, the silence watchdog).
         const { g } = row({
-          kind: "append" + (ev.dropped ? " dropped" : ""),
+          kind: "append" + (ev.source === "owner" ? " owner" : "") + (ev.dropped ? " dropped" : ""),
           at: ev.at,
           arrows: [{ from: "f", to: "l", cls: fromLuna ? "luna" : "" }],
           body:
@@ -490,6 +521,7 @@ export function createTimeline(root: HTMLElement): Timeline {
             '<div class="sec muted">reply</div><div class="pre">' + (ev.instructions ? esc(ev.instructions) : '<span class="muted">no guidance</span>') + "</div>" +
             (ev.dropped ? '<div class="muted">not sent: ' + esc(ev.dropped) + "</div>" : "") +
             ev.toolCalls.map((x) => '<div class="sec"><b>' + esc(x.name) + "</b> → " + esc(x.result) + "<pre>" + esc(JSON.stringify(x.args, null, 2)) + "</pre></div>").join("") +
+            usageTip(ev.usage) +
             (rec.sent ? '<div class="sec muted">sent to Live · ' + esc(rec.sent.as) + (rec.sent.heldMs ? " · held " + secs(rec.sent.heldMs) : "") + (rec.sent.dropped ? " · dropped" : "") + '</div><div class="pre">' + esc(rec.sent.text) + "</div>" : ""),
         });
         if (wasRunning) g.querySelector(".ln.u")!.classList.add("run", "above");
@@ -512,12 +544,42 @@ export function createTimeline(root: HTMLElement): Timeline {
           tip: () => "<h4>tool " + esc(ev.call.name) + " · " + fmt(ev.at) + "</h4><div>→ " + esc(ev.call.result) + "</div><pre>" + esc(JSON.stringify(ev.call.args, null, 2)) + "</pre>",
         });
         break;
+      case "costs":
+        // Final costs, with the end-of-call summary priced in.
+        row({ kind: "note info", at: ev.at, body: "cost " + esc(describeCosts(ev.costs)) + " · Luna " + ev.costs.luna.calls + " calls, " + esc(describeLunaTokens(ev.costs.luna)) });
+        set(st.cost, esc(describeCosts(ev.costs)));
+        break;
+      case "progress": {
+        // Luna's rolling summary for the owner's Telegram status message; never reaches Live.
+        const sug = ev.suggestions ?? [];
+        row({
+          kind: "progress",
+          at: ev.at,
+          dots: [["u", "small"]],
+          body:
+            '<span class="line"><b>status for owner</b>' + (ev.alert ? " 🚨" : "") + ' <span class="txt">' + esc(ev.summary) + "</span></span>" +
+            (ev.questions.length ? '<span class="xa">' + ev.questions.map((x) => "❓ " + esc(x)).join(" · ") + "</span>" : "") +
+            (sug.length ? '<span class="xa">' + sug.map((s) => "🔘 " + esc(s.label)).join(" · ") + "</span>" : ""),
+          tip: () =>
+            "<h4>Luna · status for owner · " + fmt(ev.at) + ' <span class="muted">· took ' + secs(ev.tookMs ?? 0) + "</span></h4>" +
+            '<div class="muted">why</div><div class="pre">' + esc(ev.reason ?? "") + "</div>" +
+            '<div class="sec muted">summary</div><div class="pre">' + esc(ev.summary) + "</div>" +
+            (ev.questions.length ? '<div class="sec muted">questions</div><div class="pre">' + ev.questions.map(esc).join("\n") + "</div>" : "") +
+            (sug.length ? '<div class="sec muted">suggested buttons</div><div class="pre">' + sug.map((s) => esc(s.label) + ": " + esc(s.text)).join("\n") + "</div>" : "") +
+            (ev.alert ? '<div class="sec muted">alert</div><div class="pre">asked to alert the owner</div>' : "") +
+            usageTip(ev.usage),
+        });
+        break;
+      }
       case "note":
         row({ kind: "note " + ev.level, at: ev.at, body: esc(ev.message) });
         break;
       case "call.ended": {
         endedAt = startedAt === null ? null : startedAt + ev.at;
-        const { g } = row({ kind: "end", at: ev.at, body: "<b>ended</b> " + esc(ev.reason) + ' <span class="muted">· est. $' + ev.costUsd.toFixed(3) + "</span>" });
+        // Calls from before costs were recorded only have the estimate.
+        const cost = ev.costs ? describeCosts(ev.costs) : "est. $" + ev.costUsd.toFixed(3);
+        const { g } = row({ kind: "end", at: ev.at, body: "<b>ended</b> " + esc(ev.reason) + ' <span class="muted">· ' + esc(cost) + "</span>" });
+        set(st.cost, esc(cost));
         // A rule's hang-up waits for the agent's goodbye to play out.
         if (flowHangup) connect("f", flowHangup, g, true);
         else dot(g, "f", "tick");
@@ -537,8 +599,12 @@ export function createTimeline(root: HTMLElement): Timeline {
           at: ev.at,
           dots: [["u", "luna"], ["f", "flow"]],
           arrows: [{ from: "u", to: "f", cls: "luna" }],
-          body: "<b>summary</b> " + esc(ev.text),
-          ...(took !== null ? { tip: () => "<h4>Luna summary · " + fmt(ev.at) + ' <span class="muted">· took ' + secs(took) + "</span></h4>" } : {}),
+          body: "<b>summary</b> " + esc(ev.text) + (ev.reused ? ' <span class="muted">(last status for owner)</span>' : ""),
+          tip: () =>
+            "<h4>Luna summary · " + fmt(ev.at) + (took !== null ? ' <span class="muted">· took ' + secs(took) + "</span>" : "") + "</h4>" +
+            '<div class="pre">' + esc(ev.text) + "</div>" +
+            (ev.reused ? '<div class="sec muted">No Luna call: the caller said nothing new after the last status for the owner, so it is reused.</div>' : "") +
+            usageTip(ev.usage),
         });
         if (wasRunning) g.querySelector(".ln.u")!.classList.add("run", "above");
         break;

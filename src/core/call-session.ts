@@ -1,5 +1,5 @@
 import { b64decode, b64encode, BYTES_PER_MS, isCodec, levelDbfs, SILENCE_BYTE, type AudioFormat, type Codec } from "./audio";
-import { fillCurrentTime, type AppConfig } from "./config";
+import { fillCurrentTime, ownerAppendText, type AppConfig, type LiveAppend } from "./config";
 import { errMsg, Orchestrator, type Steer } from "./orchestrator";
 import type {
   Agent,
@@ -7,7 +7,6 @@ import type {
   Clock,
   EventBus,
   MediaChannel,
-  Notifier,
   Telephony,
   VoiceAgent,
   VoiceSession,
@@ -26,10 +25,8 @@ export interface CallSessionDeps {
   classifier: Classifier;
   agent: Agent;
   bus: EventBus;
-  /** messages to the owner; unset turns them off */
-  notifier?: Notifier;
-  /** the call's page on the admin UI, linked from the summary sent to the owner */
-  callLink?: (callId: string) => string;
+  /** whether the owner sees status messages (OwnerDesk); Luna's rolling summaries are written for them */
+  ownerStatus?: () => boolean;
   telephony: Telephony;
   clock: Clock;
   media: MediaChannel;
@@ -44,6 +41,9 @@ export interface CallSessionDeps {
   greetings?: { get(codec: Codec): Uint8Array | null };
   onStopped?: (callId: string) => void;
 }
+
+/** Whether the owner's message went out (steerFromOwner), or why it didn't. */
+export type OwnerSteerResult = { ok: true } | { ok: false; reason: string };
 
 /** caller audio kept while Live connects (~10 s of 20 ms frames) */
 const EARLY_AUDIO_MAX_FRAMES = 500;
@@ -108,7 +108,7 @@ export class CallSession {
       classifier: d.classifier,
       agent: d.agent,
       bus: d.bus,
-      notifier: d.notifier,
+      ownerStatus: d.ownerStatus,
       clock: d.clock,
       dryRun: d.dryRun,
       steer: {
@@ -332,6 +332,34 @@ export class CallSession {
     this.flushHeldInstructions();
   }
 
+  /**
+   * The owner's message from Telegram (telegram.yaml steering), sent to Live as `as` in
+   * steering.text. It goes out at once and is never dropped as stale; Luna sees it from her next
+   * run on.
+   */
+  steerFromOwner(message: string, as: LiveAppend): OwnerSteerResult {
+    const st = this.d.config().telegram.steering;
+    if (!st.enabled) return { ok: false, reason: "steering is turned off (telegram.yaml)" };
+    if (this.stopped) return { ok: false, reason: "that call has ended" };
+    if (this._phase !== "active") return { ok: false, reason: "the call isn't connected yet" };
+    const text = message.trim();
+    if (!text) return { ok: false, reason: "the message is empty" };
+    this.orch.ownerSteered(text);
+    this.tellLive({ message: { as, text: ownerAppendText(st, text), send: "now", max_hold_ms: null }, source: "owner" });
+    return { ok: true };
+  }
+
+  /**
+   * The owner ended the call from Telegram: it hangs up once the agent's goodbye (a steering text
+   * sent just before) has played, like the call flow's hang-ups.
+   */
+  hangUpFromOwner(): OwnerSteerResult {
+    if (this.stopped) return { ok: false, reason: "that call has ended" };
+    if (this._phase !== "active") return { ok: false, reason: "the call isn't connected yet" };
+    void this.hangupAfterGoodbye("the owner hung up from Telegram");
+    return { ok: true };
+  }
+
   /** The agent is speaking, or the caller spoke and the agent is about to reply. */
   private agentBusy(): boolean {
     const now = this.d.clock.now();
@@ -360,11 +388,10 @@ export class CallSession {
   private sendToLive(items: { steer: Steer; since: number }[]) {
     // A decision made since supersedes guidance; a delegation must still be answered, so it gets
     // its fallback instead.
-    const rev = this.orch.revision;
     const now = this.d.clock.now();
     let sent = false;
     for (const { steer, since } of items) {
-      const current = steer.rev === undefined || steer.rev >= rev;
+      const current = steer.rev === undefined || steer.rev >= (steer.delegation ? this.orch.flowRevision : this.orch.revision);
       if (!current && !steer.delegation) {
         this.appended(steer, now - since, true);
         continue;
@@ -513,25 +540,23 @@ export class CallSession {
 
     // Let a running Luna call finish first, so call.ended and the summary include what it did.
     await this.orch.drain(cfg.luna.drain_timeout_ms);
-    const minutes = this.answeredAt ? (this.endedAt - this.answeredAt) / 60000 : 0;
-    const c = cfg.cost;
-    const costUsd =
-      minutes * c.live_usd_per_min +
-      this.orch.lunaCalls * c.luna_usd_per_call +
-      (this.orch.jevInputTokens / 1e6) * c.jev_usd_per_mtok;
+    // Live bills per second of session: from answer to hangup.
+    const liveSeconds = this.answeredAt ? (this.endedAt - this.answeredAt) / 1000 : 0;
+    const costs = this.orch.costs.total(liveSeconds);
     this.d.bus.publish({
       type: "call.ended",
       callId: this.callId,
       at: this.endedAt - this.d.meta.startedAt,
       endedAt: this.endedAt,
       reason,
-      costUsd: Math.round(costUsd * 10000) / 10000,
+      costUsd: Math.round(costs.totalUsd * 10000) / 10000,
       lunaCalls: this.orch.lunaCalls,
       jevTicks: this.orch.jevTicks,
+      costs,
     });
     console.log(
-      `[call ${this.callId}] ended (${reason}): ${minutes.toFixed(1)} min, ${this.orch.jevTicks} Jev ticks, ` +
-        `${this.orch.lunaCalls} Luna calls, est. $${costUsd.toFixed(3)}`,
+      `[call ${this.callId}] ended (${reason}): ${(liveSeconds / 60).toFixed(1)} min, ${this.orch.jevTicks} Jev ticks, ` +
+        `${this.orch.lunaCalls} Luna calls, $${costs.totalUsd.toFixed(3)}`,
     );
     if (this.replyLatencies.length) {
       const sorted = [...this.replyLatencies].sort((a, b) => a - b);
@@ -544,16 +569,23 @@ export class CallSession {
     this.d.onStopped?.(this.callId);
 
     const transcript = this.orch.transcript.all();
-    if (cfg.luna.summarize_on_hangup && transcript.some((e) => e.speaker === "caller")) {
+    const last = this.orch.lastProgress;
+    if (last && last.callerRev === this.orch.transcript.callerRev) {
+      // The caller said nothing after the last rolling summary: it's the final one.
+      this.d.bus.publish({ type: "summary", callId: this.callId, at: this.orch.elapsed(), text: last.summary, reused: true });
+    } else if (cfg.luna.summarize_on_hangup && transcript.some((e) => e.speaker === "caller")) {
       try {
         const reason = "summarise the call";
         this.d.bus.publish({ type: "luna.started", callId: this.callId, at: this.orch.elapsed(), reason, trigger: "summary" });
-        const text = await this.d.agent.summarize(this.d.meta, transcript, { previousResponseId: this.orch.lunaResponseId });
-        if (text) this.d.bus.publish({ type: "summary", callId: this.callId, at: this.orch.elapsed(), text });
-        await this.sendSummary(text);
+        const res = await this.d.agent.summarize(this.d.meta, transcript, {
+          previousResponseId: this.orch.lunaResponseId,
+          ownerMessages: this.orch.ownerMessages,
+        });
+        const usage = res.usage ? this.orch.costs.addLuna(res.usage) : undefined;
+        if (res.text) this.d.bus.publish({ type: "summary", callId: this.callId, at: this.orch.elapsed(), text: res.text, ...(usage ? { usage } : {}) });
+        if (usage) this.d.bus.publish({ type: "costs", callId: this.callId, at: this.orch.elapsed(), costs: this.orch.costs.total(liveSeconds) });
       } catch (err) {
         this.note("warn", `summary failed: ${errMsg(err)}`);
-        await this.sendSummary("");
       }
     }
     // The voice session has shut down and handed over its recording (OpenAI SIP). Read again
@@ -561,30 +593,7 @@ export class CallSession {
     await this.voice?.close();
     this._phase = "finalized";
   }
-
-  /** The end-of-call summary to the owner on Telegram (luna.yaml summary_to_owner). */
-  private async sendSummary(summary: string) {
-    const opts = this.d.config().luna.summary_to_owner;
-    const verdict = this.orch.lastClassification?.verdict;
-    if (!opts.enabled || !this.d.notifier || (verdict && opts.skip_verdicts.includes(verdict))) return;
-    if (this.d.dryRun) return this.note("info", "summary not sent to the owner (dry run)");
-    const secs = this.answeredAt ? Math.round((this.endedAt - this.answeredAt) / 1000) : 0;
-    const text = [
-      `📞 ${this.d.meta.from || "unknown caller"} · ${verdict ?? "no verdict"} · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`,
-      summary || "No summary; see the call page.",
-      this.d.callLink?.(this.callId),
-    ].filter(Boolean).join("\n\n");
-    try {
-      await this.d.notifier.send(text.slice(0, MAX_TELEGRAM_CHARS));
-      this.note("info", "summary sent to the owner on Telegram");
-    } catch (err) {
-      this.note("warn", `summary not sent to the owner: ${errMsg(err)}`);
-    }
-  }
 }
-
-/** Telegram's limit for a message's text */
-const MAX_TELEGRAM_CHARS = 4096;
 
 /** Whether `p` settles within `ms` (it is left running either way). */
 async function settlesWithin(p: Promise<unknown>, ms: number): Promise<boolean> {

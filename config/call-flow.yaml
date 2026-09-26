@@ -151,22 +151,10 @@ rules:
     when:
       stage: wrap_up
 
-  # Jev says the owner should hear about this right away: Luna decides whether to message the
-  # owner now and tells the agent what to say. Any verdict short of a confident scam or spam: an
-  # urgent friend stayed "unclear" for two minutes, and someone at the door leaned scam. At 0.8
-  # a caller locked in a car (peak 0.79) got nothing.
-  # Once per call: the call then stays out of the stages it starts from. `genuine` doesn't start
-  # from `urgent`, or the two would take turns; not from `low_confidence` either, where Luna is
-  # already asked on every new caller turn.
-  - stage: urgent
-    when:
-      urgency: { min: 0.7 }
-      stage: [none, resist_manipulation, genuine]
-    then:
-      ask_luna: true
-      tell_live:
-        as: commentary
-        text: "SUPERVISOR: {luna_response}"
+  # Urgent calls have no rule: the owner's Telegram status message gets a notifying alert
+  # instead (telegram.yaml status.urgent_alert). An `urgent` stage here kept Live from ever being
+  # told a call was genuine (a neighbour with a parcel was quizzed until he hung up), and Luna's
+  # urgent guidance had the agent speak of the owner in the third person.
   # A real call that has everything it needs.
   - stage: wrap_up
     when:

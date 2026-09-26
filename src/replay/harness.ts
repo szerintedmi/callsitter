@@ -32,7 +32,7 @@ export const stubAgent: Agent = {
     return { instructions: `(stub Luna: consulted because ${input.reason})`, toolCalls: [] };
   },
   async summarize() {
-    return "(stub summary)";
+    return { text: "(stub summary)" };
   },
 };
 
@@ -68,7 +68,6 @@ export async function replay(opts: {
     classifier: opts.classifier,
     agent: opts.agent ?? stubAgent,
     bus,
-    notifier: { send: async () => {} },
     steer: {
       tellLive: (s) => void appended.push(s.message),
       hangup: async () => {},

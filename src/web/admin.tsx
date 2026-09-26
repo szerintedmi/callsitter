@@ -2,9 +2,17 @@ import { Hono } from "hono";
 import { raw } from "hono/html";
 import type { UpgradeWebSocket } from "hono/ws";
 import type { FC, PropsWithChildren } from "hono/jsx";
+import { describeCosts, describeLunaTokens } from "../core/cost";
 import type { BlobStore, CallRecord, EventBus, Repo } from "../core/ports";
 import type { CallEvent } from "../core/types";
 import type { LogBuffer } from "./debug-log";
+
+/** The call list's cost tooltip: by vendor, with Luna's tokens; calls from before only have the estimate. */
+function costTitle(r: CallRecord): string | undefined {
+  const c = r.costs;
+  if (!c) return r.costUsd != null ? "estimate" : undefined;
+  return `${describeCosts(c)}; Luna ${c.luna.calls} requests, ${describeLunaTokens(c.luna)}; Jev ${c.jevInputTokens} input tokens; Live ${c.liveSeconds} s`;
+}
 
 /** Compiled browser script by file name ("test-call.js"), or undefined; see src/runtime/client-assets.ts. */
 export type ClientAssets = (name: string) => Promise<string | undefined>;
@@ -74,7 +82,9 @@ table.sip{font:12px/1.4 ui-monospace,monospace}table.sip th{white-space:nowrap;c
 .xa{display:block;color:var(--muted);font-size:12px;font-weight:400}.xa i{font-style:normal;white-space:nowrap}
 .ev .line{display:flex;gap:6px;align-items:baseline;white-space:nowrap;min-width:0}.ev .line .txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .ev .txt.struck,.ev.dropped .txt{text-decoration:line-through;opacity:.65}
-.ev.append .b,.ev.luna .b,.ev.tool .b{font-size:13px}.ev.tool .b{color:var(--muted)}
+.ev.append .b,.ev.luna .b,.ev.tool .b,.ev.progress .b{font-size:13px}.ev.tool .b,.ev.progress .b{color:var(--muted)}
+.ev.append.owner .b b{color:var(--agent)}
+.ou{white-space:nowrap}.ou.due{font-weight:600;color:var(--agent)}
 .ev.stage .b{font-size:12px;padding-top:5px;padding-bottom:5px}.ev.stage .b b{color:var(--stage);font-weight:600}
 .ev.note .b{font-size:12px;color:var(--muted)}.ev.note.warn .b{color:var(--spam)}.ev.note.error .b{color:var(--scam)}
 .ev.end .b,.ev.summary .b{padding-top:8px}
@@ -142,6 +152,10 @@ const Timeline: FC = () => (
           <label>Live context</label>
           <span data-s="ctx">–</span>
         </div>
+        <div>
+          <label>cost</label>
+          <span data-s="cost">–</span>
+        </div>
       </div>
       <div class="row">
         <div>
@@ -155,6 +169,10 @@ const Timeline: FC = () => (
         <div>
           <label>stage</label>
           <span data-s="stage">–</span>
+        </div>
+        <div>
+          <label>owner update</label>
+          <span data-s="owner" title="Jev: has the caller said something new for the owner since the last summary? (luna.yaml progress.when)">–</span>
         </div>
       </div>
       <div class="tl-head">
@@ -250,7 +268,7 @@ export function adminRoutes(d: AdminDeps) {
                   <td>{r.stage ?? "–"}</td>
                   <td>{r.lunaCalls}</td>
                   <td>{fmtDur(r)}</td>
-                  <td>{r.costUsd != null ? `$${r.costUsd.toFixed(3)}` : "–"}</td>
+                  <td title={costTitle(r)}>{r.costUsd != null ? `$${r.costUsd.toFixed(3)}` : "–"}</td>
                 </tr>
               ))}
             </tbody>
@@ -325,7 +343,7 @@ export function adminRoutes(d: AdminDeps) {
             </select>
           </label>
           <label>
-            <input type="checkbox" id="dry" /> Dry-run Luna tools (no Telegram, no hang-up)
+            <input type="checkbox" id="dry" /> Dry-run Luna tools (no Telegram from Luna, no hang-up)
           </label>
           <span class="meter" title="microphone level">
             <i id="meter" />

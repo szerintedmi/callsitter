@@ -11,6 +11,7 @@ import { b64decode, b64encode } from "../src/core/audio";
 import { CallManager } from "../src/core/call-manager";
 import { ConfigStore } from "../src/core/config";
 import { MemoryEventBus } from "../src/core/event-bus";
+import { OwnerDesk } from "../src/core/owner-desk";
 import { attachPersistence } from "../src/core/persist";
 import type { Agent, VoiceAgent, VoiceSessionHandlers } from "../src/core/ports";
 import { clientAssets } from "../src/runtime/client-assets";
@@ -20,7 +21,8 @@ import { BrowserCalls, routeTelephony } from "../src/web/test-call";
 import { loadRepoConfig, scripted } from "./helpers";
 
 // Steel thread with fake vendors: signed webhook → answer → media WS ↔ voice session →
-// Jev tick → tell_live appended → hangup → recording → UI.
+// Jev tick → tell_live appended → the owner steers from Telegram → hangup → summary on the
+// owner's status message → recording → UI.
 
 const dataDir = mkdtempSync(join(tmpdir(), "scamsitter-"));
 const telnyxRequests: { url: string; body: any }[] = [];
@@ -58,7 +60,7 @@ const fakeVoice: VoiceAgent = {
 };
 const fakeAgent: Agent = {
   run: async () => ({ toolCalls: [] }),
-  summarize: async () => "Bank impersonation scam; kept them busy.",
+  summarize: async () => ({ text: "Bank impersonation scam; kept them busy." }),
 };
 
 let server: ReturnType<typeof Bun.serve>;
@@ -66,6 +68,9 @@ let sign: (msg: string) => Promise<string>;
 let repo: SqliteRepo;
 let manager: CallManager;
 let config: ConfigStore;
+let desk: OwnerDesk;
+/** the owner's chat (Telegram) */
+const owner = { sent: [] as { id: number; text: string }[], edits: [] as { id: number; text: string }[] };
 const base = () => `http://127.0.0.1:${server.port}`;
 
 beforeAll(async () => {
@@ -78,6 +83,7 @@ beforeAll(async () => {
   cfg.flow.timing.classify.settle_ms = 100;
   cfg.luna.summarize_on_hangup = true;
   cfg.connection.media_stream.noise_suppression.enabled = true;
+  cfg.telegram.status.min_edit_interval_ms = 0;
   config = new ConfigStore(cfg);
   repo = new SqliteRepo(openSqlite(":memory:"));
   const blobs = new FsBlobStore(dataDir);
@@ -85,9 +91,23 @@ beforeAll(async () => {
   attachPersistence(bus, repo);
   const telnyx = new TelnyxApi({ apiKey: "k", fetch: fakeFetch });
   const browserCalls = new BrowserCalls();
+  desk = new OwnerDesk({
+    bus,
+    chat: {
+      send: async (text) => (owner.sent.push({ id: owner.sent.length + 1, text }), owner.sent.length),
+      edit: async (id, text) => void owner.edits.push({ id, text }),
+      answerButton: async () => {},
+    },
+    config: () => config.get(),
+    clock: { now: () => Date.now() },
+    canSteer: true,
+    steer: (id, text, as) => manager.get(id)?.steerFromOwner(text, as) ?? { ok: false, reason: "not connected" },
+    hangUp: (id) => manager.get(id)?.hangUpFromOwner() ?? { ok: false, reason: "not connected" },
+  });
   manager = new CallManager({
     config: () => config.get(),
     voice: fakeVoice,
+    ownerStatus: () => desk.showsStatus,
     classifier: scripted({ verdict: "scam", confidence: 0.9 }),
     agent: fakeAgent,
     bus,
@@ -116,6 +136,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  desk?.detach();
   server?.stop(true);
   rmSync(dataDir, { recursive: true, force: true });
 });
@@ -213,6 +234,11 @@ describe("steel thread (fake vendors)", () => {
     await until(() => voice.appended.length > 0);
     expect(voice.appended[0]).toContain("This is a scam or spam call.");
 
+    // The owner replies to the call's status message on Telegram → Live.
+    expect(owner.sent[0]!.text).toContain("+447911123456");
+    await desk.onMessage({ messageId: 99, text: "~ask which branch they're calling from", replyTo: owner.sent[0]!.id, date: Date.now() });
+    expect(voice.appended).toContain("SUPERVISOR: ask which branch they're calling from");
+
     ws.close();
   });
 
@@ -230,6 +256,17 @@ describe("steel thread (fake vendors)", () => {
     expect(types).toContain("classification");
     expect(types).toContain("stage");
     expect(types).toContain("call.ended");
+    // The owner's status message ends with the summary and keeps the steering.
+    await until(() => owner.edits.at(-1)?.text.includes("Bank impersonation scam") ?? false);
+    expect(owner.edits.at(-1)!.text).toContain("thinking: ask which branch they're calling from");
+    expect(owner.edits.at(-1)!.text).toMatch(/💰 \$[0-9.]+ \(Live \$[0-9.]+ · Luna \$0\.000 · Jev/);
+    // Stored broken down by vendor.
+    const stored = (await repo.getCall(callId))!;
+    expect(stored.costs).toMatchObject({ lunaUsd: 0, luna: { calls: 0, inputTokens: 0 }, jevInputTokens: 0 });
+    expect(stored.costs!.liveUsd).toBeGreaterThan(0);
+    expect(stored.costUsd).toBe(stored.costs!.totalUsd);
+    const appends = (await repo.listEvents(callId)).map((e) => e.event).filter((e) => e.type === "live.append");
+    expect(appends).toContainEqual(expect.objectContaining({ source: "owner", as: "thinking" }));
   });
 
   test("call.recording.saved → recording downloaded and linked", async () => {

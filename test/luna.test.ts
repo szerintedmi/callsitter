@@ -31,11 +31,8 @@ async function rig(replies: (object | { status: number; error: string })[]) {
     transcript: [{ seq: 1, speaker: "caller", text: "It's Sarah, ask him to call me back.", at: 0, final: true }],
     classification: null,
     reason: "genuine caller",
-    enabledTools: ["send_telegram_to_owner"],
-    tools: {
-      sendTelegramToOwner: async () => "sent",
-      endCall: async () => "ending call",
-    },
+    enabledTools: ["end_call"],
+    tools: { endCall: async () => "ending call" },
     ...p,
   });
   return { agent, requests, input, config };
@@ -43,12 +40,12 @@ async function rig(replies: (object | { status: number; error: string })[]) {
 
 describe("Luna adapter", () => {
   test("a run returns the final response id; tool rounds chain within the run", async () => {
-    const r = await rig([toolCall("r1", "send_telegram_to_owner", { text: "Sarah asks you to call back." }), text("r2", "Say goodbye.")]);
+    const r = await rig([toolCall("r1", "end_call", { reason: "done" }), text("r2", "Say goodbye.")]);
     const res = await r.agent.run(r.input());
     expect(res).toMatchObject({ instructions: "Say goodbye.", responseId: "r2" });
     expect(r.requests[0].previous_response_id).toBeUndefined();
     expect(r.requests[1].previous_response_id).toBe("r1");
-    expect(r.requests[1].input).toEqual([{ type: "function_call_output", call_id: "call_r1", output: "sent" }]);
+    expect(r.requests[1].input).toEqual([{ type: "function_call_output", call_id: "call_r1", output: "ending call" }]);
     // Not inherited along a chain; {current_time} is filled per run.
     expect(new Set(r.requests.map((q) => q.instructions)).size).toBe(1);
     expect(r.requests[0].instructions).toStartWith(r.config.luna.instructions.split("{current_time}")[0]!);
@@ -72,9 +69,52 @@ describe("Luna adapter", () => {
   test("the summary continues Luna's conversation when there is one", async () => {
     const r = await rig([text("s1", "Sarah called; message taken."), text("s2", "Nobody said much.")]);
     const meta = { callId: "c", from: "+441", to: "+442", startedAt: 0 };
-    expect(await r.agent.summarize(meta, [], { previousResponseId: "r2" })).toBe("Sarah called; message taken.");
-    expect(await r.agent.summarize(meta, [])).toBe("Nobody said much.");
+    expect((await r.agent.summarize(meta, [], { previousResponseId: "r2" })).text).toBe("Sarah called; message taken.");
+    expect((await r.agent.summarize(meta, [])).text).toBe("Nobody said much.");
     expect(r.requests.map((q) => q.previous_response_id)).toEqual(["r2", undefined]);
     expect(r.requests[0].instructions).toBe(r.config.luna.summary_instructions);
+  });
+
+  test("the owner's messages are part of every run's context", async () => {
+    const r = await rig([text("r1", "")]);
+    await r.agent.run(r.input({ ownerMessages: ["ask for her number"] }));
+    expect(JSON.stringify(r.requests[0].input)).toContain("- ask for her number");
+  });
+
+  test("progress: a structured summary, open questions, suggestions and alert, not chained", async () => {
+    const suggestions = [{ label: "Call back soon", text: "Tell her you'll call back as soon as you can." }];
+    const r = await rig([text("p1", JSON.stringify({ summary: "Sarah wants a call back.", questions: ["Is he free Tuesday?"], suggestions, alert: true }))]);
+    const out = await r.agent.progress(r.input().meta, r.input().transcript, { ownerMessages: ["be nice"], suggestions: [{ label: "Ask why", text: "Ask what it's about." }] });
+    expect(out).toMatchObject({ summary: "Sarah wants a call back.", questions: ["Is he free Tuesday?"], suggestions, alert: true });
+    const req = r.requests[0];
+    expect(req.text.format).toMatchObject({ type: "json_schema", strict: true, name: "call_progress" });
+    expect(req.previous_response_id).toBeUndefined();
+    expect(req.instructions).toBe(r.config.luna.progress.instructions);
+    expect(req.input).toContain("- be nice");
+    expect(req.input).toContain("- Ask why: Ask what it's about.");
+  });
+
+  test("usage: every response of a run is summed, with the tier it ran on", async () => {
+    const usage = (i: number, c: number, w: number, o: number, r: number) => ({
+      input_tokens: i,
+      input_tokens_details: { cached_tokens: c, cache_write_tokens: w },
+      output_tokens: o,
+      output_tokens_details: { reasoning_tokens: r },
+      total_tokens: i + o,
+    });
+    const r = await rig([
+      { ...toolCall("r1", "end_call", { reason: "x" }), model: "gpt-6-luna", service_tier: "priority", usage: usage(1000, 800, 100, 50, 20) },
+      { ...text("r2", "Ask for a number."), model: "gpt-6-luna", service_tier: "priority", usage: usage(1200, 1000, 0, 30, 10) },
+    ]);
+    const res = await r.agent.run(r.input());
+    expect(res.usage).toEqual({
+      model: "gpt-6-luna",
+      serviceTier: "priority",
+      inputTokens: 2200,
+      cachedTokens: 1800,
+      cacheWriteTokens: 100,
+      outputTokens: 80,
+      reasoningTokens: 30,
+    });
   });
 });

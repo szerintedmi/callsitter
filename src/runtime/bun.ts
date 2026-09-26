@@ -8,13 +8,14 @@ import { OpenAiSip } from "../adapters/openai-live/sip";
 import { OpenAiWebRtc } from "../adapters/openai-live/webrtc";
 import { FsBlobStore } from "../adapters/storage/fs-blob";
 import { openSqlite, SqliteRepo } from "../adapters/storage/sqlite";
-import { TelegramNotifier } from "../adapters/telegram/bot";
+import { TelegramBot } from "../adapters/telegram/bot";
 import { TelnyxApi } from "../adapters/telnyx/api";
 import { TelnyxVerifier } from "../adapters/telnyx/signature";
 import { CallManager } from "../core/call-manager";
 import { GreetingCache } from "../core/greeting";
 import { ConfigStore, loadConfig } from "../core/config";
 import { MemoryEventBus } from "../core/event-bus";
+import { OwnerDesk } from "../core/owner-desk";
 import { attachPersistence } from "../core/persist";
 import { createApp } from "../web/app";
 import { controlRoutes } from "../web/control";
@@ -34,17 +35,33 @@ const configVars = { ownerName: env.OWNER_NAME, agentLanguages: env.AGENT_LANGUA
 const config = new ConfigStore(await loadConfig(new YamlDirSource(env.CONFIG_DIR), configVars));
 if (env.CONFIG_WATCH) watchConfig(env.CONFIG_DIR, config, configVars);
 
-// Telegram to the owner (env.ts checks both are set, or neither); otherwise Luna isn't offered the tool.
-const notifier =
+// Telegram to the owner (env.ts checks both are set, or neither); otherwise there are no status
+// messages or steering, and Luna isn't offered the tool.
+const telegram =
   env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID
-    ? new TelegramNotifier({ botToken: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID })
+    ? new TelegramBot({ botToken: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID })
     : undefined;
-if (!notifier) console.warn("[startup] Telegram to owner disabled (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID not set)");
+if (!telegram) console.warn("[startup] Telegram to owner disabled (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID not set)");
+else if (!telegram.canListen) console.warn("[startup] Telegram steering off: TELEGRAM_CHAT_ID is a channel, which can't message the bot");
+const callLink = env.ADMIN_HOST ? (id: string) => `https://${env.ADMIN_HOST}/calls/${encodeURIComponent(id)}` : undefined;
 
 const repo = new SqliteRepo(openSqlite(join(env.DATA_DIR, "scamsitter.db")));
 const blobs = new FsBlobStore(env.DATA_DIR);
 const bus = new MemoryEventBus();
 const persistence = attachPersistence(bus, repo);
+// Status messages and steering (telegram.yaml). `manager` is only read once a message arrives.
+const desk = telegram
+  ? new OwnerDesk({
+      bus,
+      chat: telegram,
+      config: () => config.get(),
+      clock: { now: () => Date.now() },
+      callLink,
+      canSteer: telegram.canListen,
+      steer: (callId, text, as) => manager.get(callId)?.steerFromOwner(text, as) ?? { ok: false, reason: "the call isn't connected yet" },
+      hangUp: (callId) => manager.get(callId)?.hangUpFromOwner() ?? { ok: false, reason: "the call isn't connected yet" },
+    })
+  : undefined;
 
 const telnyx = new TelnyxApi({ apiKey: env.TELNYX_API_KEY });
 
@@ -81,8 +98,7 @@ const manager = new CallManager({
   classifier: new JevClassifier({ apiKey: env.TYPESAFE_API_KEY }),
   agent: new LunaAgent({ apiKey: env.OPENAI_API_KEY, config: () => config.get().luna }),
   bus,
-  notifier,
-  callLink: env.ADMIN_HOST ? (id) => `https://${env.ADMIN_HOST}/calls/${encodeURIComponent(id)}` : undefined,
+  ownerStatus: desk ? () => desk.showsStatus : undefined,
   telephony: routeTelephony(telnyx, browserCalls, sip),
   clock: { now: () => Date.now() },
   repo,
@@ -118,6 +134,9 @@ const app = createApp({
 await manager.reapOrphans(0, "server restarted");
 setInterval(() => void manager.reapOrphans(60_000, "no media connected within 60 s").catch(console.error), 30_000);
 
+const listening = new AbortController();
+if (telegram?.canListen && desk) void telegram.listen({ message: (m) => desk.onMessage(m), button: (b) => desk.onButton(b) }, listening.signal);
+
 const server = Bun.serve({ port: env.PORT, hostname: env.BIND_HOST, fetch: app.fetch, websocket });
 // Always loopback, whatever BIND_HOST is: in the container only `docker compose exec` reaches it.
 const control = Bun.serve({ port: env.CONTROL_PORT, hostname: "127.0.0.1", fetch: controlRoutes(manager).fetch });
@@ -134,6 +153,8 @@ const shutdown = async (sig: string) => {
   console.log(`[shutdown] ${sig}: hanging up calls and waiting for their wrap-up (${sig} again to force)`);
   // Hangs up live calls and waits for Luna, summaries and recordings, then for them to be stored.
   await manager.stopAll("server shutting down");
+  listening.abort();
+  await desk?.flush();
   await persistence.flush();
   server.stop();
   control.stop();

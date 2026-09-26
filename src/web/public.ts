@@ -110,10 +110,14 @@ export function nextState(prev: PublicState, ev: CallEvent): PublicState | null 
   return null;
 }
 
-/** The most one public call can cost: Live for max_call_seconds plus every Luna call it may make. */
+/**
+ * The most one public call can cost: Live for max_call_seconds plus every Luna call it may make,
+ * including the owner's rolling summaries (luna.yaml progress; counted even without Telegram).
+ */
 export function worstCaseUsd(cfg: AppConfig): number {
   const secs = Math.min(cfg.public.max_call_seconds, cfg.flow.timing.max_call_seconds);
-  return (secs / 60) * cfg.cost.live_usd_per_min + cfg.luna.limits.max_calls * cfg.cost.luna_usd_per_call;
+  const progress = cfg.luna.progress.enabled ? Math.ceil((secs * 1000) / cfg.luna.progress.min_interval_ms) : 0;
+  return (secs / 60) * cfg.cost.live_usd_per_min + (cfg.luna.limits.max_calls + progress) * cfg.cost.luna_usd_per_call;
 }
 
 export interface PublicDeps {

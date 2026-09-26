@@ -1,6 +1,6 @@
 import type { AudioFormat } from "./audio";
 import type { AppConfig, JevConfig, LiveAppend, LunaTool } from "./config";
-import type { CallEvent, CallMeta, CallStatus, Classification, Speaker, ToolCallRecord, TranscriptEntry } from "./types";
+import type { CallCosts, CallEvent, CallMeta, CallStatus, Classification, Speaker, Suggestion, TokenUsage, ToolCallRecord, TranscriptEntry } from "./types";
 
 // Ports: everything core needs from the outside world. Adapters implement these.
 
@@ -80,6 +80,8 @@ export interface ClassifierInput {
   transcript: readonly TranscriptEntry[];
   config: JevConfig;
   signal?: AbortSignal;
+  /** entries (by seq) the owner's last status update covered: Jev sees a marker line after them (jev.yaml owner_update) */
+  ownerUpdatedThrough?: number;
 }
 
 export interface Classifier {
@@ -88,7 +90,6 @@ export interface Classifier {
 
 /** Tools that Luna can call; implemented by the orchestrator per call. */
 export interface ToolContext {
-  sendTelegramToOwner(text: string): Promise<string>;
   endCall(reason: string): Promise<string>;
 }
 
@@ -102,6 +103,25 @@ export interface AgentInput {
   signal?: AbortSignal;
   /** continue this call's agent conversation (from a previous AgentResult), so it sees its earlier guidance and tool calls */
   previousResponseId?: string;
+  /** what the owner has told the agent from Telegram so far, oldest first */
+  ownerMessages?: readonly string[];
+}
+
+/** A rolling summary for the owner while the call goes on. */
+export interface Progress {
+  summary: string;
+  /** what the caller asked that only the owner can answer */
+  questions: string[];
+  /** steering buttons for the owner */
+  suggestions: Suggestion[];
+  /** the owner may want to act while the caller is still on the line */
+  alert: boolean;
+  usage?: TokenUsage;
+}
+
+export interface SummaryResult {
+  text: string;
+  usage?: TokenUsage;
 }
 
 export interface AgentResult {
@@ -110,12 +130,29 @@ export interface AgentResult {
   toolCalls: ToolCallRecord[];
   /** where the next run continues the conversation; only set when the run completed */
   responseId?: string;
+  /** every response of the run, summed */
+  usage?: TokenUsage;
 }
 
 export interface Agent {
   run(input: AgentInput): Promise<AgentResult>;
   /** End-of-call summary; with previousResponseId it also sees the agent's guidance and tool calls. */
-  summarize(meta: CallMeta, transcript: readonly TranscriptEntry[], opts?: { previousResponseId?: string }): Promise<string>;
+  summarize(
+    meta: CallMeta,
+    transcript: readonly TranscriptEntry[],
+    opts?: { previousResponseId?: string; ownerMessages?: readonly string[] },
+  ): Promise<SummaryResult>;
+  /** Rolling summary for the owner's status message (luna.yaml progress); agents without it have none. */
+  progress?(
+    meta: CallMeta,
+    transcript: readonly TranscriptEntry[],
+    opts?: {
+      ownerMessages?: readonly string[];
+      /** the owner's buttons from the previous update, kept unless they no longer fit */
+      suggestions?: readonly Suggestion[];
+      signal?: AbortSignal;
+    },
+  ): Promise<Progress>;
 }
 
 export interface CallRecord {
@@ -135,6 +172,8 @@ export interface CallRecord {
   stage: string | null;
   lunaCalls: number;
   costUsd: number | null;
+  /** costUsd by vendor; null on calls from before costs were recorded (costUsd is an estimate) */
+  costs: CallCosts | null;
   summary: string | null;
   recordingPath: string | null;
 }
@@ -166,9 +205,41 @@ export interface BlobStore {
   get(key: string): Promise<{ body: ReadableStream | Blob; contentType: string } | null>;
 }
 
-/** Sends a message to the phone's owner (the recipient is fixed by the adapter). */
-export interface Notifier {
-  send(text: string): Promise<void>;
+/** How a message to the owner looks, beyond its plain text. */
+export interface MessageLayout {
+  /** ranges of the text shown collapsed, tap to expand (Telegram: expandable_blockquote) */
+  collapsed?: { offset: number; length: number }[];
+  /** buttons under the message, in rows; pressing one comes back as an OwnerButtonPress */
+  buttons?: { label: string; data: string }[][];
+}
+
+/** The owner's chat (Telegram): the recipient is fixed by the adapter. */
+export interface OwnerChat {
+  /** sends a message (plain text) and returns its id */
+  send(text: string, opts?: { replyTo?: number; silent?: boolean; layout?: MessageLayout }): Promise<number>;
+  /** replaces a message's text and layout (buttons left out are removed) */
+  edit(messageId: number, text: string, layout?: MessageLayout): Promise<void>;
+  /** acknowledges a button press, with a short notice shown to the owner */
+  answerButton(pressId: string, notice?: string): Promise<void>;
+}
+
+/** The owner pressed a button under one of our messages. */
+export interface OwnerButtonPress {
+  pressId: string;
+  /** the message the button is on */
+  messageId: number;
+  data: string;
+}
+
+/** A message from the owner's chat. */
+export interface OwnerMessage {
+  messageId: number;
+  /** absent for anything but text (a photo, a voice note…) */
+  text?: string;
+  /** the message it replies to */
+  replyTo?: number;
+  /** when it was sent (epoch ms) */
+  date: number;
 }
 
 export interface EventBus {

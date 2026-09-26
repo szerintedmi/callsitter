@@ -1,4 +1,17 @@
-# Rough per-call cost estimate, shown on the call page and in the logs (not billing).
-live_usd_per_min: 0.05    # gpt-live-1, billed per second
-luna_usd_per_call: 0.01   # rough estimate ($0.10/$0.50 per 1M in/out tokens)
+# Prices for each call's cost, shown on the call page, in the logs and in the owner's final
+# Telegram update (not billing). Luna and Jev are priced from the tokens they report.
+live_usd_per_min: 0.05    # gpt-live-1: "$0.05 per minute, billed per second"
+# GPT-6 Luna, per 1M tokens (developers.openai.com/api/docs/models/gpt-6-luna)
+luna:
+  input_usd_per_mtok: 0.1
+  cached_input_usd_per_mtok: 0.01
+  cache_write_usd_per_mtok: 0.125
+  output_usd_per_mtok: 0.5
+  # "Batch and Flex are priced at 50% of Standard rates. Fast mode is priced at 2x"
+  tier_multipliers:
+    priority: 2
+    fast: 2
+    flex: 0.5
+# Rough cost of one Luna call, for the public page's worst-case budget check only.
+luna_usd_per_call: 0.01
 jev_usd_per_mtok: 0.042   # input tokens; output is free

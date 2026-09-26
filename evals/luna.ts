@@ -7,17 +7,23 @@ import type { Judge } from "./judge";
 import type { Outcome } from "./run";
 
 const dryTools: ToolContext = {
-  sendTelegramToOwner: async () => "sent",
   endCall: async () => "ended (dry run)",
 };
 
-/** One Luna run on the transcript (tools dry-run), graded by the judge. */
+/** One Luna run on the transcript (tools dry-run), or her rolling update for the owner, graded by the judge. */
 export async function runLunaCase(c: LunaCase, cfg: AppConfig, apiKey: string, judge: Judge): Promise<Outcome> {
   const lines = parseLines(c.transcript);
   const transcript: TranscriptEntry[] = lines.map((l, i) => ({ seq: i + 1, speaker: l.speaker, text: l.text, at: i * 3000, final: true }));
   const luna = new LunaAgent({ apiKey, config: () => cfg.luna });
+  const meta = { callId: "eval", from: "+440000000000", to: "+440000000001", startedAt: Date.now() };
+  if (c.run === "progress") {
+    const { usage: _, ...update } = await luna.progress(meta, transcript);
+    const produced = JSON.stringify(update, null, 2);
+    const g = await judge.grade({ conversation: c.transcript.trim(), produced: `Luna's status update for the owner (suggestions become buttons; a tap sends text to the agent):\n${produced}`, passIf: c.pass_if });
+    return { pass: g.pass, detail: g.reason, log: produced };
+  }
   const res = await luna.run({
-    meta: { callId: "eval", from: "+440000000000", to: "+440000000001", startedAt: Date.now() },
+    meta,
     transcript,
     classification: c.jev ? { ...c.jev, answers: {}, latencyMs: 0 } : null,
     reason: c.reason,
