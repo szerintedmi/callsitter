@@ -68,8 +68,11 @@ pull() {
   # Throwaway Docker config: the short-lived GITHUB_TOKEN is never stored on the VPS.
   cfg=$(mktemp -d)
   if [[ -n $token ]]; then
-    printf '%s' "$token" | DOCKER_CONFIG=$cfg docker login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null ||
-      { rm -rf "$cfg"; die "registry login failed"; }
+    # Output only on failure: on success it's just the "stored unencrypted" warning about $cfg,
+    # which is deleted after the pull (and the token expires with the job).
+    local out
+    out=$(printf '%s' "$token" | DOCKER_CONFIG=$cfg docker login ghcr.io -u "$GHCR_USER" --password-stdin 2>&1) ||
+      { rm -rf "$cfg"; die "registry login failed: $out"; }
   fi
   DOCKER_CONFIG=$cfg docker pull -q "$ref" >/dev/null || { rm -rf "$cfg"; die "pull failed: $ref"; }
   rm -rf "$cfg"
