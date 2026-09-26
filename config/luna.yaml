@@ -35,8 +35,8 @@ instructions: |
     gives made-up details that won't work. No wrapping up or taking a message.
 
   Use tools when appropriate:
-  - send_telegram_to_owner: the caller is genuine and {owner_name} should know soon (who, why, how to reach them).
-    Send at most one message per call unless something new and important comes up.
+  - send_telegram_to_owner: only if {owner_name} should act while the caller is still on the line;
+    every call's summary reaches {owner_name} on Telegram anyway.
   - take_message: record the caller's name, how to reach them and message once you have them.
   - end_call: only when the conversation is clearly finished or abusive.
   You may be consulted several times in one call; your earlier guidance and tool results are
@@ -48,22 +48,26 @@ instructions: |
   call. Don't have it say the name {owner_name} unless the
   caller has.
   Current time: {current_time}.
-# After hangup, before the summary: one Luna run that saves the caller's message and messages
-# the owner on Telegram if needed. Nothing goes to Live. `task` is why she is consulted.
+# After hangup, before the summary: one Luna run that saves the caller's message. Nothing goes
+# to Live. `task` is why she is consulted.
 after_call:
   enabled: true
   tools:
     - take_message
-    - send_telegram_to_owner
   # No run when Jev's last verdict is one of these: there's no message to save.
   skip_verdicts: [scam, spam]
   task: >-
     The call has ended. Don't write guidance. If the caller is genuine, record their message with
-    take_message, and message {owner_name} on Telegram if they should know soon. Do nothing for
-    scam or spam calls.
+    take_message. Do nothing for scam or spam calls.
 # End-of-call summary; it continues Luna's conversation, so it sees Luna's guidance and tool calls.
 summarize_on_hangup: true
 summary_instructions: |
-  Summarise this phone call for {owner_name} in 2–3 sentences: who called, what they wanted, and whether it was a scam.
+  Summarise this phone call for {owner_name} in 2–3 sentences: who called, what they wanted, how
+  to reach them if they left a way, and whether it was a scam.
+# The summary is sent to the owner on Telegram with a link to the call page (needs
+# summarize_on_hangup and TELEGRAM_* in .env), unless Jev's last verdict is in skip_verdicts.
+summary_to_owner:
+  enabled: true
+  skip_verdicts: []
 # After hangup, a running Luna call may finish (e.g. send the Telegram message) for up to this long.
 drain_timeout_ms: 60000

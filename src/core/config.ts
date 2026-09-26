@@ -76,19 +76,19 @@ export const LunaConfig = z.object({
     })
     .default({ max_calls: 4, cooldown_ms: 15000 }),
   instructions: z.string().min(1),
-  // After hangup, before the summary: one Luna run that saves the caller's message and messages
-  // the owner on Telegram if needed; nothing goes to Live. `task` is why she is consulted.
+  // After hangup, before the summary: one Luna run that saves the caller's message; nothing goes
+  // to Live. `task` is why she is consulted.
   after_call: z
     .object({
       enabled: z.boolean().default(true),
-      tools: z.array(LunaTool).default(["take_message", "send_telegram_to_owner"]),
+      tools: z.array(LunaTool).default(["take_message"]),
       // No run when Jev's last verdict is one of these: there's no message to save.
       skip_verdicts: z.array(z.enum(["scam", "spam", "genuine", "unclear"])).default(["scam", "spam"]),
       task: z
         .string()
         .min(1)
         .default(
-          "The call has ended. Don't write guidance. If the caller is genuine, record their message with take_message, and message the owner on Telegram if they should know soon. Do nothing for scam or spam calls.",
+          "The call has ended. Don't write guidance. If the caller is genuine, record their message with take_message. Do nothing for scam or spam calls.",
         ),
     })
     .prefault({}),
@@ -96,6 +96,14 @@ export const LunaConfig = z.object({
   summary_instructions: z
     .string()
     .default("Summarise this phone call for the owner in 2–3 sentences: who called, what they wanted, and whether it was a scam."),
+  // The summary goes to the owner on Telegram (with a link to the call page) unless Jev's last
+  // verdict is in skip_verdicts. Needs summarize_on_hangup and Telegram configured.
+  summary_to_owner: z
+    .object({
+      enabled: z.boolean().default(true),
+      skip_verdicts: z.array(z.enum(["scam", "spam", "genuine", "unclear"])).default([]),
+    })
+    .prefault({}),
   // After hangup, a running Luna call may finish (it can still message the owner or take a
   // message) for up to this long before it's cancelled.
   drain_timeout_ms: z.number().int().min(0).default(20000),

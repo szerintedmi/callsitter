@@ -28,6 +28,8 @@ export interface CallSessionDeps {
   bus: EventBus;
   /** messages to the owner; unset turns them off */
   notifier?: Notifier;
+  /** the call's page on the admin UI, linked from the summary sent to the owner */
+  callLink?: (callId: string) => string;
   telephony: Telephony;
   clock: Clock;
   media: MediaChannel;
@@ -550,8 +552,10 @@ export class CallSession {
         this.d.bus.publish({ type: "luna.started", callId: this.callId, at: this.orch.elapsed(), reason, trigger: "summary" });
         const text = await this.d.agent.summarize(this.d.meta, transcript, { previousResponseId: this.orch.lunaResponseId });
         if (text) this.d.bus.publish({ type: "summary", callId: this.callId, at: this.orch.elapsed(), text });
+        await this.sendSummary(text);
       } catch (err) {
         this.note("warn", `summary failed: ${errMsg(err)}`);
+        await this.sendSummary("");
       }
     }
     // The voice session has shut down and handed over its recording (OpenAI SIP). Read again
@@ -559,7 +563,30 @@ export class CallSession {
     await this.voice?.close();
     this._phase = "finalized";
   }
+
+  /** The end-of-call summary to the owner on Telegram (luna.yaml summary_to_owner). */
+  private async sendSummary(summary: string) {
+    const opts = this.d.config().luna.summary_to_owner;
+    const verdict = this.orch.lastClassification?.verdict;
+    if (!opts.enabled || !this.d.notifier || (verdict && opts.skip_verdicts.includes(verdict))) return;
+    if (this.d.dryRun) return this.note("info", "summary not sent to the owner (dry run)");
+    const secs = this.answeredAt ? Math.round((this.endedAt - this.answeredAt) / 1000) : 0;
+    const text = [
+      `📞 ${this.d.meta.from || "unknown caller"} · ${verdict ?? "no verdict"} · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`,
+      summary || "No summary; see the call page.",
+      this.d.callLink?.(this.callId),
+    ].filter(Boolean).join("\n\n");
+    try {
+      await this.d.notifier.send(text.slice(0, MAX_TELEGRAM_CHARS));
+      this.note("info", "summary sent to the owner on Telegram");
+    } catch (err) {
+      this.note("warn", `summary not sent to the owner: ${errMsg(err)}`);
+    }
+  }
 }
+
+/** Telegram's limit for a message's text */
+const MAX_TELEGRAM_CHARS = 4096;
 
 /** Whether `p` settles within `ms` (it is left running either way). */
 async function settlesWithin(p: Promise<unknown>, ms: number): Promise<boolean> {

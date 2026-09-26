@@ -5,7 +5,7 @@ import { MemoryEventBus } from "../src/core/event-bus";
 import type { AppConfig, TellLive } from "../src/core/config";
 import type { Agent, VoiceSessionHandlers } from "../src/core/ports";
 import type { CallEvent } from "../src/core/types";
-import { loadRepoConfig, scripted } from "./helpers";
+import { cls, loadRepoConfig, scripted } from "./helpers";
 
 const FALLBACK = "No specific guidance; carry on naturally.";
 /** A tell_live on the repo's defaults (send: when_agent_idle, max_hold_ms: 8000), unless overridden. */
@@ -17,7 +17,9 @@ const msg = (as: TellLive["as"], text: string, o: Partial<TellLive> = {}): TellL
   ...o,
 });
 
-async function rig(opts: { agent?: Agent; sip?: boolean; afterCall?: boolean; config?: (c: AppConfig) => void } = {}) {
+async function rig(
+  opts: { agent?: Agent; sip?: boolean; afterCall?: boolean; config?: (c: AppConfig) => void } & Pick<CallSessionDeps, "notifier" | "callLink" | "dryRun"> = {},
+) {
   const config = await loadRepoConfig();
   opts.config?.(config);
   config.luna.after_call = { ...config.luna.after_call, enabled: opts.afterCall ?? false };
@@ -58,6 +60,9 @@ async function rig(opts: { agent?: Agent; sip?: boolean; afterCall?: boolean; co
     clock: { now: () => now },
     media: { sendAudio() {}, clear() {}, close() {} },
     mediaViaVoice: opts.sip,
+    notifier: opts.notifier,
+    callLink: opts.callLink,
+    dryRun: opts.dryRun,
   });
   await session.start(opts.sip ? "pcm24" : "pcma");
   return {
@@ -83,6 +88,57 @@ async function rig(opts: { agent?: Agent; sip?: boolean; afterCall?: boolean; co
     prompt: config.flow.silence.tell_live.text,
   };
 }
+
+describe("summary to the owner", () => {
+  async function summaryRig(o: { summarize?: Agent["summarize"]; dryRun?: boolean; config?: (c: AppConfig) => void } = {}) {
+    const sent: string[] = [];
+    const r = await rig({
+      agent: { run: async () => ({ toolCalls: [] }), summarize: o.summarize ?? (async () => "Sarah called about dinner; call her back on 0207 946 0000.") },
+      notifier: { send: async (t) => void sent.push(t) },
+      callLink: (id) => `https://admin.example.com/calls/${id}`,
+      dryRun: o.dryRun,
+      config: o.config,
+    });
+    r.handlers().onTranscriptDelta("caller", "c1", "It's Sarah, please ask him to call me back.");
+    return { ...r, sent };
+  }
+
+  test("after the summary, it goes to the owner with the caller, verdict, length and a link to the call", async () => {
+    const r = await summaryRig();
+    r.session.orch.lastClassification = cls({ verdict: "genuine" });
+    await r.session.stop("caller hung up");
+    expect(r.sent).toHaveLength(1);
+    const [head, summary, link] = r.sent[0]!.split("\n\n");
+    expect(head).toContain("+441");
+    expect(head).toContain("genuine");
+    expect(summary).toBe("Sarah called about dinner; call her back on 0207 946 0000.");
+    expect(link).toBe("https://admin.example.com/calls/c1");
+    expect(r.notes).toContain("summary sent to the owner on Telegram");
+  });
+
+  test("a failed summary still tells the owner about the call", async () => {
+    const r = await summaryRig({ summarize: async () => Promise.reject(new Error("boom")) });
+    await r.session.stop("caller hung up");
+    expect(r.sent).toHaveLength(1);
+    expect(r.sent[0]).toContain("https://admin.example.com/calls/c1");
+  });
+
+  test("nothing is sent for skipped verdicts, on dry runs, or when the caller never spoke", async () => {
+    const skipped = await summaryRig({ config: (c) => (c.luna.summary_to_owner.skip_verdicts = ["scam"]) });
+    skipped.session.orch.lastClassification = cls({ verdict: "scam" });
+    await skipped.session.stop("caller hung up");
+    expect(skipped.sent).toEqual([]);
+
+    const dry = await summaryRig({ dryRun: true });
+    await dry.session.stop("caller hung up");
+    expect(dry.sent).toEqual([]);
+
+    const sent: string[] = [];
+    const silent = await rig({ agent: { run: async () => ({ toolCalls: [] }), summarize: async () => "x" }, notifier: { send: async (t) => void sent.push(t) } });
+    await silent.session.stop("caller hung up");
+    expect(sent).toEqual([]);
+  });
+});
 
 describe("call session over OpenAI SIP (caller audio only reflected by the sideband)", () => {
   /** 100 ms of 24 kHz PCM16LE at a speech-like level (about -12 dBFS). */
@@ -201,7 +257,7 @@ describe("call session: Luna around hangup", () => {
     r.bus.subscribe((e) => void order.push(e.type === "luna.started" ? `luna.started:${e.trigger}` : e.type));
     r.handlers().onTranscriptDelta("caller", "c1", "It's Sarah, please ask him to call me back.");
     await r.session.stop("caller hung up");
-    expect(runs).toEqual([{ reason: r.config.luna.after_call.task, tools: ["take_message"] }]); // no notifier: no Telegram
+    expect(runs).toEqual([{ reason: r.config.luna.after_call.task, tools: ["take_message"] }]);
     expect(order.filter((t) => t.startsWith("luna") || ["tool", "call.ended", "summary"].includes(t))).toEqual([
       "luna.started:after_call",
       "tool",
