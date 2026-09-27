@@ -175,6 +175,9 @@ describe("steel thread (fake vendors)", () => {
       direction: "incoming",
       from: "+447911123456",
       to: "+447700900999",
+      calling_party_type: "pstn",
+      from_sip_uri: "+447911123456@88.215.60.101:5060",
+      client_state: null,
       sip_headers: [{ name: "Diversion", value: "<sip:+447700900111@x>;reason=no-answer" }],
     });
     expect(res.status).toBe(200);
@@ -189,6 +192,8 @@ describe("steel thread (fake vendors)", () => {
     await until(async () => (await repo.listEvents(callId)).some((e) => e.event.type === "sip.headers"));
     const sip = (await repo.listEvents(callId)).find((e) => e.event.type === "sip.headers")!.event;
     expect(sip).toMatchObject({ source: "telnyx", headers: [{ name: "Diversion", value: "<sip:+447700900111@x>;reason=no-answer" }] });
+    // The rest of call.initiated, minus what the call row already has.
+    expect((sip as { info?: Record<string, string> }).info).toEqual({ calling_party_type: "pstn", from_sip_uri: "+447911123456@88.215.60.101:5060" });
   });
 
   test("call.answered → noise suppression and dual-channel recording started", async () => {
@@ -244,7 +249,14 @@ describe("steel thread (fake vendors)", () => {
   });
 
   test("call.hangup → call ended, summary stored", async () => {
-    await webhook("call.hangup", { call_control_id: ccid, client_state: btoa(JSON.stringify({ callId })), hangup_cause: "normal_clearing", hangup_source: "caller" });
+    await webhook("call.hangup", {
+      call_control_id: ccid,
+      client_state: btoa(JSON.stringify({ callId })),
+      hangup_cause: "normal_clearing",
+      hangup_source: "caller",
+      sip_hangup_cause: "16",
+      call_quality_stats: { inbound: { mos: "4.50", jitter_max_variance: "33.30" } },
+    });
     await until(async () => (await repo.getCall(callId))?.summary != null);
     const call = (await repo.getCall(callId))!;
     expect(call.status).toBe("ended");
@@ -268,6 +280,21 @@ describe("steel thread (fake vendors)", () => {
     expect(stored.costUsd).toBe(stored.costs!.totalUsd);
     const appends = (await repo.listEvents(callId)).map((e) => e.event).filter((e) => e.type === "live.append");
     expect(appends).toContainEqual(expect.objectContaining({ source: "owner", as: "thinking" }));
+    // Telnyx's account of the hangup is kept whatever ended the call here.
+    const hangup = (await repo.listEvents(callId)).map((e) => e.event).find((e) => e.type === "carrier.hangup");
+    expect(hangup).toMatchObject({
+      info: { hangup_cause: "normal_clearing", hangup_source: "caller", sip_hangup_cause: "16", "call_quality_stats.inbound.mos": "4.50", "call_quality_stats.inbound.jitter_max_variance": "33.30" },
+    });
+  });
+
+  test("call.cost after the call → the carrier's bill added to the stored costs", async () => {
+    const before = (await repo.getCall(callId))!.costs!;
+    await webhook("call.cost", { call_control_id: ccid, client_state: btoa(JSON.stringify({ callId })), total_cost: "0.0225", currency: "USD" });
+    await until(async () => (await repo.getCall(callId))?.costs?.carrierUsd !== undefined);
+    const call = (await repo.getCall(callId))!;
+    expect(call.costs).toMatchObject({ liveUsd: before.liveUsd, carrierUsd: 0.0225 });
+    expect(call.costs!.totalUsd).toBeCloseTo(before.totalUsd + 0.0225, 6);
+    expect(call.costUsd).toBe(call.costs!.totalUsd);
   });
 
   test("call.recording.saved → recording downloaded and linked", async () => {
@@ -298,6 +325,8 @@ describe("telephony failures", () => {
     await until(async () => (await repo.findByCallControlId("v3:gone"))?.status === "ended");
     const call = (await repo.findByCallControlId("v3:gone"))!;
     expect(call.endReason).toBe("answer failed: Telnyx answer: 422 Call has already ended (90018)");
+    // No SIP headers: still recorded, so the call page can say none arrived.
+    expect((await repo.listEvents(call.id)).map((e) => e.event)).toContainEqual(expect.objectContaining({ type: "sip.headers", headers: [] }));
     const notes = (await repo.listEvents(call.id)).map((e) => e.event).filter((e) => e.type === "note");
     expect(notes.some((n) => n.type === "note" && n.level === "error" && n.message.includes("90018"))).toBe(true);
   });

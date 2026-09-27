@@ -2,6 +2,7 @@
 
 import type { CallEvent, SipHeader } from "../../core/types";
 import { TEST_CALL_PROTOCOL } from "../test-call-protocol";
+import { createCallInfo, isCallInfo, type CallInfoEvent } from "./call-info";
 import { createTimeline, type Timeline } from "./timeline";
 import { wsUrl } from "./ws";
 
@@ -40,6 +41,7 @@ const V = (document.currentScript as HTMLScriptElement | null)?.src.split("?")[1
 const startBtn = $<HTMLButtonElement>("start"), hangupBtn = $<HTMLButtonElement>("hangup"), dry = $<HTMLInputElement>("dry");
 const statusEl = $("status"), meter = $("meter"), link = $("calllink");
 const route = $<HTMLSelectElement>("route");
+const info = createCallInfo($("callinfo"));
 let timeline: Timeline | null = null, ws: WebSocket | null = null, ctx: AudioContext | null = null, stream: MediaStream | null = null;
 let capture: AudioWorkletNode | null = null, player: AudioWorkletNode | null = null, upLast = 0, upPos = 0;
 let userHungUp = false;
@@ -52,6 +54,7 @@ function status(s: string) {
 
 function newTimeline() {
   $("rows").innerHTML = "";
+  info.clear();
   timeline?.destroy();
   return (timeline = createTimeline($("timeline")));
 }
@@ -302,27 +305,22 @@ function watchCall(nonce: string, tl: Timeline) {
         clearInterval(pollTimer);
         pollTimer = null;
         dbg("info", "webhook matched: call " + j.callId);
-        fetch("/calls/" + j.callId + "/sip-headers")
+        fetch("/calls/" + j.callId + "/call-info")
           .then((r) => (r.ok ? r.json() : []))
-          .then((sets: SipHeadersEvent[]) => sets.forEach(logSipHeaders))
+          .then((evs: CallInfoEvent[]) => evs.forEach(info.add))
           .catch(() => {});
         link.innerHTML = '<a href="/calls/' + j.callId + '">call record</a>';
         events = new WebSocket(wsUrl("/ws?callId=" + j.callId));
         events.onmessage = (m) => {
           const ev = JSON.parse(m.data) as CallEvent;
           tl.on(ev);
+          if (isCallInfo(ev)) info.add(ev);
           if (ev.type === "note") dbg(ev.level, "call note: " + ev.message);
           if (ev.type === "summary") stop("call ended");
         };
       })
       .catch(() => {});
   }, 500);
-}
-
-type SipHeadersEvent = Extract<CallEvent, { type: "sip.headers" }>;
-function logSipHeaders(ev: SipHeadersEvent) {
-  dbg("info", "SIP headers from " + ev.source + (ev.mediaSecurity ? " (media " + ev.mediaSecurity + ")" : "") + ":");
-  ev.headers.forEach((h) => dbg("info", "  " + h.name + ": " + h.value));
 }
 
 /** Describes a Telnyx call update: state plus any cause / SIP code the SDK reports. */

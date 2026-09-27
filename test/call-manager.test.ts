@@ -64,6 +64,30 @@ describe("call manager", () => {
     expect(call?.summary).toBe("Sarah called about dinner.");
   });
 
+  test("the carrier's bill, arriving during the wrap-up, stays in the final costs", async () => {
+    let release!: () => void;
+    const usage = { model: "gpt-6-luna", inputTokens: 1_000_000, cachedTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0 };
+    const r = await rig({
+      run: async () => ({ toolCalls: [] }),
+      summarize: async () => (await new Promise<void>((res) => (release = res)), { text: "Sarah called.", usage }),
+    });
+    const s = await r.manager.attachMedia("c1", NO_MEDIA, "pcma");
+    s.orch.onTranscriptDelta("caller", "u1", "It's Sarah.");
+    void s.stop("caller hung up");
+    while (r.manager.get("c1")) await Bun.sleep(1); // ended; the summary is still running
+    await r.manager.carrierCost("c1", 0.02);
+    await r.persistence.flush();
+    expect((await r.repo.getCall("c1"))?.costs?.carrierUsd).toBe(0.02);
+    release();
+    await s.finished;
+    await r.persistence.flush();
+    // The summary's costs event (Luna priced in) still has the carrier's bill.
+    const costs = (await r.repo.getCall("c1"))!.costs!;
+    expect(costs.lunaUsd).toBeGreaterThan(0);
+    expect(costs).toMatchObject({ carrierUsd: 0.02 });
+    expect(costs.totalUsd).toBeCloseTo(costs.liveUsd + costs.lunaUsd + costs.jevUsd + 0.02, 6);
+  });
+
   test("no new session starts once shutdown has begun", async () => {
     const r = await rig();
     const attach = r.manager.attachMedia("c1", NO_MEDIA, "pcma"); // still reading the call record

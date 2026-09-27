@@ -66,6 +66,8 @@ export interface CallCosts {
   /** every Luna call: guidance, rolling summaries and the end-of-call summary */
   lunaUsd: number;
   jevUsd: number;
+  /** the carrier's bill for the phone leg (Telnyx call.cost), once it has arrived after the hangup */
+  carrierUsd?: number;
   totalUsd: number;
   luna: { calls: number; inputTokens: number; cachedTokens: number; cacheWriteTokens: number; outputTokens: number; reasoningTokens: number };
   jevInputTokens: number;
@@ -203,7 +205,11 @@ export type CallEvent =
       headers: SipHeader[];
       /** OpenAI: media protection negotiated on the SIP leg (srtp | rtp) */
       mediaSecurity?: string;
-    };
+      /** Telnyx: the rest of call.initiated (party type, SIP URIs, codecs, session and leg ids), by field name */
+      info?: Record<string, string>;
+    }
+  /** the carrier's account of the hangup (Telnyx call.hangup: cause, who hung up, SIP code, call quality), by field name */
+  | { type: "carrier.hangup"; callId: string; at: number; source: "telnyx"; info: Record<string, string> };
 
 /** A SIP INVITE header as a vendor reports it (untrusted call metadata). */
 export interface SipHeader {

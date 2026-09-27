@@ -203,10 +203,12 @@ describe("OpenAI SIP (fake OpenAI)", () => {
     // Every header is kept for the call page's (collapsed) SIP headers section.
     const stored = (await repo.listEvents(call.id)).map((e) => e.event).find((e) => e.type === "sip.headers");
     expect(stored).toMatchObject({ source: "openai", mediaSecurity: "srtp", headers });
-    expect(await (await fetch(`${base()}/calls/${call.id}/sip-headers`)).json()).toMatchObject([{ source: "openai", headers }]);
+    expect(await (await fetch(`${base()}/calls/${call.id}/call-info`)).json()).toMatchObject([{ source: "openai", headers }]);
     const page = await (await fetch(`${base()}/calls/${call.id}`)).text();
-    expect(page).toMatch(/<details class="debug"><summary>SIP headers \(3\)/);
-    expect(page).toContain("reason=no-answer");
+    // The page's script renders them (src/web/client/call-info.ts), from these and from live events.
+    expect(page).toContain('<div id="callinfo"></div>');
+    const initial = JSON.parse(page.match(/<script id="initial" type="application\/json">(.*?)<\/script>/s)![1]!);
+    expect(initial).toContainEqual(expect.objectContaining({ type: "sip.headers", headers }));
   });
 
   test("caller transcript over the sideband → Jev → tell_live appended over the sideband", async () => {

@@ -1,5 +1,6 @@
 import type { AudioFormat } from "./audio";
 import { CallSession, type CallSessionDeps } from "./call-session";
+import { withCarrier } from "./cost";
 import type { BlobStore, EventBus, MediaChannel, Repo, VoiceAgent } from "./ports";
 import type { CallMeta, SipHeader } from "./types";
 
@@ -24,6 +25,8 @@ export const NO_MEDIA: MediaChannel = { sendAudio() {}, clear() {}, close() {} }
 
 export class CallManager {
   private sessions = new Map<string, CallSession>();
+  /** sessions whose call has ended but whose wrap-up (the summary) is still running */
+  private wrapping = new Map<string, CallSession>();
   /** calls whose session is being set up (before it's in `sessions`), so a second attach waits for it */
   private attaching = new Map<string, Promise<CallSession>>();
   /** work that outlives a call's session (its wrap-up, saving recordings); shutdown waits for it */
@@ -130,7 +133,11 @@ export class CallManager {
       onStopped: () => {
         if (this.sessions.get(callId) === session) this.sessions.delete(callId);
         // The summary is still to come.
-        if (session.finished) this.track(session.finished);
+        if (session.finished) {
+          this.wrapping.set(callId, session);
+          const unwrap = () => void (this.wrapping.get(callId) === session && this.wrapping.delete(callId));
+          this.track(session.finished).then(unwrap, unwrap);
+        }
       },
     });
     this.sessions.set(callId, session);
@@ -175,13 +182,40 @@ export class CallManager {
     }
   }
 
-  /** Records the SIP headers a call arrived with (shown in the call page's debug section). */
-  async sipHeaders(callId: string, source: "openai" | "telnyx", headers: SipHeader[], mediaSecurity?: string) {
-    if (!headers.length && !mediaSecurity) return;
+  /**
+   * Records the SIP headers a call arrived with and the carrier's other call metadata (the call
+   * page's call info). Recorded even when there are none, so the page can say so.
+   */
+  async sipHeaders(callId: string, source: "openai" | "telnyx", headers: SipHeader[], extra: { mediaSecurity?: string; info?: Record<string, string> } = {}) {
+    const at = await this.elapsed(callId);
+    if (at === null) return;
+    const { mediaSecurity, info } = extra;
+    this.d.bus.publish({ type: "sip.headers", callId, at, source, headers, ...(mediaSecurity ? { mediaSecurity } : {}), ...(info ? { info } : {}) });
+  }
+
+  /** Records the carrier's account of the hangup; it often arrives after the call has ended here. */
+  async carrierHangup(callId: string, info: Record<string, string>) {
+    const at = await this.elapsed(callId);
+    if (at !== null) this.d.bus.publish({ type: "carrier.hangup", callId, at, source: "telnyx", info });
+  }
+
+  /**
+   * Adds the carrier's bill for the phone leg to the call's costs. It arrives after the hangup:
+   * a session that is still wrapping up takes it into its final costs; after that, it goes onto
+   * the stored ones.
+   */
+  async carrierCost(callId: string, usd: number) {
+    const session = this.sessions.get(callId) ?? this.wrapping.get(callId);
+    if (session) return session.setCarrierCost(usd);
     const call = await this.d.repo.getCall(callId);
-    if (!call) return;
-    const at = Math.max(0, this.d.clock.now() - call.startedAt);
-    this.d.bus.publish({ type: "sip.headers", callId, at, source, headers, ...(mediaSecurity ? { mediaSecurity } : {}) });
+    if (!call?.costs) return; // never connected, or from before costs were recorded
+    this.d.bus.publish({ type: "costs", callId, at: Math.max(0, this.d.clock.now() - call.startedAt), costs: withCarrier(call.costs, usd) });
+  }
+
+  /** ms since the call started, or null for an unknown call */
+  private async elapsed(callId: string): Promise<number | null> {
+    const call = await this.d.repo.getCall(callId);
+    return call ? Math.max(0, this.d.clock.now() - call.startedAt) : null;
   }
 
   /** Records a note on a call, e.g. a telephony error outside the voice session. */

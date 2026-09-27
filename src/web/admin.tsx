@@ -4,7 +4,6 @@ import type { UpgradeWebSocket } from "hono/ws";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { describeCosts, describeLunaTokens } from "../core/cost";
 import type { BlobStore, CallRecord, EventBus, Repo } from "../core/ports";
-import type { CallEvent } from "../core/types";
 import type { LogBuffer } from "./debug-log";
 
 /** The call list's cost tooltip: by vendor, with Luna's tokens; calls from before only have the estimate. */
@@ -194,37 +193,6 @@ const Timeline: FC = () => (
 /** Changes on every server start, so the pages never run a stale cached script. */
 const BUILD = Date.now().toString(36);
 
-/** The SIP headers the call arrived with, collapsed (debugging caller ID, diversion, carrier headers). */
-const SipHeaders: FC<{ events: CallEvent[] }> = ({ events }) => {
-  const sets = events.filter((e): e is Extract<CallEvent, { type: "sip.headers" }> => e.type === "sip.headers");
-  if (!sets.length) return null;
-  return (
-    <details class="debug">
-      <summary>
-        SIP headers ({sets.reduce((n, e) => n + e.headers.length, 0)})
-      </summary>
-      {sets.map((e) => (
-        <div class="wrap">
-          <p class="muted">
-            from {e.source === "openai" ? "OpenAI (live.transport.incoming)" : "Telnyx (call.initiated)"}
-            {e.mediaSecurity && ` · media ${e.mediaSecurity}`}
-          </p>
-          <table class="sip">
-            <tbody>
-              {e.headers.map((h) => (
-                <tr>
-                  <th>{h.name}</th>
-                  <td>{h.value}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ))}
-    </details>
-  );
-};
-
 const js = (body: string) => new Response(body, { headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-cache" } });
 
 export function adminRoutes(d: AdminDeps) {
@@ -299,7 +267,7 @@ export function adminRoutes(d: AdminDeps) {
           </p>
           {call.summary && <p>{call.summary}</p>}
           {call.recordingPath && <audio controls preload="none" src={`/recordings/${call.id}`} />}
-          <SipHeaders events={events} />
+          <div id="callinfo" />
           <Timeline />
         </div>
         <script id="initial" type="application/json">
@@ -310,10 +278,10 @@ export function adminRoutes(d: AdminDeps) {
     );
   });
 
-  // The SIP headers a call arrived with (the test-call page subscribes too late to see the event).
-  app.get("/calls/:id/sip-headers", async (c) => {
+  // The call info so far: SIP headers and carrier metadata (the test-call page subscribes too late to see them).
+  app.get("/calls/:id/call-info", async (c) => {
     const events = (await d.repo.listEvents(c.req.param("id"))).map((e) => e.event);
-    return c.json(events.filter((e) => e.type === "sip.headers"));
+    return c.json(events.filter((e) => e.type === "sip.headers" || e.type === "carrier.hangup"));
   });
 
   app.get("/assets/:name", async (c) => {
@@ -354,6 +322,7 @@ export function adminRoutes(d: AdminDeps) {
           <span id="calllink" />
         </div>
         <audio id="remote" autoplay />
+        <div id="callinfo" />
         <details class="debug">
           <summary>
             Debug log<span id="debugcount" /> <a href="#" id="debugclear">clear</a>
