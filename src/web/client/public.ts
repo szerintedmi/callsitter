@@ -15,6 +15,11 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 const base = document.body.dataset.base || "/";
 let lobby = JSON.parse($("lobby").textContent || "{}") as Lobby;
 const LABEL: Record<Game, string> = { scam: "SCAM ME", get_through: "GET THROUGH" };
+/** A game's start page: how to play, and what the leaderboard ranks. */
+const HOW: Record<Game, { play: string; board: string }> = {
+  scam: { play: "Pick your goal, then pull it off without the bot catching on.", board: "LONGEST SCAM UNDETECTED WINS" },
+  get_through: { play: "Pick your goal, then get the bot to pass on your message.", board: "FASTEST TO GET THROUGH WINS" },
+};
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -123,9 +128,9 @@ function drawDetail(g: Game, dir = 0) {
   const d = split.querySelector<HTMLElement>(`[data-detail="${g}"]`)!;
   if (!d.firstChild) {
     d.innerHTML =
-      `<div class="car"><button class="car-arr" type="button" data-step="-1" aria-label="Previous goal">◂</button>` +
+      `<p class="how">${HOW[g].play}</p><span class="lbl">YOUR GOAL</span><div class="car"><button class="car-arr" type="button" data-step="-1" aria-label="Previous goal">◂</button>` +
       `<div class="card" aria-live="polite"></div><button class="car-arr" type="button" data-step="1" aria-label="Next goal">▸</button></div>` +
-      `<div class="dots"></div><ol class="board"></ol><button class="btn" type="button" data-start>START</button>`;
+      `<div class="dots"></div><span class="lbl">${HOW[g].board}</span><ol class="board"></ol><button class="btn" type="button" data-start>START</button>`;
     let x0: number | null = null;
     const card = d.querySelector<HTMLElement>(".card")!;
     card.addEventListener("pointerdown", (e) => (x0 = e.clientX));
@@ -392,7 +397,7 @@ function drawClock() {
   if (mode === "scam") {
     // The score clock runs from the move until caught.
     const caught = state.caughtAt, move = state.goalAt;
-    $("c-lbl").textContent = caught !== null ? "NOW WASTING YOUR TIME" : move === null ? "MAKE YOUR MOVE" : "UNDETECTED";
+    $("c-lbl").textContent = caught !== null ? "NOW WASTING YOUR TIME" : move === null ? "MAKE YOUR MOVE" : "SCAM UNDETECTED";
     $("c-time").textContent = mmss(caught !== null ? t - caught : move === null ? 0 : t - move);
   } else {
     const done = delivered(state);
@@ -439,7 +444,7 @@ function drawResult(r: Result) {
     ? scored ? (caught === null ? "NEVER CAUGHT!" : "GAME OVER") : "NO SCORE"
     : scored ? "GOT THROUGH!" : "HUNG UP";
   $("r-lbl").hidden = !scored;
-  $("r-lbl").textContent = scam ? "UNDETECTED FOR" : "GOT THROUGH IN";
+  $("r-lbl").textContent = scam ? "SCAM UNDETECTED FOR" : "GOT THROUGH IN";
   $("r-time").classList.remove("wait");
   $("r-time").textContent = scored ? mmss(r.scoreMs!) : "--:--";
   // Only why there's no score: a score's place is on the board below.

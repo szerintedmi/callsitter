@@ -390,8 +390,8 @@ export function publicRoutes(d: PublicDeps) {
 /** Changes on every server start, so the page never runs a stale cached script. */
 const BUILD = Date.now().toString(36);
 
-// An arcade game-select screen: a red half (Scam me) and a green half (Get through), with the
-// scammer-time-wasted scoreboard on the seam. Fonts: Jersey 10 (display), Pixelify Sans (text).
+// An arcade game-select screen: the scammer-time-wasted scoreboard on top, then a red half (Scam
+// me) and a green half (Get through). Fonts: Jersey 10 (display), Pixelify Sans (text).
 const css = `
 :root{color-scheme:dark;--ink:#0e0d10;--ink2:#1b1a20;--line:#2c2a33;--paper:#fff6ec;--dim:#8d8994;
 --red:#d8281f;--red-hi:#ff5a4e;--red-dk:#7d110b;--grn:#35d07a;--grn-ink:#04230f;--grn-hi:#5fe08a;--amb:#ffb000;
@@ -420,6 +420,15 @@ canvas.sprite{image-rendering:pixelated;display:block;flex:none;height:auto}
 .chip small{font-size:18px;color:var(--dim);margin-right:6px}
 .chip:hover{box-shadow:inset 0 0 0 2px var(--amb)}
 .band .chip{position:absolute;right:12px;bottom:8px}
+.hero{flex-direction:column;gap:clamp(6px,1.4vh,12px);text-align:center}
+.hero .chip{top:max(10px,env(safe-area-inset-top));bottom:auto}
+.hero p{margin:0}
+.tagline{font-family:var(--disp);font-size:clamp(22px,3.6vh,36px);line-height:1;letter-spacing:.04em;text-wrap:balance}
+.wasted{display:flex;flex-direction:column;align-items:center;gap:4px}
+.wasted b{font-family:var(--disp);font-weight:400;font-size:clamp(44px,9vh,96px);line-height:.85;color:var(--amb);font-variant-numeric:tabular-nums;text-shadow:0 0 24px rgba(255,176,0,.25)}
+.wasted span{font-family:var(--disp);font-size:clamp(16px,2.4vh,20px);letter-spacing:.06em;line-height:1;color:var(--dim)}
+#s-home:not(:has(.split[data-active])) .hero{padding-bottom:calc(clamp(22px,3.4vh,28px) + 28px)}
+#s-home:has(.split[data-active]) .hero :is(.tagline,.wasted){display:none}
 .foot{font-family:var(--disp);font-size:clamp(20px,3.4vh,26px);letter-spacing:.04em;padding:10px 16px;padding-bottom:max(10px,env(safe-area-inset-bottom));text-align:center}
 .board{list-style:none;margin:0;padding:8px 14px;width:100%;font-family:var(--disp);font-variant-numeric:tabular-nums;font-size:clamp(20px,3.1vh,24px);line-height:1;letter-spacing:.05em;text-align:left;background:var(--m-shade)}
 .board li{display:grid;grid-template-columns:2.4ch 1fr auto;gap:12px;align-items:baseline;padding:3px 4px}
@@ -437,25 +446,25 @@ canvas.sprite{image-rendering:pixelated;display:block;flex:none;height:auto}
 .half.get_through{--bg:var(--grn);--fg:var(--grn-ink);--hi:var(--grn-hi);--shade:rgba(4,35,15,.12)}
 .half h2{margin:0;font-family:var(--disp);font-weight:400;font-size:clamp(46px,min(10vw,10vh),96px);line-height:.85;text-shadow:3px 3px 0 rgba(0,0,0,.18)}
 .half.get_through h2{text-shadow:none}
-.half .goal{margin:0;font-size:clamp(18px,2.8vh,22px);font-weight:600}
+.half .goal{margin:0;font-size:clamp(18px,2.8vh,22px);font-weight:600;text-wrap:balance}
 .half .tap{font-family:var(--disp);font-size:clamp(20px,3.2vh,26px);animation:blink 1.1s steps(2) infinite}
 .half canvas.sprite{width:clamp(56px,13vh,126px)}
 .half .board{--m-shade:var(--shade)}
 .half.get_through .board li.you{color:var(--grn-hi)}
 .half .x{position:absolute;top:10px;right:12px;font-family:var(--disp);font-size:26px;padding:2px 8px}
 .detail{display:flex;flex-direction:column;align-items:center;gap:clamp(8px,1.6vh,14px);width:100%;max-width:360px}
-.badge{position:absolute;left:50%;top:22px;transform:translateX(-50%);z-index:2;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 18px 10px;background:var(--ink);color:var(--paper);box-shadow:5px 5px 0 rgba(0,0,0,.28);pointer-events:none;transition:opacity .2s}
-.badge b{font-family:var(--disp);font-weight:400;font-size:clamp(36px,6vh,52px);line-height:.9;color:var(--amb);font-variant-numeric:tabular-nums}
-.badge span{font-family:var(--disp);font-size:clamp(17px,2.6vh,21px);letter-spacing:.06em;line-height:1}
+.detail .how{margin:0 0 clamp(4px,1vh,10px);font-size:clamp(15px,2.3vh,18px);font-weight:600;line-height:1.3;max-width:30ch;text-wrap:balance}
+.detail .lbl{margin-bottom:calc(-1 * clamp(2px,.8vh,8px));font-family:var(--disp);font-size:clamp(18px,2.8vh,22px);line-height:1;letter-spacing:.05em;opacity:.75}
+.ask{position:absolute;left:50%;top:0;transform:translate(-50%,-50%);z-index:2;margin:0;padding:7px 16px 9px;background:var(--amb);color:var(--ink);box-shadow:5px 5px 0 rgba(0,0,0,.28);font-family:var(--disp);font-size:clamp(22px,3.4vh,28px);line-height:1;letter-spacing:.04em;text-align:center;white-space:nowrap;pointer-events:none}
 .split:not([data-active]) .detail,.split:not([data-active]) .x{display:none}
-.split[data-active] .badge{opacity:0}
+.split[data-active] .ask{display:none}
 .split[data-active] .half{flex:0 0 72px;padding:8px}
 .split[data-active] .half.on{flex:1 1 100%;padding:16px;cursor:default}
 .split[data-active] .half.on .tap,.split[data-active] .half.on .goal,.split[data-active] .half.on canvas.sprite{display:none}
 .split[data-active] .half.on h2{font-size:clamp(40px,7vh,64px)}
 .split[data-active] .half:not(.on)>:not(h2){display:none}
 .split[data-active] .half:not(.on) h2{font-size:34px;writing-mode:vertical-rl;transform:rotate(180deg)}
-.split:not([data-active]) .half{padding-top:120px}
+.split:not([data-active]) .half{padding-top:56px}
 .car{display:grid;grid-template-columns:44px 1fr 44px;align-items:stretch;width:100%;touch-action:pan-y}
 .car-arr{font-family:var(--disp);font-size:34px;line-height:1;display:grid;place-items:center}
 .car-arr:hover{background:var(--shade)}
@@ -471,12 +480,14 @@ canvas.sprite{image-rendering:pixelated;display:block;flex:none;height:auto}
 .dots button.on{background-color:var(--fg)}
 @media (max-width:700px){
 .split{flex-direction:column}
-.split:not([data-active]) .half{padding-top:16px}
-.split:not([data-active]) .half.scam{padding-bottom:52px}
-.split:not([data-active]) .half.get_through{padding-top:52px}
-.badge{top:50%;transform:translate(-50%,-50%);flex-direction:row;align-items:baseline;gap:10px;padding:8px 14px;white-space:nowrap}
-.badge b{font-size:clamp(32px,5vh,42px)}
-.badge span{font-size:17px}
+.hero{gap:6px}
+.tagline{font-size:20px}
+.wasted b{font-size:clamp(40px,6.5vh,56px)}
+.split:not([data-active]){flex:1 0 auto}
+.split:not([data-active]) .half{flex:1 0 auto;gap:clamp(4px,1.2vh,10px)}
+.split:not([data-active]) .half.scam{padding-top:44px}
+.split:not([data-active]) .half.get_through{padding-top:16px}
+.half canvas.sprite{width:clamp(44px,8vh,80px)}
 .split[data-active] .half{flex-basis:52px}
 .split[data-active] .half:not(.on) h2{writing-mode:horizontal-tb;transform:none;font-size:30px}
 }
@@ -575,11 +586,14 @@ const page = (base: string, lobby: Lobby) => `<!doctype html>
 <body data-base="${base}" data-mode="scam" class="idle">
 <div id="app">
   <section class="scr" id="s-home">
-    <header class="band"><h1><button type="button" data-home>SCAMSITTER</button></h1><button class="chip" type="button" data-chip hidden></button></header>
-    <div class="split" id="split">${half("scam", "SCAM ME", "Don't get caught.", "bandit")}${half("get_through", "GET THROUGH", "Reach me. Fast.", "caller")}
-      <div class="badge"><b id="wasted">0:00:00</b><span>SCAMMER TIME WASTED</span></div>
+    <header class="band hero">
+      <h1><button type="button" data-home>SCAMSITTER</button></h1><button class="chip" type="button" data-chip hidden></button>
+      <p class="tagline">WASTE THE TIME OF SCAMMERS WHO CALL YOU</p>
+      <p class="wasted"><b id="wasted">0:00:00</b><span>SCAMMER TIME WASTED SO FAR</span></p>
+    </header>
+    <div class="split" id="split">
+      <p class="ask">CAN YOU FOOL THE BOT<br>THAT ANSWERS MY PHONE?</p>${half("scam", "SCAM ME", "Be the scammer. Don't get caught.", "bandit")}${half("get_through", "GET THROUGH", "Be a real caller. Reach me fast.", "caller")}
     </div>
-    <footer class="band foot">PLAY NOW. REAL SCAMMERS PAY LATER.</footer>
   </section>
 
   <section class="scr callbg" id="s-call" hidden>
