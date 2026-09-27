@@ -1,10 +1,10 @@
 # The public "Scam me" page on the public host (src/web/public.ts). Anyone with the link can
 # call, so these cap the cost.
 enabled: true            # false: the page says it's closed
-max_call_seconds: 600    # public calls end after 10 min
+max_call_seconds: 900    # public calls end after 15 min
 max_concurrent: 3        # public calls at once
 daily_usd: 10            # estimated spend (cost.yaml) over a rolling 24 h, reserving max_call_seconds per live call
-per_ip_per_day: 10       # calls per client IP over a rolling 24 h (in memory: a restart resets it)
+per_ip_per_day: 20       # calls per client IP over a rolling 24 h (in memory: a restart resets it)
 tools: true             # Luna may message the owner and end the call; false: her tools run dry
 greeting_wait_ms: 3000   # Live greets once the page's audio is connected, or after this long
 phone_number: "+44 20 4620 6827"  # the screener's real number, shown on the page (empty: hidden)

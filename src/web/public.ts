@@ -14,8 +14,8 @@ import type { ClientAssets } from "./admin";
 
 // The public page, at the root of the public host (and at /public on the admin host, as a
 // preview): two games (config/games.yaml, src/core/game.ts). "Scam me": the visitor plays a
-// scammer and tries not to get caught once they've made their move; "Get through": they play a
-// real caller and try to get their message through fast. A referee (src/core/referee.ts) judges
+// scammer who starts the scam and keeps it going, best without getting caught; "Get through":
+// they play a real caller and try to get their message through fast. A referee (src/core/referee.ts) judges
 // the goal; the call itself is handled like any other. The browser talks to Live over WebRTC (adapters/openai-live/webrtc.ts);
 // we only swap the SDP and steer the call over a sideband, like an OpenAI SIP call. Anyone with
 // the link can call, so PublicGate caps calls per IP, calls at once and the estimated daily spend
@@ -110,10 +110,12 @@ export function worstCaseUsd(cfg: AppConfig): number {
 
 /** What the page starts from (embedded in it, and refreshed from GET call/lobby after a call). */
 export interface Lobby {
-  games: Record<Game, { id: string; name: string; brief: string; hard: boolean }[]>;
+  games: Record<Game, { id: string; name: string; brief: string; hard: boolean; intro?: string }[]>;
   /** each goal's leaderboard: its top `size` scores (games.yaml leaderboard_size), a player's several too */
   boards: Record<Game, Record<string, BoardEntry[]>>;
   size: number;
+  /** scam: each second before being caught counts this many times (games.yaml) */
+  undetectedMultiplier: number;
   /** SCAMMER TIME WASTED: seconds so far on calls judged scam or spam (public ones too), and how many are live now */
   wasted: { seconds: number; live: number };
 }
@@ -123,7 +125,7 @@ export interface GameResult {
   game: Game;
   goal: string;
   player: string;
-  /** null: no move or no ask before being caught (scam); message never passed on, or caught first (get_through) */
+  /** null: never started the scam (scam); message never passed on, or caught first (get_through) */
   scoreMs: number | null;
   /** the call's length */
   durationMs: number | null;
@@ -182,9 +184,10 @@ export function publicRoutes(d: PublicDeps) {
         void p.watch
           .final()
           .then(async () => {
-            await d.repo.finishPlay(ev.callId, scoreOf(p.game, p.state, ev.at), Date.now());
+            const multiplier = d.config().games.scam.undetected_multiplier;
+            await d.repo.finishPlay(ev.callId, scoreOf(p.game, p.state, ev.at, multiplier), Date.now());
             // On the call's log and the server's, so a missing score can be explained.
-            const line = `game ${p.game}/${p.goal} ${p.player}: ${playSummary(p.game, p.state, ev.at)}`;
+            const line = `game ${p.game}/${p.goal} ${p.player}: ${playSummary(p.game, p.state, ev.at, multiplier)}`;
             log.info(line, { callId: ev.callId });
             await d.manager.note(ev.callId, "info", line);
           })
@@ -195,7 +198,7 @@ export function publicRoutes(d: PublicDeps) {
     }
     if (!p) return;
     if (ev.type === "transcript") {
-      // The referee reads only final transcripts, so it judges each caller turn as its arrives.
+      // The referee reads only final transcripts, so it judges each caller line as it arrives.
       p.watch.add(ev.entry);
       if (ev.entry.final && ev.entry.speaker === "caller" && ev.entry.text) p.watch.check();
       return;
@@ -219,6 +222,7 @@ export function publicRoutes(d: PublicDeps) {
       games: { scam: g.scam.goals, get_through: g.get_through.goals },
       boards,
       size: g.leaderboard_size,
+      undetectedMultiplier: g.scam.undetected_multiplier,
       wasted: { seconds: Math.round((await d.repo.junkCallSeconds()) + liveSeconds), live: live.length },
     };
   }
@@ -310,8 +314,8 @@ export function publicRoutes(d: PublicDeps) {
         game,
         goal,
         config: () => d.config().games.referee,
-        onMet: (question, turn) => {
-          play.state = goalMet(play.state, question, turn);
+        onMet: (line) => {
+          play.state = goalMet(play.state, game, line);
           push(play);
         },
         // On the call's log (the admin call page), for tuning games.yaml.
@@ -528,6 +532,16 @@ body[data-mode="scam"] .modebg h2{text-shadow:3px 3px 0 rgba(0,0,0,.18)}
 .clock{display:flex;flex-direction:column;align-items:center;gap:6px}
 .clock .lbl{font-family:var(--disp);font-size:clamp(22px,3.6vh,28px);line-height:1;letter-spacing:.05em;color:var(--dim)}
 .clock b{font-family:var(--disp);font-weight:400;font-size:clamp(96px,24vh,200px);line-height:.8;color:var(--amb);text-shadow:0 0 24px rgba(255,176,0,.3);font-variant-numeric:tabular-nums}
+.cnum{display:flex;align-items:flex-end;justify-content:center;gap:12px}
+.cside{display:flex;flex-direction:column;align-items:flex-start;gap:clamp(6px,1.4vh,12px);padding-bottom:.1em}
+.cside .pts{font-family:var(--disp);font-size:clamp(32px,6vh,48px);line-height:.8;color:var(--amb)}
+#s-call.caught .cside .pts{color:var(--red-hi)}
+@keyframes throb{50%{transform:rotate(-6deg) scale(1.12)}}
+.xb{font-family:var(--disp);font-size:clamp(40px,7.5vh,64px);line-height:1;padding:2px 12px 6px;transform:rotate(-6deg);background:var(--red);color:var(--paper);box-shadow:0 0 0 3px var(--paper),5px 5px 0 3px rgba(0,0,0,.35);animation:throb 1s ease-in-out infinite}
+.xb:empty{display:none}
+.clock b.pts-mode[data-len="4"]{font-size:min(150px,34vw,18vh)}
+.clock b.pts-mode[data-len="5"]{font-size:min(120px,27vw,15vh)}
+.clock b.msg{font-size:clamp(40px,min(11vw,7vh),60px);line-height:1;color:var(--paper);text-shadow:none;text-align:center;text-wrap:balance;text-transform:uppercase}
 body.connecting .clock .lbl{animation:blink 1.1s steps(2) infinite}
 body.connecting .clock b{opacity:.35}
 .meter{width:100%;display:flex;flex-direction:column;gap:8px}
@@ -537,7 +551,7 @@ body.connecting .clock b{opacity:.35}
 .mbar i.g{background:var(--grn)}.mbar i.s{background:var(--red-hi)}
 .mlbl{display:flex;justify-content:space-between;font-family:var(--disp);font-size:20px;letter-spacing:.06em;line-height:1}
 .mlbl span:first-child{color:var(--grn-hi)}.mlbl span:last-child{color:var(--red-hi)}
-#s-call.caught .clock .lbl,#s-call.caught .clock b{color:var(--red-hi)}
+#s-call.caught #c-lbl,#s-call.caught .clock b{color:var(--red-hi)}
 #s-call.caught .clock b{text-shadow:0 0 24px rgba(255,90,78,.35)}
 #s-call.reached .clock .lbl,#s-call.reached .clock b{color:var(--grn-hi)}
 #s-call.reached .clock b{text-shadow:0 0 24px rgba(95,224,138,.3)}
@@ -550,9 +564,10 @@ body.connecting .clock b{opacity:.35}
 .r-score{display:flex;flex-direction:column;align-items:center;gap:6px}
 .r-score .r-lbl{letter-spacing:.05em;opacity:.7}
 .r-score span:empty{display:none}
+#r-rank{white-space:pre-line}
 .r-score b.wait{animation:blink 1.1s steps(2) infinite}
 .r-score b{font-family:var(--disp);font-weight:400;font-size:clamp(76px,15vh,128px);line-height:.8;font-variant-numeric:tabular-nums}
-.r-score span{font-family:var(--disp);font-size:clamp(22px,3.6vh,28px);letter-spacing:.04em;text-transform:uppercase}
+.r-score span{font-family:var(--disp);font-size:clamp(22px,3.6vh,28px);letter-spacing:.04em;text-transform:uppercase;text-align:center;text-wrap:balance}
 .r-extra{margin:0;display:flex;align-items:center;gap:10px;padding:6px 12px;background:var(--ink);color:var(--amb);font-family:var(--disp);font-size:clamp(20px,3.2vh,24px);letter-spacing:.03em}
 .r-extra canvas.sprite{width:18px}
 .r-btns{display:flex;flex-wrap:wrap;justify-content:center;gap:12px}
@@ -609,7 +624,7 @@ const page = (base: string, lobby: Lobby, phone: string) => `<!doctype html>
     <header class="cbar"><span class="cbrand">SCAMSITTER</span><button class="chip" type="button" data-chip></button></header>
     <div class="cstage">
       <div class="mission" id="mission"><span class="mtab" id="m-tab"></span><span class="card-top"><b id="m-name"></b><span class="hard" id="m-hard" hidden>HARD</span></span><p id="m-brief"></p></div>
-      <div class="clock"><span class="lbl" id="c-lbl">CALLING…</span><b id="c-time">00:00</b></div>
+      <div class="clock"><span class="lbl" id="c-lbl">CALLING…</span><div class="cnum"><b id="c-time">00:00</b><span class="cside" id="c-side" hidden><span class="xb" id="c-x"></span><span class="pts">PTS</span></span></div></div>
       <div class="meter" id="meter"><div class="mbar" id="mbar" aria-hidden="true"></div><div class="mlbl"><span>GENUINE</span><span>SCAM</span></div></div>
       <button class="hang" type="button" id="end" aria-label="Hang up">${hangIcon}</button>
     </div>

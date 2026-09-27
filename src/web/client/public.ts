@@ -4,10 +4,11 @@
 import { dial, type Call, type PlayState } from "./phone";
 
 type Game = "scam" | "get_through";
-interface Goal { id: string; name: string; brief: string; hard: boolean }
+/** `intro`: scam only, how to start it */
+interface Goal { id: string; name: string; brief: string; hard: boolean; intro?: string }
 interface Entry { player: string; scoreMs: number }
 /** src/web/public.ts Lobby */
-interface Lobby { games: Record<Game, Goal[]>; boards: Record<Game, Record<string, Entry[]>>; size: number; wasted: { seconds: number; live: number } }
+interface Lobby { games: Record<Game, Goal[]>; boards: Record<Game, Record<string, Entry[]>>; size: number; undetectedMultiplier: number; wasted: { seconds: number; live: number } }
 /** src/web/public.ts GameResult */
 interface Result { game: Game; goal: string; player: string; scoreMs: number | null; durationMs: number | null; rank: number | null; board: Entry[] }
 
@@ -17,7 +18,10 @@ let lobby = JSON.parse($("lobby").textContent || "{}") as Lobby;
 const LABEL: Record<Game, string> = { scam: "SCAM ME", get_through: "GET THROUGH" };
 /** A game's start page: how to play, and what the leaderboard ranks. */
 const HOW: Record<Game, { play: string; board: string }> = {
-  scam: { play: "Pick your goal, then pull it off without the bot catching on.", board: "LONGEST SCAM UNDETECTED WINS" },
+  scam: {
+    play: `Start your goal by saying who you are. Points count from then, ${lobby.undetectedMultiplier === 2 ? "double" : `×${lobby.undetectedMultiplier}`} until you're caught.`,
+    board: "MOST POINTS WINS",
+  },
   get_through: { play: "Pick your goal, then get the bot to pass on your message.", board: "FASTEST TO GET THROUGH WINS" },
 };
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -25,6 +29,10 @@ const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const pad = (n: number) => String(n).padStart(2, "0");
 const mmss = (ms: number) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${pad(Math.floor(s / 60))}:${pad(s % 60)}`; };
 const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
+/** a scam point: a tenth of a second (src/core/game.ts POINT_MS) */
+const POINT_MS = 100;
+/** A score as the game shows it: scam points, or get through's time. */
+const shown = (g: Game, ms: number) => (g === "scam" ? String(Math.floor(ms / POINT_MS)) : mmss(ms));
 
 // Per-visitor conveniences: the player's name and last goal per game.
 const store = {
@@ -103,15 +111,16 @@ document.querySelectorAll<HTMLCanvasElement>("canvas.sprite").forEach((c) => {
  * `size` rows: the entries, then empty ones. The lobby invites with a blinking "you?" slot; a
  * result highlights `you`, this call's score (added at its rank if below), and nothing without one.
  */
-function boardHTML(entries: readonly Entry[], opts: { invite?: boolean; you?: { player: string; scoreMs: number; rank: number } } = { invite: true }) {
+function boardHTML(g: Game, entries: readonly Entry[], opts: { invite?: boolean; you?: { player: string; scoreMs: number; rank: number } } = { invite: true }) {
   const { you } = opts;
-  const rows = entries.map((e, i) => ({ r: i + 1, n: e.player, t: mmss(e.scoreMs), cls: you && e.player === you.player && e.scoreMs === you.scoreMs ? "you" : "" }));
+  const none = g === "scam" ? "--" : "--:--";
+  const rows = entries.map((e, i) => ({ r: i + 1, n: e.player, t: shown(g, e.scoreMs), cls: you && e.player === you.player && e.scoreMs === you.scoreMs ? "you" : "" }));
   if (you && !rows.some((r) => r.cls)) {
     if (rows.length >= lobby.size) rows.length = lobby.size - 1;
-    rows.push({ r: you.rank, n: you.player, t: mmss(you.scoreMs), cls: "you" });
+    rows.push({ r: you.rank, n: you.player, t: shown(g, you.scoreMs), cls: "you" });
   }
-  if (opts.invite && rows.length < lobby.size) rows.push({ r: rows.length + 1, n: rows.length ? "YOU?" : "BE FIRST", t: "--:--", cls: "you blinky" });
-  while (rows.length < lobby.size) rows.push({ r: rows.length + 1, n: "---", t: "--:--", cls: "empty" });
+  if (opts.invite && rows.length < lobby.size) rows.push({ r: rows.length + 1, n: rows.length ? "YOU?" : "BE FIRST", t: none, cls: "you blinky" });
+  while (rows.length < lobby.size) rows.push({ r: rows.length + 1, n: "---", t: none, cls: "empty" });
   return rows.map((r) => `<li class="${r.cls}"><span class="r">${r.r}</span><span class="n">${esc(r.n)}</span><span class="t">${r.t}</span></li>`).join("");
 }
 
@@ -152,7 +161,7 @@ function drawDetail(g: Game, dir = 0) {
   d.querySelector(".dots")!.innerHTML = lobby.games[g]
     .map((o, i) => `<button type="button" data-i="${i}" class="${i === goalIdx[g] ? "on" : ""}" aria-label="${esc(o.name)}"></button>`)
     .join("");
-  d.querySelector(".board")!.innerHTML = boardHTML(lobby.boards[g][goal.id] ?? []);
+  d.querySelector(".board")!.innerHTML = boardHTML(g, lobby.boards[g][goal.id] ?? []);
 }
 
 function stepGoal(g: Game, dir: number) {
@@ -293,7 +302,7 @@ const segGenuine = [...mbar.children].slice(0, 8).reverse(), segScam = [...mbar.
 
 let call: Call | null = null;
 let goal: Goal = goalOf("scam");
-const FRESH: PlayState = { verdict: null, lean: 0, stage: null, caughtAt: null, goalAt: null, askedAt: null };
+const FRESH: PlayState = { verdict: null, lean: 0, stage: null, caughtAt: null, goalAt: null };
 let state = FRESH;
 /** the goal's leaderboard when the call started, shown while the result is scored */
 let callBoard: Entry[] = [];
@@ -310,7 +319,10 @@ function startGame() {
   $("s-call").classList.remove("caught", "reached");
   $("banner").hidden = true;
   $("c-lbl").textContent = "CALLING…";
-  $("c-time").textContent = "00:00";
+  // Scam shows no counter until the scam has started.
+  $("c-time").textContent = mode === "scam" ? "" : "00:00";
+  $("c-time").className = "";
+  $("c-side").hidden = true;
   drawMeter();
   drawCard();
   const mine = (call = dial({
@@ -322,13 +334,14 @@ function startGame() {
       live = true;
       document.body.className = "live";
       drawClock();
-      tick = setInterval(drawClock, 250);
+      tick = setInterval(drawClock, mode === "scam" ? POINT_MS : 250);
     },
     onState(s) {
       if (call !== mine) return;
       const prev = state;
       state = s;
-      if (mode === "scam" && s.caughtAt !== null && prev.caughtAt === null) flash("CAUGHT!");
+      if (mode === "scam" && s.caughtAt !== null && prev.caughtAt === null) flash("DETECTED!");
+      else if (mode === "scam" && s.goalAt !== null && prev.goalAt === null) flash(s.caughtAt === null ? `SCAM ON! ×${lobby.undetectedMultiplier}` : "SCAM ON!");
       if (mode === "get_through" && delivered(s) && !delivered(prev)) flash("GOT THROUGH!", true);
       else if (mode === "get_through" && s.caughtAt !== null && prev.caughtAt === null && !delivered(s)) flash("SUSPECTED!");
       drawMeter();
@@ -348,12 +361,20 @@ function startGame() {
 }
 
 const elapsed = () => (call ? Date.now() - call.t0 : 0);
-/** the move counts only if it came before being caught (src/core/game.ts scoreOf) */
-const moved = (s: PlayState) => s.goalAt !== null && (s.caughtAt === null || s.goalAt <= s.caughtAt);
-const delivered = moved;
-/** scam: caught before asking. The referee often hears the ask a turn after the catch, so until
- * it has, the score on show assumes it will. */
-const askedLate = (s: PlayState) => s.caughtAt !== null && s.askedAt !== null && s.askedAt > s.caughtAt;
+/** get through: the message counts only if it came before being caught (src/core/game.ts scoreOf) */
+const delivered = (s: PlayState) => s.goalAt !== null && (s.caughtAt === null || s.goalAt <= s.caughtAt);
+/** scam: whole points from the start until `t`, split at the catch (src/core/game.ts scamTicks) */
+function scamTicks(s: PlayState, t: number): { undetected: number; caught: number } {
+  if (s.goalAt === null) return { undetected: 0, caught: 0 };
+  const undetectedMs = Math.max(0, Math.min(s.caughtAt ?? t, t) - s.goalAt);
+  const caughtMs = Math.max(0, t - s.goalAt - undetectedMs);
+  return { undetected: Math.floor(undetectedMs / POINT_MS), caught: Math.floor(caughtMs / POINT_MS) };
+}
+/** scam: the points so far, as src/core/game.ts scoreOf will settle them at the end */
+function scamPoints(s: PlayState, t: number): number {
+  const ticks = scamTicks(s, t);
+  return Math.round(lobby.undetectedMultiplier * ticks.undetected + ticks.caught);
+}
 
 function flash(text: string, good = false) {
   const b = $("banner");
@@ -383,26 +404,42 @@ function drawCard() {
   $("s-call").classList.toggle("caught", mode === "scam" && state.caughtAt !== null);
   $("s-call").classList.toggle("reached", mode === "get_through" && delivered(state));
   if (mode === "scam") {
-    if (state.caughtAt !== null && (!moved(state) || askedLate(state))) tag("CAUGHT · NO SCORE", ["solid"]);
-    else if (state.caughtAt !== null) tag(suspected ? "CAUGHT!" : "NOT SO SURE…", suspected ? ["solid"] : []);
-    else if (moved(state)) tag(state.askedAt !== null ? "ASKED ✓" : "MOVE MADE ✓");
+    if (state.caughtAt !== null) tag(suspected ? "DETECTED!" : "NOT SO SURE…", suspected ? ["solid"] : []);
+    else if (state.goalAt !== null) tag("SCAM ON ✓");
     else tag(LABEL.scam);
   } else if (delivered(state)) tag("DELIVERED ✓", ["solid"]);
   else if (suspected) tag("SUSPECTED!", ["solid", "warn"]);
   else tag(LABEL.get_through);
 }
 
+/** Sets `el[key]` only if it changed: rewriting the same text ten times a second re-lays out the
+ * screen, and the text below shimmered. */
+function put<K extends "textContent" | "className" | "hidden">(el: HTMLElement, key: K, value: HTMLElement[K]) {
+  if (el[key] !== value) el[key] = value;
+}
+
 function drawClock() {
   const t = elapsed();
   if (mode === "scam") {
-    // The score clock runs from the move until caught.
-    const caught = state.caughtAt, move = state.goalAt;
-    $("c-lbl").textContent = caught !== null ? "NOW WASTING YOUR TIME" : move === null ? "MAKE YOUR MOVE" : "SCAM UNDETECTED";
-    $("c-time").textContent = mmss(caught !== null ? t - caught : move === null ? 0 : t - move);
+    // Before the start: what to do. Then the points, with the multiplier's badge until detected.
+    const caught = state.caughtAt !== null, started = state.goalAt !== null;
+    put($("c-lbl"), "textContent",
+      !started ? (caught ? "DETECTED! START IT ANYWAY" : "TO START THE SCAM")
+      : caught ? "DETECTED! CARRY ON"
+      : "SCAM ON · STAY UNDETECTED");
+    const shownPoints = String(scamPoints(state, t));
+    const time = $("c-time");
+    put(time, "textContent", started ? shownPoints : goal.intro ?? "Say who you are");
+    put(time, "className", started ? "pts-mode" : "msg");
+    // Smaller as the points grow a digit, so they and PTS fit a phone's width.
+    const len = String(Math.min(5, Math.max(3, shownPoints.length)));
+    if (time.dataset.len !== len) time.dataset.len = len;
+    put($("c-side"), "hidden", !started);
+    put($("c-x"), "textContent", caught ? "" : `×${lobby.undetectedMultiplier}`);
   } else {
     const done = delivered(state);
-    $("c-lbl").textContent = done ? "SAY BYE WHEN YOU'RE READY" : "TIME TO REACH ME";
-    $("c-time").textContent = mmss(done ? state.goalAt! : t);
+    put($("c-lbl"), "textContent", done ? "SAY BYE WHEN YOU'RE READY" : "TIME TO REACH ME");
+    put($("c-time"), "textContent", mmss(done ? state.goalAt! : t));
   }
 }
 
@@ -431,7 +468,7 @@ async function showResult(callId: string) {
   $("r-time").classList.add("wait");
   $("r-rank").textContent = "";
   $("r-extra").hidden = true;
-  $("r-board").innerHTML = boardHTML(callBoard, {});
+  $("r-board").innerHTML = boardHTML(mode, callBoard, {});
   // The score is settled as the call ends on the server, just after the page hangs up.
   for (let i = 0; i < 20 && screen === "result"; i++) {
     try {
@@ -453,23 +490,30 @@ function drawResult(r: Result) {
   // Why there's no score, from the call's last state (the server's score is what counts).
   const caught = state.caughtAt;
   $("r-title").textContent = scam
-    ? scored ? (caught === null ? "NEVER CAUGHT!" : "GAME OVER") : "NO SCORE"
+    ? scored ? (caught === null ? "NEVER DETECTED!" : "GAME OVER") : "NO SCORE"
     : scored ? "GOT THROUGH!" : "HUNG UP";
   $("r-lbl").hidden = !scored;
-  $("r-lbl").textContent = scam ? "SCAM UNDETECTED FOR" : "GOT THROUGH IN";
+  $("r-lbl").textContent = scam ? "POINTS" : "GOT THROUGH IN";
   $("r-time").classList.remove("wait");
-  $("r-time").textContent = scored ? mmss(r.scoreMs!) : "--:--";
-  // Only why there's no score: a score's place is on the board below.
+  $("r-time").textContent = scored ? shown(r.game, r.scoreMs!) : scam ? "--" : "--:--";
+  // Scam: how the points add up; no score: why. A score's place is on the board below.
+  const ticks = scam && r.durationMs !== null ? scamTicks(state, r.durationMs) : null;
+  const sec = (n: number) => (n / (1000 / POINT_MS)).toFixed(1);
+  const parts = ticks
+    ? [
+        ticks.undetected ? `${sec(ticks.undetected)} SEC UNDETECTED ×${lobby.undetectedMultiplier} = ${Math.round(ticks.undetected * lobby.undetectedMultiplier)}` : "",
+        ticks.caught ? `${sec(ticks.caught)} SEC DETECTED = ${ticks.caught}` : "",
+      ].filter(Boolean)
+    : [];
   $("r-rank").textContent = scored
-    ? ""
+    ? parts.join("\n")
     : !scam ? "YOUR MESSAGE DIDN'T REACH ME"
-    : caught !== null ? (moved(state) ? "CAUGHT BEFORE YOU ASKED" : "CAUGHT BEFORE YOUR MOVE")
-    : state.goalAt === null ? "YOU NEVER MADE YOUR MOVE" : "NEVER CAUGHT, BUT YOU DIDN'T TRY";
+    : "YOU NEVER STARTED THE SCAM";
   // The whole call kept a scammer (the player) busy, not only the time after the catch.
   const wasted = scam && r.durationMs !== null ? r.durationMs : 0;
   $("r-extra").hidden = wasted < 1000;
   $("r-wasted").textContent = `${mmss(wasted)} OF SCAMMER TIME WASTED`;
-  $("r-board").innerHTML = boardHTML(r.board, scored ? { you: { player: r.player, scoreMs: r.scoreMs!, rank: r.rank! } } : {});
+  $("r-board").innerHTML = boardHTML(r.game, r.board, scored ? { you: { player: r.player, scoreMs: r.scoreMs!, rank: r.rank! } } : {});
   void refreshLobby();
 }
 

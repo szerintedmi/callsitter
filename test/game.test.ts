@@ -3,7 +3,7 @@ import { buildRefereeRequest } from "../src/adapters/jev/referee";
 import { openSqlite, SqliteRepo } from "../src/adapters/storage/sqlite";
 import { ConfigError, checkGames } from "../src/core/config";
 import { START, goalMet, nextPlay, playSummary, playerName, rankIn, scoreOf, type PlayState } from "../src/core/game";
-import { GoalWatch, lastCallerTurn } from "../src/core/referee";
+import { GoalWatch } from "../src/core/referee";
 import type { TranscriptEntry } from "../src/core/types";
 import type { CallEvent } from "../src/core/types";
 import { cls, loadRepoConfig } from "./helpers";
@@ -17,56 +17,59 @@ const classification = (verdict: "scam" | "genuine" | "unclear", confidence = 0.
 const stage = (s: string, at: number): CallEvent => ({ type: "stage", callId: "c", at, stage: s });
 const run = (...events: CallEvent[]) => events.reduce<PlayState>((s, ev) => nextPlay(s, ev, games) ?? s, START);
 
-/** a caller turn ending at `endAt` */
-const turn = (endAt: number, at = endAt - 1000) => ({ at, endAt });
+/** a caller line ending at `endAt` */
+const line = (endAt: number, at = endAt - 1000) => ({ at, endAt });
+const x = games.scam.undetected_multiplier;
+const caught = (s: PlayState, at: number) => nextPlay(s, stage(games.scam.caught_stages[0]!, at), games)!;
 
-test("scam me scores from the move until caught, if they asked first; caught before the move scores nothing", () => {
-  const caught = (s: PlayState, at: number) => nextPlay(s, stage(games.scam.caught_stages[0]!, at), games)!;
-  const moved = goalMet(START, "move", turn(5000));
-  const asked = goalMet(moved, "ask", turn(20_000));
-  expect(scoreOf("scam", caught(asked, 35_000))).toBe(30_000);
-  // Caught mid-ask: the ask counts from the start of that turn.
-  expect(scoreOf("scam", caught(goalMet(moved, "ask", turn(40_000, 30_000)), 35_000))).toBe(30_000);
-  // Caught before asking, or never asking: no score.
-  expect(scoreOf("scam", caught(goalMet(moved, "ask", turn(40_000, 36_000)), 35_000))).toBeNull();
-  expect(scoreOf("scam", caught(moved, 35_000))).toBeNull();
+test("scam me scores 10 points a second from the start until the call ends, more while undetected", () => {
+  expect(x).toBe(2);
+  const started = goalMet(START, "scam", line(21_000, 20_000)); // from the line's start
+  expect(started.goalAt).toBe(20_000);
+  // Never caught: 60 s from the start, all double: 1200 points (100 ms each).
+  expect(scoreOf("scam", started, 80_000, x)).toBe(120_000);
+  // Caught 10 s after the start, then kept talking: 10 s double, 50 s single.
+  expect(scoreOf("scam", caught(started, 30_000), 80_000, x)).toBe(70_000);
+  // Caught before the start: it still scores, all single.
+  expect(scoreOf("scam", goalMet(caught(START, 10_000), "scam", line(21_000, 20_000)), 80_000, x)).toBe(60_000);
   // Only the first catch counts, even after the call recovers.
   const recovered = run(stage(games.scam.caught_stages[0]!, 8000), classification("genuine"), stage(games.scam.caught_stages[0]!, 12_000));
   expect(recovered.caughtAt).toBe(8000);
-  expect(scoreOf("scam", goalMet(goalMet(recovered, "move", turn(10_000)), "ask", turn(11_000)))).toBeNull();
-  expect(scoreOf("scam", caught(START, 8000))).toBeNull();
-  expect(goalMet(moved, "move", turn(9000)).goalAt).toBe(5000);
+  // Whole points (tenths of a second) on each side of the catch: 8.45 s undetected, 81.5 s after.
+  expect(scoreOf("scam", caught(goalMet(START, "scam", line(31_000, 30_050)), 38_500), 120_000, x)).toBe(98_300);
+  // Only the first start counts.
+  expect(goalMet(started, "scam", line(40_000)).goalAt).toBe(20_000);
 });
 
-test("scam me never caught scores until the end, only if they asked for what the goal wants", () => {
-  const moved = goalMet(START, "move", turn(5000));
-  expect(scoreOf("scam", moved, 65_000)).toBeNull();
-  expect(scoreOf("scam", goalMet(moved, "ask", turn(40_000)), 65_000)).toBe(60_000);
+test("scam me without the start scores nothing, however long the chat", () => {
+  expect(scoreOf("scam", START, 600_000, x)).toBeNull();
+  expect(scoreOf("scam", caught(START, 30_000), 600_000, x)).toBeNull();
+  // Still going: no score yet.
+  expect(scoreOf("scam", goalMet(START, "scam", line(5000)), null, x)).toBeNull();
 });
 
-test("get through scores when the message was passed on, unless caught first", () => {
-  expect(scoreOf("get_through", goalMet(START, "message", turn(20_000)))).toBe(20_000);
-  expect(scoreOf("get_through", goalMet(run(stage(games.scam.caught_stages[0]!, 10_000)), "message", turn(20_000)))).toBeNull();
-  expect(scoreOf("get_through", START, 60_000)).toBeNull();
+test("get through scores when the message was passed on (the line's end), unless caught first", () => {
+  expect(scoreOf("get_through", goalMet(START, "get_through", line(20_000)), null, x)).toBe(20_000);
+  expect(scoreOf("get_through", goalMet(run(stage(games.scam.caught_stages[0]!, 10_000)), "get_through", line(20_000)), null, x)).toBeNull();
+  expect(scoreOf("get_through", START, 60_000, x)).toBeNull();
 });
 
-test("the referee judges each pause until every question is met, then once more when the call ends", async () => {
+test("the referee judges each caller line until the question is met, then once more when the call ends", async () => {
   const judged: number[] = [];
-  let answers: Record<string, number> = { move: 0.1, ask: 0.1 };
-  const met: [string, { at: number; endAt: number }][] = [];
+  let answers: Record<string, number> = { start: 0.1 };
+  const met: { at: number; endAt: number }[] = [];
   const logged: Record<string, number>[] = [];
   const w = new GoalWatch({
     referee: { judge: async (i) => (judged.push(i.transcript.length), answers) },
     game: "scam",
     goal: games.scam.goals[0]!,
     config: () => games.referee,
-    onMet: (q, at) => met.push([q, at]),
+    onMet: (l) => met.push(l),
     onJudged: (a) => logged.push(a),
     onError: (err) => { throw err; },
   });
   const say = (seq: number, at: number): TranscriptEntry => ({ seq, speaker: "caller", text: `line ${seq}`, at, endAt: at + 500, final: true });
-  // An agent reply between the caller's turns
-  const reply = (seq: number, at: number): TranscriptEntry => ({ seq, speaker: "agent", text: "Right, and what's this about?", at, endAt: at + 500, final: true });
+  const reply = (seq: number, at: number): TranscriptEntry => ({ seq, speaker: "agent", text: "Mm-hmm.", at, endAt: at + 500, final: true });
   // A pause before any finished caller line: nothing to judge, and later pauses still run.
   w.check();
   await Bun.sleep(5);
@@ -76,57 +79,28 @@ test("the referee judges each pause until every question is met, then once more 
   w.check(); // while it runs: once more after
   await Bun.sleep(5);
   expect(judged).toEqual([1, 1]);
-  answers = { move: 0.9, ask: 0.2 };
+  answers = { start: 0.9 };
   w.add(reply(2, 2000));
   w.add(say(3, 4000));
   w.check();
   await Bun.sleep(5);
-  expect(met).toEqual([["move", { at: 4000, endAt: 4500 }]]); // the caller's turn that did it
-  answers = { move: 0.9, ask: 0.8 };
-  w.add(reply(4, 6000));
-  w.add(say(5, 9000));
-  w.check();
-  await Bun.sleep(5);
-  expect(met).toEqual([["move", { at: 4000, endAt: 4500 }], ["ask", { at: 9000, endAt: 9500 }]]);
+  expect(met).toEqual([{ at: 4000, endAt: 4500 }]); // the caller's line that did it
+  w.add(say(4, 6000));
   w.check();
   await w.final();
-  expect(judged).toEqual([1, 1, 3, 5]); // no more once all are met
-  expect(logged).toHaveLength(4);
-});
-
-test("a caller's turn goes back over their split lines and the agent's backchannels, to its start", () => {
-  let seq = 0;
-  const line = (speaker: "caller" | "agent", at: number, endAt: number, text: string): TranscriptEntry =>
-    ({ seq: ++seq, speaker, text, at, endAt, final: true });
-  // A recorded call: caught at 68.9s, in the middle of the ask.
-  const transcript = [
-    line("caller", 39_800, 54_300, "We have to reset the router."),
-    line("agent", 54_300, 59_700, "Okay, I see. So what would you need from me, exactly?"),
-    line("caller", 62_900, 65_200, "Uh, I just need you to"),
-    line("caller", 65_200, 68_900, ", uh, start a reset the router by"),
-    line("agent", 68_900, 69_600, "Mm-hmm."),
-    line("caller", 69_600, 72_400, "like starting the"),
-    line("caller", 72_600, 73_300, "- little program"),
-  ];
-  expect(lastCallerTurn(transcript, 2)).toEqual({ at: 62_900, endAt: 73_300 });
-  expect(lastCallerTurn(transcript, 0)).toEqual({ at: 69_600, endAt: 73_300 });
-  expect(lastCallerTurn([line("agent", 0, 1000, "Hello.")], 2)).toBeNull();
-  // Scored from the move until the catch, as the ask started before it.
-  const caught = nextPlay(goalMet(goalMet(START, "move", turn(10_700)), "ask", lastCallerTurn(transcript, 2)!), stage(games.scam.caught_stages[0]!, 68_900), games)!;
-  expect(scoreOf("scam", caught)).toBe(58_200);
+  expect(judged).toEqual([1, 1, 3]); // no more once it's met
+  expect(logged).toHaveLength(3);
+  expect(met).toHaveLength(1);
 });
 
 test("the call's log says what a game scored, or why it didn't", () => {
-  const moved = goalMet(START, "move", turn(10_700));
-  const caught = (s: PlayState, at: number) => nextPlay(s, stage(games.scam.caught_stages[0]!, at), games)!;
-  expect(playSummary("scam", caught(goalMet(moved, "ask", turn(73_300, 62_900)), 68_900))).toBe(
-    "move 10.7s · ask 62.9s · caught 68.9s → score 58.2s",
+  const started = goalMet(START, "scam", line(31_000, 30_100));
+  expect(playSummary("scam", caught(started, 38_500), 120_000, x)).toBe("start 30.1s · caught 38.5s · ended 120.0s → score 983 points");
+  expect(playSummary("scam", caught(START, 38_500), 120_000, x)).toBe("start — · caught 38.5s · ended 120.0s → no score (never started the scam)");
+  expect(playSummary("get_through", START, 60_000, x)).toBe("message — · caught — → no score (message not passed on)");
+  expect(playSummary("get_through", goalMet(caught(START, 5000), "get_through", line(9000)), 60_000, x)).toBe(
+    "message 9.0s · caught 5.0s → no score (caught before the message)",
   );
-  expect(playSummary("scam", caught(goalMet(moved, "ask", turn(99_200, 94_000)), 68_900))).toBe(
-    "move 10.7s · ask 94.0s · caught 68.9s → no score (asked after caught)",
-  );
-  expect(playSummary("scam", moved, 60_000)).toBe("move 10.7s · ask — · caught — → no score (never asked)");
-  expect(playSummary("get_through", START, 60_000)).toBe("message — · caught — → no score (message not passed on)");
 });
 
 test("the lean runs from genuine (-1) to scam or spam (1)", () => {
@@ -192,8 +166,7 @@ test("the referee's Jev request: the goal in the state, the game's yes/no questi
     transcript: [{ seq: 1, speaker: "caller", text: "Police here.", at: 0, final: true }],
     config: games.referee,
   });
-  expect(req.state.goal).toContain(goal.move);
-  expect(req.state.goal).toContain(goal.ask);
+  expect(req.state.goal).toContain(goal.start);
   expect(req.state.transcript).toBe("caller: Police here.");
-  expect(Object.keys(req.questions)).toEqual(["move", "ask"]);
+  expect(Object.keys(req.questions)).toEqual(["start"]);
 });
