@@ -74,6 +74,27 @@ export function scoreOf(game: Game, s: PlayState, endAt: number | null = null): 
   return endAt === null ? null : Math.max(0, endAt - s.goalAt);
 }
 
+/**
+ * For the call's log: the game's times and its score, or why it has none, e.g.
+ * "move 10.7s · ask 62.9s · caught 68.9s → score 58.2s".
+ */
+export function playSummary(game: Game, s: PlayState, endAt: number | null = null): string {
+  const secs = (ms: number | null) => (ms === null ? "—" : `${(ms / 1000).toFixed(1)}s`);
+  const times = game === "scam"
+    ? `move ${secs(s.goalAt)} · ask ${secs(s.askedAt)} · caught ${secs(s.caughtAt)}`
+    : `message ${secs(s.goalAt)} · caught ${secs(s.caughtAt)}`;
+  const score = scoreOf(game, s, endAt);
+  if (score !== null) return `${times} → score ${secs(score)}`;
+  const caughtBefore = (at: number) => s.caughtAt !== null && s.caughtAt < at;
+  const why =
+    s.goalAt === null ? (game === "scam" ? "no move" : "message not passed on")
+    : caughtBefore(s.goalAt) ? `caught before the ${game === "scam" ? "move" : "message"}`
+    : s.askedAt === null ? "never asked"
+    : caughtBefore(s.askedAt) ? "asked after caught"
+    : "call still going";
+  return `${times} → no score (${why})`;
+}
+
 /** Whether score `a` beats `b`. */
 export function beats(game: Game, a: number, b: number): boolean {
   return game === "scam" ? a > b : a < b;
