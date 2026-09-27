@@ -1,5 +1,6 @@
 import type { AudioFormat } from "./audio";
-import type { AppConfig, JevConfig, LiveAppend, LunaTool } from "./config";
+import type { AppConfig, GamesConfig, JevConfig, LiveAppend, LunaTool } from "./config";
+import type { BoardEntry, Game } from "./game";
 import type { CallCosts, CallEvent, CallMeta, CallStatus, Classification, Speaker, Suggestion, TokenUsage, ToolCallRecord, TranscriptEntry } from "./types";
 
 // Ports: everything core needs from the outside world. Adapters implement these.
@@ -86,6 +87,20 @@ export interface ClassifierInput {
 
 export interface Classifier {
   classify(input: ClassifierInput): Promise<Classification>;
+}
+
+export interface RefereeInput {
+  game: Game;
+  goal: GamesConfig["scam"]["goals"][number] | GamesConfig["get_through"]["goals"][number];
+  transcript: readonly TranscriptEntry[];
+  config: GamesConfig["referee"];
+  signal?: AbortSignal;
+}
+
+/** Judges a public game call (src/core/referee.ts): has the caller met their goal? */
+export interface Referee {
+  /** each of the game's questions (games.yaml referee) → the probability of "yes" */
+  judge(input: RefereeInput): Promise<Record<string, number>>;
 }
 
 /** Tools that Luna can call; implemented by the orchestrator per call. */
@@ -178,6 +193,20 @@ export interface CallRecord {
   recordingPath: string | null;
 }
 
+/** A public page game: who played which goal on a call, and their score once it has ended. */
+export interface PlayRecord {
+  callId: string;
+  game: Game;
+  goal: string;
+  /** 1–3 letters or digits */
+  player: string;
+  /** ms (scam: until caught; get_through: until reached); null if they didn't make it */
+  scoreMs: number | null;
+  createdAt: number;
+  /** when the call ended and the score was settled */
+  finishedAt: number | null;
+}
+
 export interface StoredEvent {
   id: number;
   callId: string;
@@ -198,6 +227,15 @@ export interface Repo {
   /** stores the event and, in the same transaction, applies `patch` to its call row */
   appendEvent(ev: CallEvent, patch?: Partial<Omit<CallRecord, "id">>): Promise<void>;
   listEvents(callId: string): Promise<StoredEvent[]>;
+  /** stores a game as its call starts (the call row must exist) */
+  createPlay(p: Pick<PlayRecord, "callId" | "game" | "goal" | "player" | "createdAt">): Promise<void>;
+  /** settles the game's score once its call has ended */
+  finishPlay(callId: string, scoreMs: number | null, finishedAt: number): Promise<void>;
+  getPlay(callId: string): Promise<PlayRecord | null>;
+  /** every score on a goal (a player can have several), best first */
+  scores(game: Game, goal: string): Promise<BoardEntry[]>;
+  /** total seconds of ended calls whose verdict is scam or spam, and of every "Scam me" game */
+  junkCallSeconds(): Promise<number>;
 }
 
 export interface BlobStore {

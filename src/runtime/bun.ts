@@ -2,6 +2,7 @@ import { upgradeWebSocket, websocket } from "hono/bun";
 import { join } from "node:path";
 import { watchConfig, YamlDirSource } from "../adapters/config/yaml-fs";
 import { JevClassifier } from "../adapters/jev/classifier";
+import { JevReferee } from "../adapters/jev/referee";
 import { LunaAgent } from "../adapters/luna/agent";
 import { OpenAiLiveAgent } from "../adapters/openai-live/session";
 import { OpenAiSip } from "../adapters/openai-live/sip";
@@ -126,6 +127,7 @@ const app = createApp({
     config: () => config.get(),
     gate: new PublicGate({ repo, config: () => config.get(), clock: { now: () => Date.now() } }),
     webrtc: new OpenAiWebRtc({ apiKey: env.OPENAI_API_KEY }),
+    referee: new JevReferee({ apiKey: env.TYPESAFE_API_KEY }),
   },
   clientAssets: await clientAssets({ rebuild: process.env.NODE_ENV !== "production" }),
 });

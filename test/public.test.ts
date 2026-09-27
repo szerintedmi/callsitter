@@ -110,6 +110,15 @@ beforeAll(async () => {
       config: () => config.get(),
       gate: new PublicGate({ repo, config: () => config.get(), clock: { now: () => Date.now() } }),
       webrtc: new OpenAiWebRtc({ apiKey: "sk-test", fetch: fakeFetch, baseURL: "https://openai.test/v1", liveUrl: `ws://127.0.0.1:${liveServer.port}` }),
+      // Scam: the move once the caller says "police", the ask once they mention a card.
+      // Get through: the message once they say they're late. Slow to judge once they say "slowly".
+      referee: {
+        judge: async (i): Promise<Record<string, number>> => {
+          const said = (re: RegExp) => (i.transcript.some((e) => e.speaker === "caller" && re.test(e.text)) ? 0.9 : 0.1);
+          if (said(/slowly/) > 0.5) await Bun.sleep(300);
+          return i.game === "scam" ? { move: said(/police/i), ask: said(/card/) } : { message: said(/late/) };
+        },
+      },
     },
   });
   server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: app.fetch, websocket });
@@ -134,7 +143,8 @@ const until = async (cond: () => boolean | Promise<boolean>, ms = 3000) => {
 };
 
 let ipSeq = 0;
-const call = (body: unknown = { sdp: "v=0 offer" }, headers: Record<string, string> = {}) =>
+const GAME = { game: "scam", goal: "safe_account", player: "kev" };
+const call = (body: unknown = { sdp: "v=0 offer", ...GAME }, headers: Record<string, string> = {}) =>
   fetch(`${base()}/call`, {
     method: "POST",
     headers: { origin: base(), "content-type": "application/json", "cf-connecting-ip": `10.0.0.${++ipSeq}`, ...headers },
@@ -150,10 +160,13 @@ async function hangUp(callId: string) {
 describe("public page (fake OpenAI)", () => {
   test("serves the page and its script on the public host", async () => {
     const html = await (await fetch(`${base()}/`)).text();
-    expect(html).toContain(">Scam me<");
-    expect(html).toContain(">or get through to me<");
+    expect(html).toContain(">SCAM ME<");
+    expect(html).toContain(">GET THROUGH<");
     expect(html).toContain('src="/assets/public.js?v=');
-    expect(html).not.toContain("<footer");
+    // The lobby the page starts from: every goal of games.yaml, with its leaderboard.
+    const lobby = JSON.parse(html.match(/<script type="application\/json" id="lobby">(.*?)<\/script>/s)![1]!);
+    expect(lobby.games.scam.map((g: { id: string }) => g.id)).toEqual(config.get().games.scam.goals.map((g) => g.id));
+    expect(lobby.boards.get_through.plumber).toEqual(expect.any(Array));
     expect(await (await fetch(`${base()}/assets/public.js`)).text()).toBe("// page");
     // Nothing of the admin UI.
     expect((await fetch(`${base()}/calls`)).status).toBe(404);
@@ -162,7 +175,13 @@ describe("public page (fake OpenAI)", () => {
   test("only this page may start or end calls", async () => {
     expect((await call(undefined, { origin: "https://evil.example" })).status).toBe(403);
     expect((await fetch(`${base()}/call`, { method: "POST", body: "{}" })).status).toBe(403);
-    expect((await call({ sdp: "not an offer" })).status).toBe(400);
+    expect((await call({ sdp: "not an offer", ...GAME })).status).toBe(400);
+  });
+
+  test("a call needs a known game and goal, and a player name", async () => {
+    expect((await call({ sdp: "v=0 offer", ...GAME, game: "chess" })).status).toBe(400);
+    expect((await call({ sdp: "v=0 offer", ...GAME, goal: "nope" })).status).toBe(400);
+    expect(await (await call({ sdp: "v=0 offer", ...GAME, player: "toolong" })).json()).toMatchObject({ error: "name" });
   });
 
   test("offer → answer, locked-down data channel, sideband, greeting on connect, hangup closes Live", async () => {
@@ -213,17 +232,16 @@ describe("public page (fake OpenAI)", () => {
   });
 
   test("refuses oversized requests before reading them", async () => {
-    const r = await call({ sdp: "v=0 offer", padding: "x".repeat(1024 * 1024) });
+    const r = await call({ sdp: "v=0 offer", ...GAME, padding: "x".repeat(1024 * 1024) });
     expect(r.status).toBe(413);
   });
 
-  test("streams Jev's verdict (hidden while unclear) and the stage to the page until the call ends", async () => {
-    const { callId } = (await (await call()).json()) as { callId: string };
+  /** The call's server-sent events, as next() → [event, data]. */
+  async function events(callId: string) {
     const res = await fetch(`${base()}/call/${callId}/events`);
     expect(res.headers.get("content-type")).toContain("text/event-stream");
     const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
     let buf = "";
-    /** the next SSE message as [event, data] */
     const next = async (): Promise<[string, any]> => {
       while (!buf.includes("\n\n")) {
         const { value, done } = await reader.read();
@@ -236,28 +254,125 @@ describe("public page (fake OpenAI)", () => {
       const field = (k: string) => msg!.split("\n").find((l) => l.startsWith(`${k}: `))?.slice(k.length + 2);
       return [field("event") ?? "message", JSON.parse(field("data")!)];
     };
-    const classify = (choice: string, probabilities: Record<string, number>) =>
-      bus.publish({
-        type: "classification",
-        callId,
-        at: 0,
-        classification: { verdict: choice as any, confidence: 0, urgency: 0, latencyMs: 1, answers: { verdict: { choice, probabilities } } },
-      });
-    expect(await next()).toEqual(["message", { verdict: null, lean: 0, stage: null }]);
-    classify("scam", { scam: 0.5, spam: 0.3, genuine: 0.05, unclear: 0.15 });
+    return next;
+  }
+
+  const classify = (callId: string, choice: string, probabilities: Record<string, number>) =>
+    bus.publish({
+      type: "classification",
+      callId,
+      at: 0,
+      classification: { verdict: choice as any, confidence: 0, urgency: 0, latencyMs: 1, answers: { verdict: { choice, probabilities } } },
+    });
+
+  test("streams the game to the page (Jev's lean, the stage, when caught) until the call ends", async () => {
+    const { callId } = (await (await call()).json()) as { callId: string };
+    const next = await events(callId);
+    expect(await next()).toEqual(["message", { verdict: null, lean: 0, stage: null, caughtAt: null, goalAt: null, askedAt: null }]);
+    classify(callId, "scam", { scam: 0.5, spam: 0.3, genuine: 0.05, unclear: 0.15 });
     const [, scam] = await next();
-    expect(scam).toMatchObject({ verdict: "scam", stage: null });
+    expect(scam).toMatchObject({ verdict: "scam", stage: null, caughtAt: null });
     expect(scam.lean).toBeCloseTo(0.75);
-    bus.publish({ type: "stage", callId, at: 0, stage: "waste_time", as: "thinking" });
-    expect((await next())[1]).toMatchObject({ verdict: "scam", stage: "waste time" });
-    // Unclear: no verdict, and the needle falls back towards the middle.
-    classify("unclear", { scam: 0.2, spam: 0, genuine: 0.3, unclear: 0.5 });
+    bus.publish({ type: "stage", callId, at: 4200, stage: "waste_time", as: "thinking" });
+    expect((await next())[1]).toMatchObject({ verdict: "scam", stage: "waste_time", caughtAt: 4200 });
+    // Unclear: no verdict, and the needle falls back towards the middle; still caught.
+    classify(callId, "unclear", { scam: 0.2, spam: 0, genuine: 0.3, unclear: 0.5 });
     const [, unclear] = await next();
-    expect(unclear).toMatchObject({ verdict: null, stage: "waste time" });
+    expect(unclear).toMatchObject({ verdict: null, stage: "waste_time", caughtAt: 4200 });
     expect(unclear.lean).toBeCloseTo(-0.1);
     await hangUp(callId);
     expect((await next())[0]).toBe("ended");
     expect((await fetch(`${base()}/call/${callId}/events`)).status).toBe(404);
+  });
+
+  let seq = 0;
+  const say = (callId: string, text: string, at: number) =>
+    bus.publish({ type: "transcript", callId, entry: { seq: ++seq, speaker: "caller", text, at: at - 1000, endAt: at, final: true } });
+  const resultOf = async (callId: string) => {
+    let r: Response;
+    await until(async () => (r = await fetch(`${base()}/call/${callId}/result`)).status === 200);
+    return r!.json() as Promise<any>;
+  };
+
+  test("scam me: scored from the move (the referee) until caught, if they asked first; each player's best on the goal's leaderboard", async () => {
+    const play = async (player: string, moveAt: number | null, caughtAt: number | null, askAt: number | null = moveAt === null ? null : moveAt + 1000) => {
+      const { callId } = (await (await call({ sdp: "v=0 offer", ...GAME, goal: "police", player })).json()) as { callId: string };
+      expect((await fetch(`${base()}/call/${callId}/result`)).status).toBe(202);
+      say(callId, "Hello, how are you?", 1000);
+      classify(callId, "unclear", { unclear: 0.9 });
+      if (moveAt !== null) {
+        say(callId, "This is the police, about your bank.", moveAt);
+        classify(callId, "scam", { scam: 0.9 });
+        await Bun.sleep(20);
+      }
+      if (askAt !== null) {
+        say(callId, "Hand your card to the courier.", askAt);
+        classify(callId, "scam", { scam: 0.9 });
+        await Bun.sleep(20);
+      }
+      if (caughtAt !== null) bus.publish({ type: "stage", callId, at: caughtAt, stage: "waste_time", as: "thinking" });
+      await hangUp(callId);
+      return resultOf(callId);
+    };
+    expect(await play("ann", 5000, 35_000)).toMatchObject({ game: "scam", goal: "police", player: "ANN", scoreMs: 30_000, rank: 1 });
+    expect(await play("bob", 10_000, 60_000)).toMatchObject({ scoreMs: 50_000, rank: 1 });
+    // Chatting until caught, without the move: no score. The move but caught before asking: none.
+    expect(await play("cat", null, 20_000)).toMatchObject({ scoreMs: null, rank: null });
+    expect(await play("dan", 5000, 20_000, null)).toMatchObject({ scoreMs: null, rank: null });
+    // Ann's worse game takes its own place on the board, below her best.
+    const again = await play("ann", 20_000, 30_000);
+    expect(again).toMatchObject({ scoreMs: 10_000, rank: 3 });
+    expect(again.board).toEqual([
+      { player: "BOB", scoreMs: 50_000 },
+      { player: "ANN", scoreMs: 30_000 },
+      { player: "ANN", scoreMs: 10_000 },
+    ]);
+    const lobby = (await (await fetch(`${base()}/call/lobby`)).json()) as any;
+    expect(lobby.boards.scam.police).toEqual(again.board);
+    expect((await fetch(`${base()}/call/nope/result`)).status).toBe(404);
+  });
+
+  test("get through: scored when the referee says the message was passed on, even in the last words", async () => {
+    const { callId } = (await (await call({ sdp: "v=0 offer", game: "get_through", goal: "plumber", player: "liz" })).json()) as { callId: string };
+    const next = await events(callId);
+    await next();
+    say(callId, "Hi, it's your plumber, I'm running 20 minutes late.", 12_000);
+    classify(callId, "genuine", { genuine: 0.9 });
+    await next(); // the classification
+    expect((await next())[1]).toMatchObject({ goalAt: 12_000 });
+    await hangUp(callId);
+    expect(await resultOf(callId)).toMatchObject({ game: "get_through", goal: "plumber", player: "LIZ", scoreMs: 12_000, rank: 1 });
+
+    // No Jev pause after it: the referee's last look at the end still counts it.
+    const last = (await (await call({ sdp: "v=0 offer", game: "get_through", goal: "plumber", player: "max" })).json()) as { callId: string };
+    say(last.callId, "Plumber here, running late, bye!", 9000);
+    await hangUp(last.callId);
+    expect(await resultOf(last.callId)).toMatchObject({ player: "MAX", scoreMs: 9000, rank: 1 });
+
+    // The call has ended but the referee's last look is still going: not settled yet.
+    const slow = (await (await call({ sdp: "v=0 offer", game: "get_through", goal: "plumber", player: "sue" })).json()) as { callId: string };
+    say(slow.callId, "Plumber here, speaking slowly, running late.", 8000);
+    await hangUp(slow.callId);
+    expect((await fetch(`${base()}/call/${slow.callId}/result`)).status).toBe(202);
+    expect(await resultOf(slow.callId)).toMatchObject({ player: "SUE", scoreMs: 8000 });
+  });
+
+  test("scammer time wasted counts ended calls judged scam or spam, public ones too, and every scam me game", async () => {
+    const before = ((await (await fetch(`${base()}/call/lobby`)).json()) as any).wasted.seconds;
+    const add = async (id: string, from: string, verdict: string, secs: number) => {
+      await repo.createCall({ id, callControlId: id, from, to: "me", divertedFrom: null, startedAt: 1_000 });
+      await repo.updateCall(id, { status: "ended", endedAt: 1_000 + secs * 1000, verdict });
+    };
+    await add("real-scam", "+447700900001", "scam", 90);
+    await add("real-spam", "+447700900002", "spam", 30);
+    await add("real-genuine", "+447700900003", "genuine", 45);
+    await add("public-scam", "public", "scam", 600);
+    // A scam me game Jev never caught counts too; a get through one doesn't.
+    await add("game-scam", "public", "unclear", 40);
+    await repo.createPlay({ callId: "game-scam", game: "scam", goal: "police", player: "ANN", createdAt: 1_000 });
+    await add("game-through", "public", "unclear", 50);
+    await repo.createPlay({ callId: "game-through", game: "get_through", goal: "plumber", player: "ANN", createdAt: 1_000 });
+    expect(((await (await fetch(`${base()}/call/lobby`)).json()) as any).wasted).toEqual({ seconds: before + 760, live: 0 });
   });
 
   test("turns calls away: busy, per IP, over budget, closed", async () => {

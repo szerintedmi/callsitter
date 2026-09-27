@@ -3,24 +3,31 @@ import { bodyLimit } from "hono/body-limit";
 import { streamSSE, type SSEStreamingApi } from "hono/streaming";
 import { NO_MEDIA, type CallManager } from "../core/call-manager";
 import type { AppConfig } from "../core/config";
+import { GAMES, START, goalMet, nextPlay, playerName, rankIn, scoreOf, type BoardEntry, type Game, type PlayState } from "../core/game";
 import { errMsg } from "../core/orchestrator";
-import type { Clock, Repo } from "../core/ports";
-import type { CallEvent } from "../core/types";
+import type { Clock, Referee, Repo } from "../core/ports";
+import { GoalWatch } from "../core/referee";
 import type { OpenAiWebRtc, WebRtcAnswer } from "../adapters/openai-live/webrtc";
 import { hostOf } from "./admin-guard";
 import type { ClientAssets } from "./admin";
 
-// The public "Scam me" page, at the root of the public host (and at /public on the admin host,
-// as a preview). The browser talks to Live over WebRTC (adapters/openai-live/webrtc.ts); we only
-// swap the SDP and steer the call over a sideband, like an OpenAI SIP call. Anyone with the link
-// can call, so PublicGate caps calls per IP, calls at once and the estimated daily spend
+// The public page, at the root of the public host (and at /public on the admin host, as a
+// preview): two games (config/games.yaml, src/core/game.ts). "Scam me": the visitor plays a
+// scammer and tries not to get caught once they've made their move; "Get through": they play a
+// real caller and try to get their message through fast. A referee (src/core/referee.ts) judges
+// the goal; the call itself is handled like any other. The browser talks to Live over WebRTC (adapters/openai-live/webrtc.ts);
+// we only swap the SDP and steer the call over a sideband, like an OpenAI SIP call. Anyone with
+// the link can call, so PublicGate caps calls per IP, calls at once and the estimated daily spend
 // (config/public.yaml).
 //
-//   POST call                 {sdp} → {callId, sdp} | {error, message}
+//   GET  call/lobby           the lobby: goals, leaderboards and scammer time wasted (under
+//                             call/ because the tunnel routes that on the public host)
+//   POST call                 {sdp, game, goal, player} → {callId, sdp, elapsedMs} | {error, message}
 //   POST call/:id/connected   the page's audio is up: Live says the greeting
 //   POST call/:id/hangup      the page hung up (also sent as a beacon when the page closes)
-//   GET  call/:id/events      server-sent events: {verdict, lean, stage} as Jev and the
-//                             call flow move on (the page shows them), until the call ends
+//   GET  call/:id/events      server-sent events: PlayState as Jev and the call flow move on,
+//                             until the call ends
+//   GET  call/:id/result      the game's score, rank and leaderboard once the call has ended
 
 /** Call-control ids of public calls. Their Live session ends when the sideband closes it. */
 const PREFIX = "web:";
@@ -87,28 +94,6 @@ export class PublicGate {
   }
 }
 
-/** What the page is sent during a call: Jev's verdict (null while unclear; the page doesn't show it), its lean (the needle) and the stage. */
-export interface PublicState {
-  verdict: string | null;
-  /** -1 (genuine) .. 1 (scam or spam): P(scam) + P(spam) - P(genuine); unclear pulls it to 0 */
-  lean: number;
-  stage: string | null;
-}
-
-/** The state after `ev`, or null if `ev` doesn't change what the page shows. */
-export function nextState(prev: PublicState, ev: CallEvent): PublicState | null {
-  if (ev.type === "classification") {
-    const c = ev.classification;
-    const p = c.answers.verdict?.probabilities;
-    const verdict = c.answers.verdict?.choice ?? c.verdict;
-    const lean = p
-      ? (p.scam ?? 0) + (p.spam ?? 0) - (p.genuine ?? 0)
-      : verdict === "genuine" ? -c.confidence : verdict === "unclear" ? 0 : c.confidence;
-    return { ...prev, verdict: verdict === "unclear" ? null : verdict, lean: Math.max(-1, Math.min(1, lean)) };
-  }
-  if (ev.type === "stage") return { ...prev, stage: ev.stage.replaceAll("_", " ") };
-  return null;
-}
 
 /**
  * The most one public call can cost: Live for max_call_seconds plus every Luna call it may make,
@@ -120,40 +105,118 @@ export function worstCaseUsd(cfg: AppConfig): number {
   return (secs / 60) * cfg.cost.live_usd_per_min + (cfg.luna.limits.max_calls + progress) * cfg.cost.luna_usd_per_call;
 }
 
+/** What the page starts from (embedded in it, and refreshed from GET call/lobby after a call). */
+export interface Lobby {
+  games: Record<Game, { id: string; name: string; brief: string; hard: boolean }[]>;
+  /** each goal's leaderboard: its top `size` scores (games.yaml leaderboard_size), a player's several too */
+  boards: Record<Game, Record<string, BoardEntry[]>>;
+  size: number;
+  /** SCAMMER TIME WASTED: seconds so far on calls judged scam or spam (public ones too), and how many are live now */
+  wasted: { seconds: number; live: number };
+}
+
+/** A game once its call has ended (GET call/:id/result). */
+export interface GameResult {
+  game: Game;
+  goal: string;
+  player: string;
+  /** null: no move or no ask before being caught (scam); message never passed on, or caught first (get_through) */
+  scoreMs: number | null;
+  /** the call's length */
+  durationMs: number | null;
+  rank: number | null;
+  board: BoardEntry[];
+}
+
 export interface PublicDeps {
   manager: CallManager;
+  repo: Repo;
+  /** judges the game calls' goals (games.yaml referee) */
+  referee: Referee;
   config: () => AppConfig;
   gate: PublicGate;
   webrtc: OpenAiWebRtc;
   clientAssets: ClientAssets;
 }
 
+const JUNK = ["scam", "spam"];
+
 export function publicRoutes(d: PublicDeps) {
   const app = new Hono();
   /** calls waiting for the page to say its audio is up */
   const connected = new Map<string, () => void>();
-  /** what each live public call's page shows, and the pages listening */
-  const states = new Map<string, { state: PublicState; streams: Set<SSEStreamingApi> }>();
+  /** each live public call's game and what its page shows, and the pages listening */
+  const plays = new Map<string, { game: Game; state: PlayState; watch: GoalWatch; streams: Set<SSEStreamingApi> }>();
+  /** ended game calls whose score isn't saved yet (the referee's last look) */
+  const settling = new Set<string>();
+  const push = (p: { state: PlayState; streams: Set<SSEStreamingApi> }) => {
+    for (const st of p.streams) void st.writeSSE({ data: JSON.stringify(p.state) });
+  };
+  /** live calls (public ones too), for the time-wasted counter; `scamGame`: counts whatever Jev says */
+  const liveCalls = new Map<string, { startedAt: number; junk: boolean; scamGame: boolean }>();
 
   d.manager.bus.subscribe((ev) => {
+    if (ev.type === "call.started") {
+      const scamGame = plays.get(ev.callId)?.game === "scam";
+      liveCalls.set(ev.callId, { startedAt: ev.meta.startedAt, junk: scamGame, scamGame });
+    }
+    const lc = liveCalls.get(ev.callId);
+    // Like the call row's verdict, which counts the call once it has ended (repo.junkCallSeconds).
+    if (lc && ev.type === "classification") lc.junk = lc.scamGame || JUNK.includes(ev.classification.verdict);
+    if (ev.type === "call.ended") liveCalls.delete(ev.callId);
+
     if (!d.gate.isActive(ev.callId)) return;
-    const s = states.get(ev.callId);
+    const p = plays.get(ev.callId);
     // Every call ends up here, however it ended (page, call flow, max length, Live closing).
     if (ev.type === "call.ended") {
       d.gate.release(ev.callId);
       connected.delete(ev.callId);
-      states.delete(ev.callId);
-      for (const st of s?.streams ?? []) void st.writeSSE({ event: "ended", data: "{}" }).finally(() => st.close());
+      plays.delete(ev.callId);
+      for (const st of p?.streams ?? []) void st.writeSSE({ event: "ended", data: "{}" }).finally(() => st.close());
+      // The referee's last look first, so a goal met in the last words still counts.
+      if (p) {
+        settling.add(ev.callId);
+        void p.watch
+          .final()
+          .then(() => d.repo.finishPlay(ev.callId, scoreOf(p.game, p.state, ev.at), Date.now()))
+          .catch((err) => console.warn(`[public ${ev.callId}] score not saved: ${errMsg(err)}`))
+          .finally(() => settling.delete(ev.callId));
+      }
       return;
     }
-    const next = s && nextState(s.state, ev);
-    if (!s || !next) return;
-    s.state = next;
-    for (const st of s.streams) void st.writeSSE({ data: JSON.stringify(next) });
+    if (!p) return;
+    if (ev.type === "transcript") {
+      // The referee reads only final transcripts, so it judges each caller turn as its arrives.
+      p.watch.add(ev.entry);
+      if (ev.entry.final && ev.entry.speaker === "caller" && ev.entry.text) p.watch.check();
+      return;
+    }
+    const next = nextPlay(p.state, ev, d.config().games);
+    if (!next) return;
+    p.state = next;
+    push(p);
   });
 
+  async function lobby(): Promise<Lobby> {
+    const g = d.config().games;
+    const boards = { scam: {}, get_through: {} } as Lobby["boards"];
+    for (const game of GAMES) {
+      for (const goal of g[game].goals) boards[game][goal.id] = (await d.repo.scores(game, goal.id)).slice(0, g.leaderboard_size);
+    }
+    const now = Date.now();
+    const live = [...liveCalls.values()].filter((c) => c.junk);
+    const liveSeconds = live.reduce((sum, c) => sum + (now - c.startedAt) / 1000, 0);
+    return {
+      games: { scam: g.scam.goals, get_through: g.get_through.goals },
+      boards,
+      size: g.leaderboard_size,
+      wasted: { seconds: Math.round((await d.repo.junkCallSeconds()) + liveSeconds), live: live.length },
+    };
+  }
+
   // Mounted at / (public host) and /public (admin preview): the page's URLs are under its own path.
-  app.get("/", (c) => c.html(page(c.req.path.replace(/\/?$/, "/"))));
+  app.get("/", async (c) => c.html(page(c.req.path.replace(/\/?$/, "/"), await lobby())));
+  app.get("/call/lobby", async (c) => c.json(await lobby(), 200, { "Cache-Control": "no-store" }));
 
   app.get("/assets/public.js", async (c) => {
     const body = await d.clientAssets("public.js");
@@ -174,12 +237,12 @@ export function publicRoutes(d: PublicDeps) {
 
   // The call id is the capability: only the page that started the call knows it.
   app.get("/call/:id/events", (c) => {
-    const s = states.get(c.req.param("id"));
-    if (!s) return c.text("no such call", 404);
+    const p = plays.get(c.req.param("id"));
+    if (!p) return c.text("no such call", 404);
     return streamSSE(c, async (stream) => {
-      s.streams.add(stream);
-      stream.onAbort(() => void s.streams.delete(stream));
-      await stream.writeSSE({ data: JSON.stringify(s.state) });
+      p.streams.add(stream);
+      stream.onAbort(() => void p.streams.delete(stream));
+      await stream.writeSSE({ data: JSON.stringify(p.state) });
       // Bun closes a connection idle for 10 s; Cloudflare after 100 s.
       while (!stream.aborted && !stream.closed) {
         await stream.sleep(5000);
@@ -188,19 +251,71 @@ export function publicRoutes(d: PublicDeps) {
     });
   });
 
+  app.get("/call/:id/result", async (c) => {
+    const play = await d.repo.getPlay(c.req.param("id"));
+    if (!play) return c.text("no such call", 404);
+    const call = await d.repo.getCall(play.callId);
+    // Not settled yet (still on, or being scored); a call cut off by a restart ends without a score.
+    if (play.finishedAt === null && (call?.status !== "ended" || settling.has(play.callId))) return c.json({ pending: true }, 202);
+    const scores = await d.repo.scores(play.game, play.goal);
+    const result: GameResult = {
+      game: play.game,
+      goal: play.goal,
+      player: play.player,
+      scoreMs: play.scoreMs,
+      durationMs: call?.endedAt ? call.endedAt - call.startedAt : null,
+      rank: play.scoreMs === null ? null : rankIn(play.game, scores, play.scoreMs),
+      board: scores.slice(0, d.config().games.leaderboard_size),
+    };
+    return c.json(result, 200, { "Cache-Control": "no-store" });
+  });
+
   // Limited before the body is read: the request is anonymous.
   const limit = bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => c.json({ error: "bad_request", message: "Something went wrong." }, 413) });
   app.post("/call", limit, async (c) => {
-    const body = await c.req.json<{ sdp?: unknown }>().catch(() => ({}) as { sdp?: unknown });
-    if (typeof body.sdp !== "string" || !body.sdp.startsWith("v=0")) {
+    type Body = { sdp?: unknown; game?: unknown; goal?: unknown; player?: unknown };
+    const body = await c.req.json<Body>().catch(() => ({}) as Body);
+    const games = d.config().games;
+    const game = GAMES.find((g) => g === body.game);
+    const goal = game && games[game].goals.find((g) => g.id === body.goal);
+    if (typeof body.sdp !== "string" || !body.sdp.startsWith("v=0") || !game || !goal) {
       return c.json({ error: "bad_request", message: "Something went wrong." }, 400);
     }
+    const player = playerName(body.player);
+    if (!player) return c.json({ error: "name", message: "Pick another name." }, 400);
     if (!d.manager.accepting) return c.json({ error: "busy", message: "Back in a minute." }, 503);
     const callId = crypto.randomUUID();
     const ip = c.req.header("cf-connecting-ip");
     const refused = await d.gate.admit(callId, ip ?? "local");
     if (refused) return c.json({ error: refused.error, message: refused.message }, refused.status);
-    states.set(callId, { state: { verdict: null, lean: 0, stage: null }, streams: new Set() });
+    // Event times count from here (the call's start), so the page can set its clock by them.
+    const startedAt = Date.now();
+    const play = {
+      game,
+      state: START,
+      streams: new Set<SSEStreamingApi>(),
+      watch: new GoalWatch({
+        referee: d.referee,
+        game,
+        goal,
+        config: () => d.config().games.referee,
+        onMet: (question, turn) => {
+          play.state = goalMet(play.state, question, turn);
+          push(play);
+        },
+        // On the call's log (the admin call page), for tuning games.yaml.
+        onJudged: (answers) =>
+          d.manager.bus.publish({
+            type: "note",
+            callId,
+            at: Date.now() - startedAt,
+            level: "info",
+            message: `referee: ${Object.entries(answers).map(([q, p]) => `${q} ${p.toFixed(2)}`).join(" · ")}`,
+          }),
+        onError: (err) => console.warn(`[public ${callId}] referee failed: ${errMsg(err)}`),
+      }),
+    };
+    plays.set(callId, play);
 
     const cfg = d.config();
     let answered!: (a: WebRtcAnswer) => void;
@@ -224,10 +339,14 @@ export function publicRoutes(d: PublicDeps) {
       await d.manager.registerIncoming({ callId, callControlId: `${PREFIX}${callId}`, from: PUBLIC_FROM, to: "public page", callerIp: ip });
     } catch (err) {
       d.gate.release(callId);
-      states.delete(callId);
+      plays.delete(callId);
       console.warn(`[public ${callId}] not started: ${errMsg(err)}`);
       return c.json({ error: "busy", message: "Back in a minute." }, 503);
     }
+    // Without its game row the call still works; it just isn't scored.
+    await d.repo
+      .createPlay({ callId, game, goal: goal.id, player, createdAt: startedAt })
+      .catch((err) => console.warn(`[public ${callId}] game not saved: ${errMsg(err)}`));
     // attachMedia creates the Live session (voice.connect) and runs the call; on failure it
     // ends the call, which releases the slot.
     const attached = d.manager.attachMedia(callId, NO_MEDIA, "pcm24", {
@@ -239,7 +358,7 @@ export function publicRoutes(d: PublicDeps) {
     try {
       const a = await Promise.race([answer, attached.then(() => answer)]);
       console.log(`[public ${callId}] Live session ${a.sessionId}`);
-      return c.json({ callId, sdp: a.sdp });
+      return c.json({ callId, sdp: a.sdp, elapsedMs: Date.now() - startedAt });
     } catch (err) {
       console.error(`[public ${callId}] could not start: ${errMsg(err)}`);
       return c.json({ error: "failed", message: "Couldn't connect. Try again." }, 502);
@@ -263,93 +382,235 @@ export function publicRoutes(d: PublicDeps) {
 /** Changes on every server start, so the page never runs a stale cached script. */
 const BUILD = Date.now().toString(36);
 
+// An arcade game-select screen: a red half (Scam me) and a green half (Get through), with the
+// scammer-time-wasted scoreboard on the seam. Fonts: Jersey 10 (display), Pixelify Sans (text).
 const css = `
-:root{color-scheme:light dark;--bg:#f6f5f1;--fg:#111;--muted:#8a877f;--line:#d9d6ce;--hot:#e5484d;--meter-genuine:#7f9f80;--meter-scam:#b56d6e}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0c0c0c;--fg:#f2f0ea;--muted:#6f6d67;--line:#2a2927;--hot:#ff6369}}
-:root[data-theme="dark"]{--bg:#0c0c0c;--fg:#f2f0ea;--muted:#6f6d67;--line:#2a2927;--hot:#ff6369}
+:root{color-scheme:dark;--ink:#0e0d10;--ink2:#1b1a20;--line:#2c2a33;--paper:#fff6ec;--dim:#8d8994;
+--red:#d8281f;--red-hi:#ff5a4e;--red-dk:#7d110b;--grn:#35d07a;--grn-ink:#04230f;--grn-hi:#5fe08a;--amb:#ffb000;
+--m:var(--red);--m-fg:var(--paper);--m-hi:var(--red-hi);--m-shade:rgba(0,0,0,.2);
+--disp:"Jersey 10",ui-monospace,monospace;--text:"Pixelify Sans",ui-monospace,monospace}
+body[data-mode="get_through"]{--m:var(--grn);--m-fg:var(--grn-ink);--m-hi:var(--grn-hi);--m-shade:rgba(4,35,15,.12)}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{height:100%}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;overflow:hidden;user-select:none}
-main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:40px;width:100%}
-button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
-#go{font-size:clamp(28px,8vw,44px);font-weight:600;letter-spacing:-.02em;padding:18px 34px;border:1.5px solid var(--fg);border-radius:999px;transition:transform .15s,background .15s,color .15s}
-#cta{display:flex;flex-direction:column;align-items:center;gap:14px}
-#sub{margin:0;font-size:15px;color:var(--muted);letter-spacing:.01em}
-#go:hover{background:var(--fg);color:var(--bg)}#go:active{transform:scale(.97)}
-#orb{position:relative;width:min(56vw,240px);aspect-ratio:1}
-#orb i{position:absolute;inset:0;border-radius:50%;will-change:transform}
-#orb .me{border:1.5px solid var(--fg);opacity:.35}
-#orb .it{background:var(--fg);transform:scale(.18)}
-body.connecting #orb .me{transform:scale(.62);opacity:.18}
-body.connecting #orb .it{transform:scale(.14);opacity:.45}
-body.connecting #orb::after{content:"";position:absolute;inset:19%;border:1.5px solid transparent;border-top-color:var(--fg);border-radius:50%;opacity:.45;animation:connecting 1.8s linear infinite}
-@keyframes connecting{to{transform:rotate(360deg)}}
-#end{width:64px;height:64px;border-radius:50%;background:var(--hot);color:#fff;display:grid;place-items:center}
-#end svg{width:28px;height:28px}
-#jev{display:flex;flex-direction:column;align-items:center;gap:10px;width:min(224px,80vw)}
-#meter{width:100%;overflow:visible}
-#meter .arc{fill:none;stroke:var(--line);stroke-width:1.3}
-#meter .zone{fill:none;stroke-width:2}
-#meter .genuine{stroke:var(--meter-genuine)}#meter .scam{stroke:var(--meter-scam)}
-#meter .tick{stroke:var(--muted);stroke-width:1}
-#meter .minor{opacity:.6}
-#needle{transform-origin:112px 109px;transition:transform .7s cubic-bezier(.2,.7,.2,1)}
-#needle .hand{fill:var(--fg)}
-#meter .pivot{fill:var(--bg);stroke:var(--fg);stroke-width:1.3}
-.meter-labels{display:flex;justify-content:space-between;align-items:center;width:89.285714%;color:color-mix(in srgb,var(--fg) 65%,var(--bg));font-size:14px;line-height:1;letter-spacing:.06em;text-transform:uppercase}
-.meter-labels>span:first-child{transform:translateX(-50%)}.meter-labels>span:last-child{transform:translateX(50%)}
-.scam-spam{display:inline-flex;align-items:center;gap:2px}.scam-spam .letters{display:inline-flex;flex-direction:column;align-items:center;gap:4px;min-width:12px;font-size:12px;line-height:1;letter-spacing:0}
-#stage{min-height:1.4em;white-space:nowrap;text-align:center;font-size:19px;font-weight:500;letter-spacing:.12em;text-transform:uppercase;margin-top:2px}
-@media(prefers-reduced-motion:reduce){#needle{transition:none}body.connecting #orb::after{animation:none}}
-#msg{min-height:1.4em;color:var(--muted);text-align:center;max-width:320px}
-body.connecting #msg{color:transparent}
 [hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;height:100dvh;background:var(--ink);color:var(--paper);font-family:var(--text);display:flex;flex-direction:column;overflow:hidden;user-select:none}
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none;padding:0}
+button:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--amb);outline-offset:2px}
+canvas.sprite{image-rendering:pixelated;display:block;flex:none;height:auto}
+@keyframes blink{50%{opacity:0}}
+@keyframes pop{0%{transform:scale(.6);opacity:0}60%{transform:scale(1.12);opacity:1}100%{transform:scale(1)}}
+@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}
+@keyframes inL{from{transform:translateX(-36px);opacity:0}to{transform:none;opacity:1}}
+@keyframes inR{from{transform:translateX(36px);opacity:0}to{transform:none;opacity:1}}
+#app{flex:1;min-height:0;position:relative}
+.scr{position:absolute;inset:0;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden}
+.band{flex:none;display:flex;align-items:center;justify-content:center;gap:12px;padding:10px 16px;padding-top:max(10px,env(safe-area-inset-top));background:var(--ink);color:var(--paper);position:relative}
+.band h1{margin:0;font-family:var(--disp);font-weight:400;font-size:clamp(28px,5vh,40px);line-height:1;letter-spacing:.03em}
+.band h1 button{font:inherit;letter-spacing:inherit}
+.band .back{position:absolute;left:12px;bottom:10px;font-family:var(--disp);font-size:28px;padding:0 10px}
+.chip{font-family:var(--disp);font-size:22px;line-height:1;letter-spacing:.06em;padding:5px 9px 6px;color:var(--amb);box-shadow:inset 0 0 0 2px var(--line);white-space:nowrap}
+.chip small{font-size:18px;color:var(--dim);margin-right:6px}
+.chip:hover{box-shadow:inset 0 0 0 2px var(--amb)}
+.band .chip{position:absolute;right:12px;bottom:8px}
+.foot{font-family:var(--disp);font-size:clamp(20px,3.4vh,26px);letter-spacing:.04em;padding:10px 16px;padding-bottom:max(10px,env(safe-area-inset-bottom));text-align:center}
+.board{list-style:none;margin:0;padding:8px 14px;width:100%;font-family:var(--disp);font-variant-numeric:tabular-nums;font-size:clamp(20px,3.1vh,24px);line-height:1;letter-spacing:.05em;text-align:left;background:var(--m-shade)}
+.board li{display:grid;grid-template-columns:2.4ch 1fr auto;gap:12px;align-items:baseline;padding:3px 4px}
+.board .r{opacity:.6}.board .t{text-align:right}
+.board li.empty{opacity:.4}
+.board li.you{background:var(--ink);color:var(--amb)}
+.board li.you .r{opacity:1}
+.board li.blinky .n,.board li.blinky .t{animation:blink 1.1s steps(2) infinite}
+.btn{font-family:var(--disp);font-size:clamp(28px,4.6vh,36px);line-height:1;padding:10px 34px 12px;background:var(--ink);color:var(--paper);box-shadow:4px 4px 0 rgba(0,0,0,.25)}
+.btn:hover{transform:translate(-1px,-1px);box-shadow:5px 5px 0 rgba(0,0,0,.25)}
+.btn:active{transform:translate(2px,2px);box-shadow:1px 1px 0 rgba(0,0,0,.25)}
+.btn.ghost{background:transparent;color:var(--m-fg);box-shadow:inset 0 0 0 3px var(--m-fg)}
+.split{flex:1;min-height:0;display:flex;position:relative}
+.half{--bg:var(--red);--fg:var(--paper);--hi:var(--red-hi);--shade:rgba(0,0,0,.22);flex:1 1 50%;min-width:0;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:clamp(8px,1.8vh,16px);padding:16px;background:var(--bg);color:var(--fg);text-align:center;cursor:pointer;position:relative;overflow:hidden;transition:flex-basis .45s cubic-bezier(.2,.8,.2,1),flex-grow .45s}
+.half.get_through{--bg:var(--grn);--fg:var(--grn-ink);--hi:var(--grn-hi);--shade:rgba(4,35,15,.12)}
+.half h2{margin:0;font-family:var(--disp);font-weight:400;font-size:clamp(46px,min(10vw,10vh),96px);line-height:.85;text-shadow:3px 3px 0 rgba(0,0,0,.18)}
+.half.get_through h2{text-shadow:none}
+.half .goal{margin:0;font-size:clamp(18px,2.8vh,22px);font-weight:600}
+.half .tap{font-family:var(--disp);font-size:clamp(20px,3.2vh,26px);animation:blink 1.1s steps(2) infinite}
+.half canvas.sprite{width:clamp(56px,13vh,126px)}
+.half .board{--m-shade:var(--shade)}
+.half.get_through .board li.you{color:var(--grn-hi)}
+.half .x{position:absolute;top:10px;right:12px;font-family:var(--disp);font-size:26px;padding:2px 8px}
+.detail{display:flex;flex-direction:column;align-items:center;gap:clamp(8px,1.6vh,14px);width:100%;max-width:360px}
+.badge{position:absolute;left:50%;top:22px;transform:translateX(-50%);z-index:2;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 18px 10px;background:var(--ink);color:var(--paper);box-shadow:5px 5px 0 rgba(0,0,0,.28);pointer-events:none;transition:opacity .2s}
+.badge b{font-family:var(--disp);font-weight:400;font-size:clamp(36px,6vh,52px);line-height:.9;color:var(--amb);font-variant-numeric:tabular-nums}
+.badge span{font-family:var(--disp);font-size:clamp(17px,2.6vh,21px);letter-spacing:.06em;line-height:1}
+.split:not([data-active]) .detail,.split:not([data-active]) .x{display:none}
+.split[data-active] .badge{opacity:0}
+.split[data-active] .half{flex:0 0 72px;padding:8px}
+.split[data-active] .half.on{flex:1 1 100%;padding:16px;cursor:default}
+.split[data-active] .half.on .tap,.split[data-active] .half.on .goal,.split[data-active] .half.on canvas.sprite{display:none}
+.split[data-active] .half.on h2{font-size:clamp(40px,7vh,64px)}
+.split[data-active] .half:not(.on)>:not(h2){display:none}
+.split[data-active] .half:not(.on) h2{font-size:34px;writing-mode:vertical-rl;transform:rotate(180deg)}
+.split:not([data-active]) .half{padding-top:120px}
+.car{display:grid;grid-template-columns:44px 1fr 44px;align-items:stretch;width:100%;touch-action:pan-y}
+.car-arr{font-family:var(--disp);font-size:34px;line-height:1;display:grid;place-items:center}
+.car-arr:hover{background:var(--shade)}
+.card{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:clamp(104px,15vh,120px);padding:10px 8px;background:var(--ink);color:var(--paper)}
+.card.inL{animation:inL .22s ease-out}.card.inR{animation:inR .22s ease-out}
+.card-top{display:flex;align-items:center;gap:8px}
+.card b{font-family:var(--disp);font-weight:400;font-size:clamp(28px,4.4vh,34px);line-height:.9;letter-spacing:.03em;color:var(--hi);text-transform:uppercase}
+.card p{margin:0;font-size:clamp(14px,2.2vh,16px);font-weight:500;line-height:1.3;max-width:30ch}
+.hard{font-family:var(--disp);font-size:17px;line-height:1;padding:2px 6px 3px;background:var(--amb);color:var(--ink)}
+.dots{display:flex}
+.dots button{width:20px;height:20px;padding:6px;background:var(--shade);background-clip:content-box}
+.dots button:hover{background-color:var(--fg)}
+.dots button.on{background-color:var(--fg)}
+@media (max-width:700px){
+.split{flex-direction:column}
+.split:not([data-active]) .half{padding-top:16px}
+.split:not([data-active]) .half.scam{padding-bottom:52px}
+.split:not([data-active]) .half.get_through{padding-top:52px}
+.badge{top:50%;transform:translate(-50%,-50%);flex-direction:row;align-items:baseline;gap:10px;padding:8px 14px;white-space:nowrap}
+.badge b{font-size:clamp(32px,5vh,42px)}
+.badge span{font-size:17px}
+.split[data-active] .half{flex-basis:52px}
+.split[data-active] .half:not(.on) h2{writing-mode:horizontal-tb;transform:none;font-size:30px}
+}
+.modebg{background:var(--m);color:var(--m-fg)}
+.overlay{z-index:5}
+.stage{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:clamp(12px,2.8vh,26px);padding:16px;text-align:center;width:100%;max-width:460px;margin-inline:auto}
+.tag{display:inline-block;font-family:var(--disp);font-size:22px;line-height:1;padding:5px 10px 6px;background:var(--ink);color:var(--m-hi);letter-spacing:.03em;text-transform:uppercase}
+.stage h2{margin:0;font-family:var(--disp);font-weight:400;font-size:clamp(44px,8vh,68px);line-height:.9}
+body[data-mode="scam"] .modebg h2{text-shadow:3px 3px 0 rgba(0,0,0,.18)}
+.slots{display:flex;gap:clamp(10px,3vw,18px);position:relative}
+.slot{display:flex;flex-direction:column;align-items:center;gap:4px}
+.slot .ar{font-size:20px;line-height:1;padding:8px 16px;opacity:.75}
+.slot .ar:hover{opacity:1}
+.ch{display:grid;place-items:center;width:clamp(66px,11vh,86px);height:clamp(78px,13vh,102px);background:var(--m-shade);font-family:var(--disp);font-size:clamp(66px,11vh,90px);line-height:1;border-bottom:6px solid currentColor;cursor:text;position:relative}
+.ch.cur{border-bottom-color:var(--ink)}
+.ch.cur.empty::after{content:"";position:absolute;left:25%;right:25%;bottom:10px;height:10px;background:var(--m-fg);animation:blink 1s steps(2) infinite}
+#name-in{position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;font-size:16px}
+.cbar{flex:none;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;padding-top:max(12px,env(safe-area-inset-top))}
+.cbrand{font-family:var(--disp);font-size:24px;letter-spacing:.03em;color:var(--dim)}
+.cstage{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:clamp(22px,5vh,48px);padding:0 16px 20px;padding-bottom:max(20px,env(safe-area-inset-bottom));width:100%;max-width:440px;margin-inline:auto;text-align:center}
+.mission{width:100%;position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 14px 26px;margin-bottom:14px;background:var(--ink2);box-shadow:inset 0 0 0 3px var(--m);color:var(--paper);text-align:center}
+.mtab{position:absolute;left:50%;top:100%;transform:translate(-50%,-50%);font-family:var(--disp);font-size:clamp(22px,3.6vh,28px);line-height:1;letter-spacing:.04em;padding:5px 14px 6px;background:var(--m);color:var(--m-fg);white-space:nowrap;text-transform:uppercase}
+.mission b{font-family:var(--disp);font-weight:400;font-size:clamp(32px,5.4vh,42px);line-height:.9;letter-spacing:.03em;color:var(--m-hi);text-transform:uppercase}
+.mission p{margin:0;font-size:clamp(15px,2.3vh,17px);font-weight:500;line-height:1.3;max-width:32ch}
+.mission.solid{background:var(--m);color:var(--m-fg);animation:pop .4s}
+.mission.warn{--m:var(--red);--m-fg:var(--paper);--m-hi:var(--red-hi)}
+.mission.solid b{color:var(--m-fg)}
+.mission.solid .mtab{background:var(--ink);color:var(--m-hi);box-shadow:inset 0 0 0 2px var(--m)}
+.mission.solid .hard{display:none}
+.clock{display:flex;flex-direction:column;align-items:center;gap:6px}
+.clock .lbl{font-family:var(--disp);font-size:clamp(22px,3.6vh,28px);line-height:1;letter-spacing:.05em;color:var(--dim)}
+.clock b{font-family:var(--disp);font-weight:400;font-size:clamp(96px,24vh,200px);line-height:.8;color:var(--amb);text-shadow:0 0 24px rgba(255,176,0,.3);font-variant-numeric:tabular-nums}
+body.connecting .clock .lbl{animation:blink 1.1s steps(2) infinite}
+body.connecting .clock b{opacity:.35}
+.meter{width:100%;display:flex;flex-direction:column;gap:8px}
+.mbar{display:grid;grid-template-columns:repeat(8,1fr) 4px repeat(8,1fr);gap:4px;align-items:center}
+.mbar i{height:clamp(16px,2.6vh,22px);background:var(--ink2)}
+.mbar .mid{height:calc(clamp(16px,2.6vh,22px) + 10px);background:var(--paper)}
+.mbar i.g{background:var(--grn)}.mbar i.s{background:var(--red-hi)}
+.mlbl{display:flex;justify-content:space-between;font-family:var(--disp);font-size:20px;letter-spacing:.06em;line-height:1}
+.mlbl span:first-child{color:var(--grn-hi)}.mlbl span:last-child{color:var(--red-hi)}
+#s-call.caught .clock .lbl,#s-call.caught .clock b{color:var(--red-hi)}
+#s-call.caught .clock b{text-shadow:0 0 24px rgba(255,90,78,.35)}
+#s-call.reached .clock .lbl,#s-call.reached .clock b{color:var(--grn-hi)}
+#s-call.reached .clock b{text-shadow:0 0 24px rgba(95,224,138,.3)}
+#s-call.reached .meter{display:none}
+.hang{margin-top:clamp(0px,3vh,32px);width:clamp(60px,9vh,72px);height:clamp(60px,9vh,72px);border-radius:50%;background:var(--red);color:#fff;display:grid;place-items:center;box-shadow:0 4px 0 var(--red-dk);flex:none}
+.hang svg{width:48%;height:48%}
+.hang:active{transform:translateY(3px);box-shadow:0 1px 0 var(--red-dk)}
+.banner{position:absolute;left:0;right:0;top:36%;z-index:3;text-align:center;font-family:var(--disp);font-size:clamp(64px,15vw,120px);line-height:.9;color:var(--paper);background:var(--red);padding:14px 16px 18px;animation:pop .45s cubic-bezier(.2,.9,.3,1.3);pointer-events:none}
+.banner.good{background:var(--grn);color:var(--grn-ink);font-size:clamp(52px,12vw,100px)}
+.r-score{display:flex;flex-direction:column;align-items:center;gap:6px}
+.r-score .r-lbl{letter-spacing:.05em;opacity:.7}
+.r-score span:empty{display:none}
+.r-score b.wait{animation:blink 1.1s steps(2) infinite}
+.r-score b{font-family:var(--disp);font-weight:400;font-size:clamp(76px,15vh,128px);line-height:.8;font-variant-numeric:tabular-nums}
+.r-score span{font-family:var(--disp);font-size:clamp(22px,3.6vh,28px);letter-spacing:.04em;text-transform:uppercase}
+.r-extra{margin:0;display:flex;align-items:center;gap:10px;padding:6px 12px;background:var(--ink);color:var(--amb);font-family:var(--disp);font-size:clamp(20px,3.2vh,24px);letter-spacing:.03em}
+.r-extra canvas.sprite{width:18px}
+.r-btns{display:flex;flex-wrap:wrap;justify-content:center;gap:12px}
+.r-btns .btn.ghost{font-size:clamp(22px,3.6vh,28px);padding:10px 18px 12px}
+.toast{position:absolute;left:50%;top:calc(64px + env(safe-area-inset-top));transform:translateX(-50%);z-index:9;max-width:calc(100% - 32px);padding:10px 16px 12px;background:var(--ink);color:var(--paper);box-shadow:inset 0 0 0 2px var(--amb),5px 5px 0 rgba(0,0,0,.3);font-family:var(--disp);font-size:24px;letter-spacing:.03em;text-align:center}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 `;
 
-/** Twenty-five dial marks, with a longer mark every fourth step. */
-const meterTicks = Array.from({ length: 25 }, (_, i) => {
-  const angle = Math.PI - i * Math.PI / 24;
-  const inner = i % 4 === 0 ? 90 : 96;
-  const at = (r: number) => [(112 + r * Math.cos(angle)).toFixed(2), (109 - r * Math.sin(angle)).toFixed(2)];
-  const [x1, y1] = at(100), [x2, y2] = at(inner);
-  return `<line class="tick${i % 4 === 0 ? "" : " minor"}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
-}).join("");
+const hangIcon = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85a1 1 0 0 1-1.41-.02L.29 13.08a1 1 0 0 1 0-1.41C3.34 8.77 7.46 7 12 7s8.66 1.77 11.71 4.67a1 1 0 0 1 0 1.41l-2.48 2.47a1 1 0 0 1-1.41.02 11.3 11.3 0 0 0-2.67-1.85 1 1 0 0 1-.56-.9v-3.1A15 15 0 0 0 12 9z"/></svg>`;
 
-const page = (base: string) => `<!doctype html>
+/** JSON inside a <script> element: "<" escaped so no string can close it. */
+const scriptJson = (v: unknown) => JSON.stringify(v).replaceAll("<", "\\u003c");
+
+const half = (game: Game, title: string, goal: string, sprite: string) => `
+      <div class="half ${game}" data-game="${game}" role="button" tabindex="0" aria-label="${title}">
+        <button class="x" type="button" aria-label="Back">✕</button>
+        <canvas class="sprite" data-sprite="${sprite}" width="24" height="24"></canvas>
+        <h2>${title}</h2>
+        <p class="goal">${goal}</p>
+        <span class="tap">TAP TO PLAY</span>
+        <div class="detail" data-detail="${game}"></div>
+      </div>`;
+
+const page = (base: string, lobby: Lobby) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="description" content="Try to scam an AI call screener.">
-<meta name="theme-color" content="#0c0c0c" media="(prefers-color-scheme: dark)">
+<meta name="description" content="Scam my phone's AI, or get through to me. Every game helps it waste real scammers' time.">
+<meta name="theme-color" content="#0e0d10">
 <title>ScamSitter</title>
 <link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jersey+10&family=Pixelify+Sans:wght@500;600&display=swap">
 <style>${css}</style>
 </head>
-<body data-base="${base}">
-<main>
-  <div id="cta"><button id="go" type="button">Scam me</button><p id="sub">or get through to me</p></div>
-  <div id="orb" hidden><i class="me"></i><i class="it"></i></div>
-  <div id="jev" hidden aria-live="polite">
-    <svg id="meter" viewBox="0 0 224 118" aria-hidden="true">
-      <path class="arc" d="M12 109 A100 100 0 0 1 212 109"/>
-      ${meterTicks}
-      <path class="zone genuine" d="M12 109 A100 100 0 0 1 41.2893 38.2893"/>
-      <path class="zone scam" d="M182.7107 38.2893 A100 100 0 0 1 212 109"/>
-      <g id="needle">
-        <path class="hand" d="M112 22 L114 111 L112 123 L110 111 Z"/>
-        <circle class="pivot" cx="112" cy="109" r="5.5"/>
-      </g>
-    </svg>
-    <div class="meter-labels"><span>Genuine</span><span class="scam-spam"><span class="sr">Scam or spam</span><span aria-hidden="true">s</span><span class="letters" aria-hidden="true"><span>c</span><span>p</span></span><span aria-hidden="true">am</span></span></div>
-    <div id="stage"></div>
-  </div>
-  <button id="end" type="button" aria-label="Hang up" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85a1 1 0 0 1-1.41-.02L.29 13.08a1 1 0 0 1 0-1.41C3.34 8.77 7.46 7 12 7s8.66 1.77 11.71 4.67a1 1 0 0 1 0 1.41l-2.48 2.47a1 1 0 0 1-1.41.02 11.3 11.3 0 0 0-2.67-1.85 1 1 0 0 1-.56-.9v-3.1A15 15 0 0 0 12 9z"/></svg></button>
-  <p id="msg" role="status"></p>
-</main>
+<body data-base="${base}" data-mode="scam" class="idle">
+<div id="app">
+  <section class="scr" id="s-home">
+    <header class="band"><h1><button type="button" data-home>SCAMSITTER</button></h1><button class="chip" type="button" data-chip hidden></button></header>
+    <div class="split" id="split">${half("scam", "SCAM ME", "Don't get caught.", "bandit")}${half("get_through", "GET THROUGH", "Reach me. Fast.", "caller")}
+      <div class="badge"><b id="wasted">0:00:00</b><span>SCAMMER TIME WASTED</span></div>
+    </div>
+    <footer class="band foot">PLAY NOW. REAL SCAMMERS PAY LATER.</footer>
+  </section>
+
+  <section class="scr callbg" id="s-call" hidden>
+    <header class="cbar"><span class="cbrand">SCAMSITTER</span><button class="chip" type="button" data-chip></button></header>
+    <div class="cstage">
+      <div class="mission" id="mission"><span class="mtab" id="m-tab"></span><span class="card-top"><b id="m-name"></b><span class="hard" id="m-hard" hidden>HARD</span></span><p id="m-brief"></p></div>
+      <div class="clock"><span class="lbl" id="c-lbl">CALLING…</span><b id="c-time">00:00</b></div>
+      <div class="meter" id="meter"><div class="mbar" id="mbar" aria-hidden="true"></div><div class="mlbl"><span>GENUINE</span><span>SCAM</span></div></div>
+      <button class="hang" type="button" id="end" aria-label="Hang up">${hangIcon}</button>
+    </div>
+    <div class="banner" id="banner" hidden></div>
+  </section>
+
+  <section class="scr modebg" id="s-result" hidden>
+    <header class="band"><h1><button type="button" data-home>SCAMSITTER</button></h1><button class="chip" type="button" data-chip hidden></button></header>
+    <div class="stage">
+      <h2 id="r-title"></h2>
+      <div class="r-score"><span class="r-lbl" id="r-lbl" hidden></span><b id="r-time"></b><span id="r-rank"></span></div>
+      <p class="r-extra" id="r-extra" hidden><canvas class="sprite" data-sprite="sparkle" width="9" height="9"></canvas><span id="r-wasted"></span><canvas class="sprite" data-sprite="sparkle" width="9" height="9"></canvas></p>
+      <ol class="board" id="r-board"></ol>
+      <div class="r-btns"><button class="btn" type="button" id="again">PLAY AGAIN</button><button class="btn ghost" type="button" id="menu">CHANGE GAME</button></div>
+    </div>
+    <footer class="band foot">PLAY NOW. REAL SCAMMERS PAY LATER.</footer>
+  </section>
+
+  <section class="scr modebg overlay" id="s-name" hidden>
+    <header class="band"><button class="back" type="button" id="name-x" aria-label="Close">✕</button><h1><button type="button" data-home>SCAMSITTER</button></h1></header>
+    <div class="stage">
+      <span class="tag" id="name-tag"></span>
+      <h2>PLAYER NAME</h2>
+      <div class="slots" id="slots"><input id="name-in" maxlength="3" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Your initials"></div>
+      <button class="btn" type="button" id="name-ok">CALL ▸</button>
+    </div>
+  </section>
+
+  <div class="toast" id="msg" role="status" hidden></div>
+</div>
 <audio id="remote" autoplay playsinline></audio>
+<script type="application/json" id="lobby">${scriptJson(lobby)}</script>
 <script src="${base}assets/public.js?v=${BUILD}"></script>
 </body>
 </html>`;

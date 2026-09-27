@@ -39,5 +39,23 @@ export const events = sqliteTable(
   (t) => [index("events_call_idx").on(t.callId, t.id)],
 );
 
+// Public page games (src/core/game.ts): one per public call, scored once the call ends.
+export const plays = sqliteTable(
+  "plays",
+  {
+    callId: text("call_id")
+      .primaryKey()
+      .references(() => calls.id),
+    game: text("game", { enum: ["scam", "get_through"] }).notNull(),
+    goal: text("goal").notNull(),
+    player: text("player").notNull(),
+    // null until the call ends, and after if the player didn't make it
+    scoreMs: integer("score_ms"),
+    createdAt: integer("created_at").notNull(),
+    finishedAt: integer("finished_at"),
+  },
+  (t) => [index("plays_board_idx").on(t.game, t.goal, t.scoreMs)],
+);
+
 export type CallRow = typeof calls.$inferSelect;
 export type EventRow = typeof events.$inferSelect;

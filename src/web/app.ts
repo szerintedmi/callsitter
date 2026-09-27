@@ -16,7 +16,7 @@ export interface AppDeps extends TelnyxRoutesDeps, AdminDeps {
   openAiSip?: Omit<SipRoutesDeps, "manager" | "repo" | "config" | "browserSip">;
   browserSip?: BrowserSipDeps;
   /** the public "Scam me" page at the root of `host` (and at /public on the admin host) */
-  publicPage?: Omit<PublicDeps, "manager" | "clientAssets"> & { host: string };
+  publicPage?: Omit<PublicDeps, "manager" | "repo" | "clientAssets"> & { host: string };
 }
 
 export function createApp(d: AppDeps) {
@@ -36,7 +36,7 @@ export function createApp(d: AppDeps) {
   admin.route("/", adminRoutes(d));
   admin.route("/", testCallRoutes(d));
 
-  const pub = d.publicPage ? publicRoutes({ ...d.publicPage, manager: d.manager, clientAssets: d.clientAssets }) : null;
+  const pub = d.publicPage ? publicRoutes({ ...d.publicPage, manager: d.manager, repo: d.repo, clientAssets: d.clientAssets }) : null;
   if (pub) {
     admin.get("/public/", (c) => c.redirect("/public"));
     admin.route("/public", pub);

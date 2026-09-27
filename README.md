@@ -2,7 +2,8 @@
 
 An AI call screener for a personal phone number. Divert your calls to a Telnyx number, and an OpenAI **gpt-live-1** agent answers them. **TypeSafe Jev** classifies the growing transcript, and a deterministic call flow (`config/call-flow.yaml`) steers the agent:
 
-- **Scam or spam:** it tells the voice agent to waste their time, mixing a few tactics.
+- **Scam** (Jev ≥ 0.85): it tells the voice agent to waste their time, mixing a few tactics.
+- **Sales call (spam, Jev ≥ 0.85):** the agent politely declines, asks to be taken off their list and says goodbye.
 - **Genuine caller:** the agent takes a message itself; it reaches the owner in the call summary.
 - **The classifier is unsure, or the agent asks for help:** **GPT-6 Luna** judges and returns guidance, and can end the call.
 - **Urgent** (Jev's urgency ≥ 0.85 while its scam + spam probability is under 0.5, or Luna's rolling summary says the owner may want to act while the caller is on the line): the owner's Telegram status message gets a notifying 🚨 reply, once per call (`telegram.yaml → status.urgent_alert`). It doesn't steer the call.
@@ -56,12 +57,18 @@ Replay examples:
 - It needs the setup in [OpenAI SIP](#openai-sip). Test calls show up as `browser (SIP)`.
 - The page's **Debug log** shows the Telnyx call states (with SIP codes) and the server's log lines.
 
-**Public page** (`https://<public host>/`, the one Telnyx calls; preview at `/public` on the admin host): a single **Scam me** button for anyone with the link. The visitor plays the scammer.
+**Public page** (`https://<public host>/`, the one Telnyx calls; preview at `/public` on the admin host): an arcade game-select screen with two games for anyone with the link (`config/games.yaml`, scoring in `src/core/game.ts`).
+
+- **Scam me**: the visitor plays a scammer with a goal (safe account, police, crypto wallet…). The clock starts when they make their move and stops when the call flow catches them (`waste_time` stage); longest wins. It only scores if they asked for what the goal wants (the ask) before being caught, so chatting to run the clock doesn't pay. After that the page shows the agent wasting *their* time.
+- **Get through**: the visitor plays a real caller with a reason to call. Score: time until they've passed on the message, unless caught first; fastest wins.
+- **The referee** (`src/core/referee.ts`, `games.yaml → referee`) decides "made their move" and "passed on the message": a separate Jev call with the goal's `counts_when`, run after each of the call's own Jev classifications until the goal is met, and once more at hang-up. Only the referee knows the goal: the call's own Jev, Live and Luna judge the call like any other.
+- Scores are settled on the server and stored with the call (`plays` table) under the visitor's 3-letter name (kept in the browser). Each goal has its own leaderboard of its top scores; a player can hold several places.
+- **Scammer time wasted** on the home screen adds up calls judged scam or spam (public ones too), full length, and ticks up while one is live.
 
 - The browser talks to gpt-live-1 over **WebRTC**. The server exchanges the SDP offer with `POST /v1/live/sessions` ([voice-webrtc](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live): "we recommend using WebRTC rather than WebSockets for more consistent performance") and attaches a sideband, as for a SIP call. The API key and the prompt stay on the server.
 - The page's data channel is locked down (`client.data_channel`): it can't send any client event, so a visitor can't append instructions. It only receives `session.closed`.
 - Cost caps (`config/public.yaml`): a 10-minute call length, 3 calls at once, 10 calls per IP a day, and a rolling-24 h budget. A call is admitted only if it fits even if it and every live public call run the full 10 minutes.
-- During the call the page shows a meter whose needle leans from genuine to scam/spam (P(scam) + P(spam) − P(genuine); an unclear verdict pulls it to the middle) and the call-flow stage, streamed as server-sent events from `/call/:id/events`.
+- During the call the page shows a meter that leans from genuine to scam/spam (P(scam) + P(spam) − P(genuine); an unclear verdict pulls it to the middle), the goal, and when the call was caught or got through, streamed as server-sent events from `/call/:id/events`. The score, rank and leaderboard come from `/call/:id/result` once the call has ended.
 - Luna's tools are live (`public.yaml → tools`). The call gets a Telegram status message like any other, and the owner can steer it. The budget counts the rolling summaries too. Calls are recorded and listed with the caller `public` and the visitor's IP (`CF-Connecting-IP`, stored with the call).
 - Why the admin test call uses a WebSocket relay instead: it exercises the Telnyx media-stream path that real calls take. The public page is the only caller that really arrives over WebRTC.
 
@@ -114,7 +121,7 @@ Setup:
 ```
 src/core/       runtime-agnostic: config schema, call flow, orchestrator, call session, ports
 src/adapters/   telnyx (webhooks/REST/media), openai-live (WebSocket, SIP, WebRTC + sideband), jev, luna, storage (sqlite/fs), config (yaml)
-src/web/        Hono routes: /telnyx/webhook, /openai/webhook, /media/:callId/:codec/:token, the public page (/, /call); admin UI on ADMIN_HOST
+src/web/        Hono routes: /telnyx/webhook, /openai/webhook, /media/:callId/:codec/:token, the public page (/, /call…); admin UI on ADMIN_HOST
 src/web/client/ browser TypeScript for the UI pages, compiled with Bun.build and served as /assets/<page>.js on the admin host
 src/runtime/    bun.ts entrypoint, env schema, client build (client-assets.ts)
 src/replay/     transcript replay harness + offline keyword classifier
@@ -137,6 +144,7 @@ Each file has one job (schemas and cross-file checks: `src/core/config.ts`; `bun
 | `connection.yaml` | How the audio reaches the agent: OpenAI SIP, Telnyx media stream, speech levels.                                                                                                                            |
 | `cost.yaml`       | Prices for each call's cost: Live per minute, Luna and Jev per token.                                                                                                                                       |
 | `public.yaml`     | The public page's limits: call length, calls at once, per IP, daily budget.                                                                                                                                 |
+| `games.yaml`      | The public page's games: goals for Scam me and Get through, the referee that judges them, leaderboard size.                                                                                                  |
 | `telegram.yaml`   | The owner's Telegram: the per-call status message, and how steering messages reach Live.                                                                                                                     |
 
 
@@ -150,7 +158,7 @@ What reaches Live, and when:
 - **Your Telegram message:** sent at once, as commentary, instructions or thinking (`telegram.yaml → steering`). Luna guidance from a run that started before it is dropped.
 - **Hangup:** nothing more reaches Live; Luna writes the summary, which goes into the call's Telegram status message.
 
-Any config text can use `{owner_name}` (`OWNER_NAME` from `.env`, or "the owner" if unset) and `{agent_languages}` (`AGENT_LANGUAGES`, or "English"); it is filled in when the config loads, and other placeholders are rejected.
+Any config text can use `{owner_name}` (`OWNER_NAME` from `.env`, or "the owner" if unset) and `{agent_languages}` (`AGENT_LANGUAGES`, or "any common language"); it is filled in when the config loads, and other placeholders are rejected.
 
 To add a behaviour, add a Choice question to `jev.yaml` and a rule that uses it to `call-flow.yaml`; the loader rejects rules that name unknown questions or answers.
 
