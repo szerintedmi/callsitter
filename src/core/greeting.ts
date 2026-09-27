@@ -1,7 +1,10 @@
 import { b64decode, b64encode, BYTES_PER_MS, levelDbfs, SAMPLE_RATE, SILENCE_BYTE, toPcm16, type Codec } from "./audio";
 import type { AppConfig, LiveConfig } from "./config";
+import { logger } from "./log";
 import type { BlobStore, VoiceAgent } from "./ports";
 import { encodeWav } from "./wav";
+
+const log = logger("greeting");
 
 // The greeting, recorded from Live itself so it's the same voice. Live takes ~1.5 s to connect
 // and ~2.7 s more to say "Hello?" when asked; a recording plays the moment the call connects
@@ -92,6 +95,7 @@ export interface GreetingCacheDeps {
   codecs?: (cfg: AppConfig) => Codec[];
   /** injectable for tests */
   record?: typeof recordGreeting;
+  /** replaces the logger (tests) */
   log?: (msg: string) => void;
 }
 
@@ -110,7 +114,7 @@ export class GreetingCache {
 
   /** Makes sure every codec has a recording for the current config. Serialized; safe to call often. */
   refresh(): Promise<void> {
-    this.running = this.running.then(() => this.refreshNow()).catch((err) => this.log(`refresh failed: ${errText(err)}`));
+    this.running = this.running.then(() => this.refreshNow()).catch((err) => this.log(`refresh failed: ${errText(err)}`, "warn"));
     return this.running;
   }
 
@@ -137,7 +141,7 @@ export class GreetingCache {
         this.ready.set(codec, { key, audio });
       } catch (err) {
         // Calls fall back to asking Live for the greeting.
-        this.log(`${codec}: not recorded, calls will ask Live to greet: ${errText(err)}`);
+        this.log(`${codec}: not recorded, calls will ask Live to greet: ${errText(err)}`, "warn");
       }
     }
   }
@@ -149,8 +153,9 @@ export class GreetingCache {
     return bytes.length ? bytes : null;
   }
 
-  private log(msg: string) {
-    (this.d.log ?? ((m: string) => console.log(m)))(`[greeting] ${msg}`);
+  private log(msg: string, level: "info" | "warn" = "info") {
+    if (this.d.log) this.d.log(`[greeting] ${msg}`);
+    else log[level](msg);
   }
 }
 

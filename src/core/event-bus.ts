@@ -1,5 +1,8 @@
+import { logger } from "./log";
 import type { EventBus } from "./ports";
 import type { CallEvent } from "./types";
+
+const log = logger("events");
 
 export class MemoryEventBus implements EventBus {
   private listeners = new Set<(ev: CallEvent) => void>();
@@ -9,7 +12,7 @@ export class MemoryEventBus implements EventBus {
       try {
         fn(ev);
       } catch (err) {
-        console.error("event listener failed", err);
+        log.error("event listener failed", { callId: ev.callId, type: ev.type, err });
       }
     }
   }

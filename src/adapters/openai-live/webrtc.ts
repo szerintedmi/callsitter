@@ -1,7 +1,10 @@
 import OpenAI from "openai";
+import { logger } from "../../core/log";
 import type { VoiceAgent, VoiceSession, VoiceSessionHandlers, VoiceSessionOptions } from "../../core/ports";
 import { liveInstructions } from "./session";
 import { hangupSession, recordedSideband } from "./sip";
+
+const log = logger("live");
 
 // OpenAI Live over WebRTC for the public page
 // (https://developers.openai.com/api/docs/guides/voice-webrtc?api=live): "Your browser creates
@@ -64,7 +67,7 @@ export class OpenAiWebRtc {
           if (hungUp) return;
           hungUp = true;
           hangupSession(this.client, sessionId).catch((err) =>
-            console.warn(`[live ${sessionId}] hangup failed: ${err instanceof Error ? err.message : err}`),
+            log.warn("hangup failed", { liveSession: sessionId, err }),
           );
         };
         let session: VoiceSession;

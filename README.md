@@ -146,6 +146,7 @@ Each file has one job (schemas and cross-file checks: `src/core/config.ts`; `bun
 | `public.yaml`     | The public page's limits: call length, calls at once, per IP, daily budget.                                                                                                                                 |
 | `games.yaml`      | The public page's games: goals for Scam me and Get through, the referee that judges them, leaderboard size.                                                                                                  |
 | `telegram.yaml`   | The owner's Telegram: the per-call status message, and how steering messages reach Live.                                                                                                                     |
+| `logging.yaml`    | The server's log files (`DATA_DIR/logs`, JSON Lines): how many days they're kept.                                                                                                                            |
 
 
 What reaches Live, and when:

@@ -2,6 +2,9 @@ import { watch } from "node:fs";
 import { join } from "node:path";
 import YAML from "yaml";
 import { CONFIG_FILES, loadConfig, type ConfigName, type ConfigSource, type ConfigStore, type ConfigVars } from "../../core/config";
+import { logger } from "../../core/log";
+
+const log = logger("config");
 
 export class YamlDirSource implements ConfigSource {
   constructor(private dir: string) {}
@@ -24,9 +27,9 @@ export function watchConfig(dir: string, store: ConfigStore, vars: ConfigVars = 
     timer = setTimeout(async () => {
       try {
         store.set(await loadConfig(source, vars));
-        console.log(`[config] reloaded (${file})`);
+        log.info(`reloaded (${file})`);
       } catch (err) {
-        console.error(`[config] reload failed, keeping previous config:\n${err instanceof Error ? err.message : err}`);
+        log.error(`reload failed, keeping previous config:\n${err instanceof Error ? err.message : err}`);
       }
     }, 200);
   });

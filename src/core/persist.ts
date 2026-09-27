@@ -1,5 +1,8 @@
+import { logger } from "./log";
 import type { CallRecord, EventBus, Repo } from "./ports";
 import type { CallEvent } from "./types";
+
+const log = logger("persist");
 
 export interface Persistence {
   /** resolves once every event published so far is stored */
@@ -18,7 +21,7 @@ export function attachPersistence(bus: EventBus, repo: Repo): Persistence {
     if (ev.type === "transcript" && !ev.entry.final) return;
     chain = chain
       .then(() => repo.appendEvent(ev, projection(ev)))
-      .catch((err) => console.error("persist failed", err));
+      .catch((err) => log.error("persist failed", { callId: ev.callId, type: ev.type, err }));
   });
   return { flush: () => chain, detach };
 }

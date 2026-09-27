@@ -2,7 +2,7 @@
 
 ScamSitter runs on an OVHcloud VPS (Debian 13) as one Docker container. GitHub Actions deploys each push to `main`.
 
-- **App**: `deploy/compose.yaml`, image `ghcr.io/szerintedmi/scamsitter` (private) pinned by digest. It listens on `127.0.0.1:8787`, with no public ports. SQLite, recordings and greetings live in `/var/lib/scamsitter` (`/data` in the container).
+- **App**: `deploy/compose.yaml`, image `ghcr.io/szerintedmi/scamsitter` (private) pinned by digest. It listens on `127.0.0.1:8787`, with no public ports. SQLite, recordings, greetings and log files live in `/var/lib/scamsitter` (`/data` in the container).
 - **Tunnel**: `cloudflared` runs on the host as a systemd service (`deploy/vps/cloudflared.yml`):
   - `scamsitter.geekmango.com` (public): the Telnyx/OpenAI webhooks, media streams, `/healthz` and the public page (`/`, `/call…`, `/assets/public.js`).
   - `scamsitter-admin.geekmango.com`: the admin UI behind Cloudflare Access. The app also verifies the Access JWT.
@@ -148,12 +148,26 @@ Run these on the VPS (`ssh scamsitter-vps`):
 | Task | Command |
 | --- | --- |
 | Current release, health, active calls | `sudo scamsitter-deploy status` |
-| Logs | `sudo docker compose --project-directory /opt/scamsitter logs -f` |
+| Logs (this container only: a deploy starts a new one) | `sudo docker compose --project-directory /opt/scamsitter logs -f` |
+| Log files (kept for `config/logging.yaml` → `retention_days`, 30 by default) | `sudo ls /var/lib/scamsitter/logs`; one call: `sudo cat /var/lib/scamsitter/logs/call-*-<call id>.jsonl` |
 | Go back to the release that ran before this one (twice toggles back) | `sudo scamsitter-deploy rollback` |
 | Deploy a specific image (already on the VPS) | `sudo scamsitter-deploy deploy ghcr.io/szerintedmi/scamsitter@sha256:… </dev/null` |
 | Stop / restart taking calls | `sudo scamsitter-deploy drain` / `sudo scamsitter-deploy resume` |
 
 Rolling back to an older commit can also be done by reverting on `main`, which deploys the revert. Neither way undoes migrations.
+
+### Investigating from the laptop
+
+`bun run prod …` (`scripts/prod.ts`) copies production data into `data/prod/` over `ssh scamsitter-vps`, using your login's sudo. It changes nothing on the VPS.
+
+| Command | Copies |
+| --- | --- |
+| `bun run prod get-db` | A consistent copy of the database, taken inside the running container (`VACUUM INTO`, safe during calls), to `data/prod/scamsitter-<time>.db`. |
+| `bun run prod get-logs [--days 3]` | The log files changed in the last N days to `data/prod/logs/`. |
+| `bun run prod get-call-log <call id>` | That call's log file, `call-<date>-<call id>.jsonl`. |
+| `bun run prod get-recording <call id>` | The call's recordings to `data/prod/recordings/`. |
+
+The copies hold callers' transcripts, numbers and voices. `data/` is gitignored; delete them when you're done. Then query locally, e.g. `sqlite3 data/prod/scamsitter-….db "select id, started_at, verdict from calls order by started_at desc limit 10"` or `jq -c 'select(.level != "info")' data/prod/logs/call-*-<id>.jsonl`.
 
 **Maintenance**: Docker and cloudflared aren't upgraded automatically, because restarting either can drop calls. Drain first:
 

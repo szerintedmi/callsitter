@@ -3,6 +3,7 @@ import type { UpgradeWebSocket } from "hono/ws";
 import { isCodec, type Codec } from "../core/audio";
 import type { CallManager } from "../core/call-manager";
 import type { CallSession } from "../core/call-session";
+import { logger } from "../core/log";
 import { errMsg } from "../core/orchestrator";
 import type { ConfigStore } from "../core/config";
 import type { Repo } from "../core/ports";
@@ -36,13 +37,16 @@ const INITIATED_SKIP = ["call_control_id", "client_state", "connection_id", "con
 const HANGUP_SKIP = ["call_control_id", "call_leg_id", "call_session_id", "client_state", "connection_id", "calling_party_type", "flow_destination", "from", "to", "start_time", "occurred_at"];
 
 const describe = (err: unknown) => (err instanceof TelnyxApiError ? err.summary : errMsg(err));
+const log = logger("telnyx");
+const callLog = logger("call");
+const mediaLog = logger("media");
 
 /** Runs tasks one after another per key, so a call's webhooks are handled in order. */
 class KeyedQueue {
   private tails = new Map<string, Promise<void>>();
   run(key: string, fn: () => Promise<void>, onError: (err: unknown) => Promise<void> | void) {
     const prev = this.tails.get(key) ?? Promise.resolve();
-    const next = prev.then(fn).catch(onError).catch((err) => console.error(`[telnyx] ${key}:`, err));
+    const next = prev.then(fn).catch(onError).catch((err) => log.error("queued webhook failed", { key, err }));
     this.tails.set(key, next);
     void next.finally(() => {
       if (this.tails.get(key) === next) this.tails.delete(key);
@@ -75,7 +79,7 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
         if (await d.repo.findByCallControlId(ccid)) return;
         // Draining for a deploy (or shutting down): the caller hears busy rather than being cut off later.
         if (!d.manager.accepting) {
-          console.log(`[telnyx] incoming call ${ccid} rejected: not accepting calls (draining)`);
+          log.info("incoming call rejected: not accepting calls (draining)", { callControlId: ccid });
           await d.telnyx.reject(ccid, "USER_BUSY");
           return;
         }
@@ -97,11 +101,11 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
           // No media will ever connect and Telnyx may not send call.hangup, so end the call here.
           // For L16 the answer may have succeeded before streaming_start failed, leaving the
           // phone call up: hang it up at the carrier too (a 422 for an unanswered call is ignored).
-          console.warn(`[call ${callId}] answer failed: ${describe(err)}`);
+          callLog.warn("answer failed", { callId, err: describe(err) });
           await d.manager.note(callId, "error", `answer failed: ${describe(err)}`);
           await d.telnyx
             .hangup(ccid)
-            .catch((e) => console.warn(`[call ${callId}] carrier hangup failed: ${describe(e)}`));
+            .catch((e) => callLog.warn("carrier hangup failed", { callId, err: describe(e) }));
           await d.manager.hangup(callId, `answer failed: ${describe(err)}`);
         }
         return;
@@ -114,7 +118,7 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
           // A failure here must not stop the recording; the call works without it.
           await d.telnyx
             .suppressionStart(ccid, { engine: ns.engine, direction: ns.direction })
-            .catch((err) => console.warn(`[call ${callId}] noise suppression not started: ${errMsg(err)}`));
+            .catch((err) => callLog.warn("noise suppression not started", { callId, err }));
         }
         await d.telnyx.recordStart(ccid, encodeClientState({ callId }));
         return;
@@ -163,24 +167,24 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
     const sip = d.browserSip!;
     const p = ev.payload;
     const nonce = nonceFromDialled(p.to);
-    const tag = `[sip test${nonce ? ` ${nonce.slice(0, 8)}` : ""}]`;
+    const testLog = logger("sip test", { nonce: nonce?.slice(0, 8) });
     if (ev.event_type !== "call.initiated" || !nonce || !p.call_control_id) {
       const why = p.hangup_cause ? `: ${p.hangup_cause}${p.hangup_source ? ` (${p.hangup_source})` : ""}` : "";
-      console.log(`${tag} Telnyx ${ev.event_type} ${p.direction ?? ""} ${p.from ?? ""} → ${p.to ?? ""}${why}`);
+      testLog.info(`Telnyx ${ev.event_type} ${p.direction ?? ""} ${p.from ?? ""} → ${p.to ?? ""}${why}`);
       return;
     }
     if (!sip.calls.isPending(nonce)) {
-      console.warn(`${tag} parked call with an unknown or expired nonce: hanging up`);
+      testLog.warn("parked call with an unknown or expired nonce: hanging up");
       await d.telnyx.hangup(p.call_control_id);
       return;
     }
     // sip:<project>@host (no ;transport param): the transfer's sip_transport_protocol sets TLS.
     const to = `sip:${sip.projectId}@${SIP_HOSTS[sip.region()]}`;
-    console.log(`${tag} parked WebRTC call from ${p.from ?? "?"}: transferring to ${to} (TLS, SRTP)`);
+    testLog.info(`parked WebRTC call from ${p.from ?? "?"}: transferring to ${to} (TLS, SRTP)`);
     try {
       await d.telnyx.transferToSip(p.call_control_id, { to, customHeaders: [{ name: TEST_HEADER, value: nonce }] });
     } catch (err) {
-      console.error(`${tag} transfer failed: ${describe(err)}`);
+      testLog.error("transfer failed", { err: describe(err) });
       await d.telnyx.hangup(p.call_control_id).catch(() => undefined);
     }
   };
@@ -204,7 +208,7 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
       () => handle(ev),
       async (err) => {
         const callId = ev.payload ? await resolveCallId(ev.payload).catch(() => null) : null;
-        console.error(`[telnyx] ${ev.event_type}${callId ? ` (call ${callId})` : ""}: ${describe(err)}`);
+        log.error(`${ev.event_type} failed`, { callId: callId ?? undefined, err: describe(err) });
         if (callId) await d.manager.note(callId, "error", `${ev.event_type}: ${describe(err)}`);
       },
     );
@@ -236,7 +240,7 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
             .attachMedia(callId, media, codec)
             .then((s) => (session = s))
             .catch((err) => {
-              console.error(`[media ${callId}] could not start session:`, err);
+              mediaLog.error("could not start session", { callId, err });
               ws.close();
             });
         },
@@ -251,10 +255,10 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
               }
               break;
             case "start":
-              console.log(`[media ${callId}] stream started`, JSON.stringify(msg.start.media_format ?? {}));
+              mediaLog.info("stream started", { callId, format: msg.start.media_format ?? {} });
               break;
             case "error":
-              console.error(`[media ${callId}] Telnyx error`, msg.payload);
+              mediaLog.error("Telnyx error", { callId, payload: msg.payload });
               break;
           }
         },

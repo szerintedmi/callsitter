@@ -3,6 +3,7 @@ import type { UpgradeWebSocket, WSContext } from "hono/ws";
 import { b64decode, b64encode } from "../core/audio";
 import type { CallManager } from "../core/call-manager";
 import type { CallSession } from "../core/call-session";
+import { logger } from "../core/log";
 import { errMsg } from "../core/orchestrator";
 import type { MediaChannel, Telephony } from "../core/ports";
 import { StereoRecorder } from "../core/wav";
@@ -10,6 +11,8 @@ import { sipUri, type OpenAiSip } from "../adapters/openai-live/sip";
 import { isSipCall, sipSessionId, TEST_HEADER, testDial, type BrowserSipCalls } from "./openai-sip";
 import { isPublicCall } from "./public";
 import { TEST_CALL_PROTOCOL } from "./test-call-protocol";
+
+const log = logger("test call");
 
 // Browser test call: the UI streams the computer mic over a WebSocket instead of a phone leg.
 // The server runs an ordinary CallSession (Live, Jev, call flow, Luna); only the media
@@ -169,7 +172,7 @@ export function testCallRoutes(d: TestCallDeps) {
         const media = new BrowserMediaChannel(ws, d.testCallCloseGraceMs ?? CLOSE_GRACE_MS, recorder, () => {
           d.manager
             .saveRecording(callId, recorder.toWav(), "wav")
-            .catch((err) => console.warn(`[test call ${callId}] recording not saved: ${errMsg(err)}`));
+            .catch((err) => log.warn("recording not saved", { callId, err }));
         });
         d.browserCalls.register(ccid, () => media.close());
         await d.manager.registerIncoming({ callId, callControlId: ccid, from: "browser", to: "test call" });
@@ -204,7 +207,7 @@ export function testCallRoutes(d: TestCallDeps) {
                 return;
               }
               start(ws, msg.dryRun !== false).catch((err) => {
-                console.error(`[test call ${callId}] could not start:`, err);
+                log.error("could not start", { callId, err });
                 ws.send(JSON.stringify({ type: "error", message: errMsg(err) }));
                 ws.close();
               });

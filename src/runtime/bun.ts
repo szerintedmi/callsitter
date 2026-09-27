@@ -16,25 +16,51 @@ import { CallManager } from "../core/call-manager";
 import { GreetingCache } from "../core/greeting";
 import { ConfigStore, loadConfig } from "../core/config";
 import { MemoryEventBus } from "../core/event-bus";
+import { logger } from "../core/log";
 import { OwnerDesk } from "../core/owner-desk";
 import { attachPersistence } from "../core/persist";
 import { createApp } from "../web/app";
 import { controlRoutes } from "../web/control";
-import { LogBuffer, mirrorConsole } from "../web/debug-log";
+import { LogBuffer } from "../web/debug-log";
 import { BrowserSipCalls } from "../web/openai-sip";
 import { PublicGate } from "../web/public";
 import { BrowserCalls, routeTelephony, type BrowserSipDeps } from "../web/test-call";
 import { clientAssets } from "./client-assets";
 import { readEnv, adminAuthFrom, publicHostOf } from "./env";
-
-// Mirror console output into a buffer the test-call page's debug log shows.
-const debugLog = new LogBuffer();
-mirrorConsole(debugLog);
+import { LogFiles, startLogging } from "./logging";
 
 const env = readEnv();
+
+// Log lines go to stdout, the test-call page's debug panel and DATA_DIR/logs (config/logging.yaml).
+const debugLog = new LogBuffer();
+const logFiles = new LogFiles(join(env.DATA_DIR, "logs"));
+startLogging(debugLog, logFiles);
+const log = logger("startup");
+// Bun exits on both anyway; this gets them into the log files first.
+process.on("uncaughtException", (err) => {
+  logger("crash").error("uncaught exception", { err });
+  process.exit(1);
+});
+process.on("unhandledRejection", (err) => {
+  logger("crash").error("unhandled rejection", { err });
+  process.exit(1);
+});
+
 const configVars = { ownerName: env.OWNER_NAME, agentLanguages: env.AGENT_LANGUAGES };
 const config = new ConfigStore(await loadConfig(new YamlDirSource(env.CONFIG_DIR), configVars));
 if (env.CONFIG_WATCH) watchConfig(env.CONFIG_DIR, config, configVars);
+
+const pruneLogs = () => {
+  const days = config.get().logging.retention_days;
+  try {
+    const gone = logFiles.prune(days);
+    if (gone.length) logger("logging").info(`deleted ${gone.length} log files older than ${days} days`);
+  } catch (err) {
+    logger("logging").warn("pruning log files failed", { err });
+  }
+};
+pruneLogs();
+setInterval(pruneLogs, 24 * 60 * 60 * 1000);
 
 // Telegram to the owner (env.ts checks both are set, or neither); otherwise there are no status
 // messages or steering, and Luna isn't offered the tool.
@@ -42,8 +68,8 @@ const telegram =
   env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID
     ? new TelegramBot({ botToken: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID })
     : undefined;
-if (!telegram) console.warn("[startup] Telegram to owner disabled (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID not set)");
-else if (!telegram.canListen) console.warn("[startup] Telegram steering off: TELEGRAM_CHAT_ID is a channel, which can't message the bot");
+if (!telegram) log.warn("Telegram to owner disabled (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID not set)");
+else if (!telegram.canListen) log.warn("Telegram steering off: TELEGRAM_CHAT_ID is a channel, which can't message the bot");
 const callLink = env.ADMIN_HOST ? (id: string) => `https://${env.ADMIN_HOST}/calls/${encodeURIComponent(id)}` : undefined;
 
 const repo = new SqliteRepo(openSqlite(join(env.DATA_DIR, "scamsitter.db")));
@@ -90,7 +116,7 @@ const browserSip: BrowserSipDeps | undefined =
         loginToken: () => telnyx.webrtcToken(env.TELNYX_SIP_CREDENTIAL_ID!),
       }
     : undefined;
-console.log(`[startup] OpenAI SIP ${sip ? "on (/openai/webhook)" : "off"}; browser SIP test ${browserSip ? "on" : "off"}`);
+log.info(`OpenAI SIP ${sip ? "on (/openai/webhook)" : "off"}; browser SIP test ${browserSip ? "on" : "off"}`);
 
 const manager = new CallManager({
   config: () => config.get(),
@@ -134,7 +160,7 @@ const app = createApp({
 
 // Close calls left open by a previous run, then keep sweeping for calls whose media never connected.
 await manager.reapOrphans(0, "server restarted");
-setInterval(() => void manager.reapOrphans(60_000, "no media connected within 60 s").catch(console.error), 30_000);
+setInterval(() => void manager.reapOrphans(60_000, "no media connected within 60 s").catch((err) => logger("calls").error("reaping orphans failed", { err })), 30_000);
 
 const listening = new AbortController();
 if (telegram?.canListen && desk) void telegram.listen({ message: (m) => desk.onMessage(m), button: (b) => desk.onButton(b) }, listening.signal);
@@ -143,16 +169,16 @@ const server = Bun.serve({ port: env.PORT, hostname: env.BIND_HOST, fetch: app.f
 // Always loopback, whatever BIND_HOST is: in the container only `docker compose exec` reaches it.
 const control = Bun.serve({ port: env.CONTROL_PORT, hostname: "127.0.0.1", fetch: controlRoutes(manager).fetch });
 const adminAt = env.ADMIN_AUTH === "access" ? `https://${env.ADMIN_HOST}/ (Cloudflare Access)` : `http://${server.hostname}:${server.port}/`;
-console.log(`[startup] listening on http://${server.hostname}:${server.port}; admin UI at ${adminAt}`);
+log.info(`listening on http://${server.hostname}:${server.port}; admin UI at ${adminAt}`);
 
 let shuttingDown = false;
 const shutdown = async (sig: string) => {
   if (shuttingDown) {
-    console.log(`[shutdown] ${sig} again: exiting without waiting for calls to wrap up`);
+    logger("shutdown").info(`${sig} again: exiting without waiting for calls to wrap up`);
     process.exit(1);
   }
   shuttingDown = true;
-  console.log(`[shutdown] ${sig}: hanging up calls and waiting for their wrap-up (${sig} again to force)`);
+  logger("shutdown").info(`${sig}: hanging up calls and waiting for their wrap-up (${sig} again to force)`);
   // Hangs up live calls and waits for Luna, summaries and recordings, then for them to be stored.
   await manager.stopAll("server shutting down");
   listening.abort();

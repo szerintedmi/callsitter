@@ -541,6 +541,11 @@ export const GamesConfig = z.object({
   get_through: z.object({ goals: z.array(GetThroughGoal).min(1).refine(uniqueIds, "goal ids must be unique") }),
 });
 
+// The server's own log files (JSON Lines in DATA_DIR/logs, src/runtime/logging.ts).
+export const LoggingConfig = z.object({
+  retention_days: z.number().int().min(1).default(30),
+});
+
 // The owner's Telegram (TELEGRAM_* in .env): one status message per call, edited as it goes on,
 // and steering: the owner's messages reach Live as steering.text.
 export const TelegramConfig = z.object({
@@ -606,6 +611,7 @@ export type CostConfig = z.infer<typeof CostConfig>;
 export type PublicConfig = z.infer<typeof PublicConfig>;
 export type GamesConfig = z.infer<typeof GamesConfig>;
 export type TelegramConfig = z.infer<typeof TelegramConfig>;
+export type LoggingConfig = z.infer<typeof LoggingConfig>;
 
 export interface AppConfig {
   live: LiveConfig;
@@ -617,6 +623,7 @@ export interface AppConfig {
   public: PublicConfig;
   games: GamesConfig;
   telegram: TelegramConfig;
+  logging: LoggingConfig;
 }
 
 const schemas = {
@@ -629,6 +636,7 @@ const schemas = {
   public: PublicConfig,
   games: GamesConfig,
   telegram: TelegramConfig,
+  logging: LoggingConfig,
 } as const;
 
 export type ConfigName = keyof typeof schemas;
@@ -644,6 +652,7 @@ export const CONFIG_FILES: Record<ConfigName, string> = {
   public: "public.yaml",
   games: "games.yaml",
   telegram: "telegram.yaml",
+  logging: "logging.yaml",
 };
 
 /** Supplies the raw (already YAML-parsed) value for each config file. */
