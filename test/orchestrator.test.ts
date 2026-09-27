@@ -581,5 +581,10 @@ describe("call costs", () => {
     expect(lunaEvents).toEqual([expect.objectContaining({ costUsd: 0.1 }), expect.objectContaining({ costUsd: 0.1 })]);
     const costs = orch.costs.total(120);
     expect(costs).toMatchObject({ liveSeconds: 120, liveUsd: 0.1, lunaUsd: 0.2, totalUsd: 0.3, luna: { calls: 2, inputTokens: 2_000_000 } });
+    expect(costs.carrierUsd).toBeUndefined();
+    // The carrier's bill, set (not added) as it may arrive twice.
+    orch.costs.carrierUsd = 0.02;
+    orch.costs.carrierUsd = 0.025;
+    expect(orch.costs.total(120)).toMatchObject({ carrierUsd: 0.025, totalUsd: 0.325 });
   });
 });

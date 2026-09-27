@@ -407,6 +407,18 @@ function drawClock() {
 }
 
 $("end").addEventListener("click", () => call?.hangUp());
+
+// The screener's real number (public.yaml phone_number): a phone dials it; with a mouse, where a
+// tel: link rarely goes anywhere useful, a click copies it.
+document.getElementById("dial")?.addEventListener("click", (e) => {
+  if (!matchMedia("(pointer: fine)").matches || !navigator.clipboard) return;
+  e.preventDefault();
+  const number = (e.currentTarget as HTMLElement).textContent!;
+  navigator.clipboard.writeText(number).then(
+    () => toast(`${number} COPIED`),
+    () => {},
+  );
+});
 // Closing the tab or leaving the page hangs up too (the server would only notice later).
 addEventListener("pagehide", () => call?.hangUp());
 

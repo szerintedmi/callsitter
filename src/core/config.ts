@@ -500,6 +500,12 @@ export const PublicConfig = z.object({
   tools: z.boolean().default(true),
   // Live greets once the page reports its audio connected, or after this long.
   greeting_wait_ms: z.number().int().min(0).max(10_000).default(3000),
+  // The screener's real number, as the page shows it ("+44 20 4620 6827"); the call link dials
+  // its digits. Empty: the page doesn't show one.
+  phone_number: z
+    .string()
+    .regex(/^(\+?[\d ]+)?$/, "digits and spaces, optionally after a +")
+    .default(""),
 });
 
 const GameGoal = z.object({

@@ -133,7 +133,7 @@ export function openAiSipRoutes(d: SipRoutesDeps) {
       to: test ? "test call" : (sipUser(sipHeader(headers, "To")) ?? ""),
       divertedFrom: test ? undefined : divertedFrom(headers),
     });
-    await d.manager.sipHeaders(callId, "openai", headers, mediaSecurity);
+    await d.manager.sipHeaders(callId, "openai", headers, { mediaSecurity });
     const record = sc.record;
     // OpenAI answers before the browser's WebRTC leg can play audio: hold the greeting until
     // the page says it's connected (or test_greeting_wait_ms), or "Hello?" goes unheard.

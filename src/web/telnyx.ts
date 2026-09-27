@@ -9,7 +9,7 @@ import type { Repo } from "../core/ports";
 import { TelnyxApiError, type TelnyxApi } from "../adapters/telnyx/api";
 import { inboundToLive, parseInbound, TelnyxMediaChannel } from "../adapters/telnyx/media";
 import type { TelnyxVerifier } from "../adapters/telnyx/signature";
-import { decodeClientState, divertedFrom, encodeClientState, type TelnyxWebhook } from "../adapters/telnyx/webhook";
+import { decodeClientState, divertedFrom, encodeClientState, payloadInfo, type TelnyxWebhook } from "../adapters/telnyx/webhook";
 import { mediaToken, verifyMediaToken } from "./media-token";
 import { RecentIds } from "./recent-ids";
 import { SIP_HOSTS } from "../adapters/openai-live/sip";
@@ -29,6 +29,11 @@ export interface TelnyxRoutesDeps {
   /** browser SIP test: parked WebRTC calls on its connection are transferred to OpenAI SIP */
   browserSip?: BrowserSipDeps;
 }
+
+// call.initiated and call.hangup fields left out of the call info: stored on the call already, or
+// the same on every call.
+const INITIATED_SKIP = ["call_control_id", "client_state", "connection_id", "connection_codecs", "from", "to", "direction", "state", "start_time", "occurred_at"];
+const HANGUP_SKIP = ["call_control_id", "call_leg_id", "call_session_id", "client_state", "connection_id", "calling_party_type", "flow_destination", "from", "to", "start_time", "occurred_at"];
 
 const describe = (err: unknown) => (err instanceof TelnyxApiError ? err.summary : errMsg(err));
 
@@ -83,7 +88,7 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
           to: p.to ?? "",
           divertedFrom: divertedFrom(p.sip_headers),
         });
-        await d.manager.sipHeaders(callId, "telnyx", [...(p.sip_headers ?? []), ...(p.custom_headers ?? [])]);
+        await d.manager.sipHeaders(callId, "telnyx", [...(p.sip_headers ?? []), ...(p.custom_headers ?? [])], { info: payloadInfo(p, INITIATED_SKIP) });
         const token = await mediaToken(d.mediaSecret, callId, codec);
         const streamUrl = `${d.publicWsBase}/media/${callId}/${codec}/${token}`;
         try {
@@ -116,7 +121,25 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
       }
       case "call.hangup": {
         const callId = await resolveCallId(p);
-        if (callId) await d.manager.hangup(callId, `hangup: ${p.hangup_cause ?? "unknown"} (${p.hangup_source ?? "?"})`);
+        if (!callId) return;
+        // Usually after the media stream has closed and the call has ended here: kept anyway, as
+        // it says who hung up and how the line was.
+        await d.manager.carrierHangup(callId, payloadInfo(p, HANGUP_SKIP));
+        await d.manager.hangup(callId, `hangup: ${p.hangup_cause ?? "unknown"} (${p.hangup_source ?? "?"})`);
+        return;
+      }
+      case "call.cost": {
+        const callId = await resolveCallId(p);
+        if (!callId) return;
+        // Number(null) is 0: a failed pricing must not pass for a free call.
+        const usd = p.status === "success" && typeof p.total_cost === "string" ? Number(p.total_cost) : NaN;
+        const currencies = [...new Set((p.cost_parts ?? []).map((c) => c.currency ?? "USD"))];
+        if (!Number.isFinite(usd) || currencies.some((c) => c !== "USD")) {
+          const why = p.status !== "success" ? `status ${p.status ?? "missing"}` : !Number.isFinite(usd) ? `total ${p.total_cost}` : `in ${currencies.join(", ")}`;
+          await d.manager.note(callId, "warn", `carrier cost not added (${why})`);
+          return;
+        }
+        await d.manager.carrierCost(callId, usd);
         return;
       }
       case "call.recording.saved": {

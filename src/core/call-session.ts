@@ -98,6 +98,8 @@ export class CallSession {
   private answeredAt = 0;
   /** when the call was hung up (wall clock); duration and cost stop here, not after the wrap-up */
   private endedAt = 0;
+  /** Live's billed seconds, once call.ended has gone out with them (later costs events reuse them) */
+  private billedLiveSeconds: number | undefined;
   /** caller audio that arrived while Live was still connecting (sent once it's up) */
   private earlyCallerAudio: string[] = [];
 
@@ -133,6 +135,17 @@ export class CallSession {
   /** The wrap-up after hangup, once the call has ended; null while it's live. */
   get finished(): Promise<void> | null {
     return this.stopping;
+  }
+
+  /**
+   * The carrier's bill for the phone leg, which arrives after the hangup. Before call.ended it
+   * rides along with it; after, it goes out as a costs event.
+   */
+  setCarrierCost(usd: number) {
+    this.orch.costs.carrierUsd = usd;
+    if (this.billedLiveSeconds !== undefined) {
+      this.d.bus.publish({ type: "costs", callId: this.callId, at: this.orch.elapsed(), costs: this.orch.costs.total(this.billedLiveSeconds) });
+    }
   }
 
   private note(level: "info" | "warn" | "error", message: string) {
@@ -543,6 +556,7 @@ export class CallSession {
     // Live bills per second of session: from answer to hangup.
     const liveSeconds = this.answeredAt ? (this.endedAt - this.answeredAt) / 1000 : 0;
     const costs = this.orch.costs.total(liveSeconds);
+    this.billedLiveSeconds = liveSeconds;
     this.d.bus.publish({
       type: "call.ended",
       callId: this.callId,

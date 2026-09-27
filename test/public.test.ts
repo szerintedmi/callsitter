@@ -172,6 +172,13 @@ describe("public page (fake OpenAI)", () => {
     expect((await fetch(`${base()}/calls`)).status).toBe(404);
   });
 
+  test("shows the screener's real number as a call link, when public.yaml has one", async () => {
+    config.set({ ...config.get(), public: { ...defaults, phone_number: "+44 20 4620 6827" } });
+    expect(await (await fetch(`${base()}/`)).text()).toContain('<a href="tel:+442046206827" id="dial" draggable="false">+44 20 4620 6827</a>');
+    config.set({ ...config.get(), public: { ...defaults, phone_number: "" } });
+    expect(await (await fetch(`${base()}/`)).text()).not.toContain('href="tel:');
+  });
+
   test("only this page may start or end calls", async () => {
     expect((await call(undefined, { origin: "https://evil.example" })).status).toBe(403);
     expect((await fetch(`${base()}/call`, { method: "POST", body: "{}" })).status).toBe(403);

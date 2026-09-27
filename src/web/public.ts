@@ -221,7 +221,7 @@ export function publicRoutes(d: PublicDeps) {
   }
 
   // Mounted at / (public host) and /public (admin preview): the page's URLs are under its own path.
-  app.get("/", async (c) => c.html(page(c.req.path.replace(/\/?$/, "/"), await lobby())));
+  app.get("/", async (c) => c.html(page(c.req.path.replace(/\/?$/, "/"), await lobby(), d.config().public.phone_number)));
   app.get("/call/lobby", async (c) => c.json(await lobby(), 200, { "Cache-Control": "no-store" }));
 
   app.get("/assets/public.js", async (c) => {
@@ -429,6 +429,11 @@ canvas.sprite{image-rendering:pixelated;display:block;flex:none;height:auto}
 .wasted span{font-family:var(--disp);font-size:clamp(16px,2.4vh,20px);letter-spacing:.06em;line-height:1;color:var(--dim)}
 #s-home:not(:has(.split[data-active])) .hero{padding-bottom:calc(clamp(22px,3.4vh,28px) + 28px)}
 #s-home:has(.split[data-active]) .hero :is(.tagline,.wasted){display:none}
+.dial{flex-wrap:wrap;column-gap:14px;row-gap:2px;line-height:1}
+.dial span{color:var(--dim);letter-spacing:.06em}
+.dial a{color:var(--amb);text-decoration:none;white-space:nowrap;font-variant-numeric:tabular-nums;-webkit-user-select:text;user-select:text}
+.dial a:hover{text-decoration:underline}
+#s-home:has(.split[data-active]) .dial{display:none}
 .foot{font-family:var(--disp);font-size:clamp(20px,3.4vh,26px);letter-spacing:.04em;padding:10px 16px;padding-bottom:max(10px,env(safe-area-inset-bottom));text-align:center}
 .board{list-style:none;margin:0;padding:8px 14px;width:100%;font-family:var(--disp);font-variant-numeric:tabular-nums;font-size:clamp(20px,3.1vh,24px);line-height:1;letter-spacing:.05em;text-align:left;background:var(--m-shade)}
 .board li{display:grid;grid-template-columns:2.4ch 1fr auto;gap:12px;align-items:baseline;padding:3px 4px}
@@ -569,7 +574,7 @@ const half = (game: Game, title: string, goal: string, sprite: string) => `
         <div class="detail" data-detail="${game}"></div>
       </div>`;
 
-const page = (base: string, lobby: Lobby) => `<!doctype html>
+const page = (base: string, lobby: Lobby, phone: string) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -593,7 +598,8 @@ const page = (base: string, lobby: Lobby) => `<!doctype html>
     </header>
     <div class="split" id="split">
       <p class="ask">CAN YOU FOOL THE BOT<br>THAT ANSWERS MY PHONE?</p>${half("scam", "SCAM ME", "Be the scammer. Don't get caught.", "bandit")}${half("get_through", "GET THROUGH", "Be a real caller. Reach me fast.", "caller")}
-    </div>
+    </div>${phone ? `
+    <footer class="band foot dial"><span>OR CALL THE BOT FROM YOUR PHONE</span><a href="tel:${phone.replaceAll(" ", "")}" id="dial" draggable="false">${phone}</a></footer>` : ""}
   </section>
 
   <section class="scr callbg" id="s-call" hidden>
