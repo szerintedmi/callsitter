@@ -1,9 +1,11 @@
 import type { AppConfig, LiveAppend, TelegramConfig } from "./config";
 import type { OwnerSteerResult } from "./call-session";
 import { describeCosts } from "./cost";
-import { errMsg } from "./orchestrator";
+import { logger } from "./log";
 import type { Clock, EventBus, MessageLayout, OwnerButtonPress, OwnerChat, OwnerMessage } from "./ports";
 import type { CallCosts, CallEvent, Suggestion, Verdict } from "./types";
+
+const log = logger("owner");
 
 // The owner's chat (Telegram, telegram.yaml): one status message per call, sent as the call
 // comes in and edited as it goes on, and the owner's messages back, which steer the call. A reply
@@ -166,7 +168,7 @@ export class OwnerDesk {
     const text = `🚨 Urgent call (${why})${about ? `: ${cut(about, 600)}` : ""}`;
     void v.message
       .then((replyTo) => this.sendFor(v.callId, text, replyTo !== null ? { replyTo } : {}))
-      .catch((err) => console.warn(`[owner] urgent alert for call ${v.callId} not sent: ${errMsg(err)}`));
+      .catch((err) => log.warn("urgent alert not sent", { callId: v.callId, err }));
   }
 
   private open(callId: string, from: string, startedAt: number) {
@@ -198,7 +200,7 @@ export class OwnerDesk {
       v.shown = JSON.stringify(next);
       return id;
     } catch (err) {
-      console.warn(`[owner] status message for call ${v.callId} not sent: ${errMsg(err)}`);
+      log.warn("status message not sent", { callId: v.callId, err });
       return null;
     }
   }
@@ -234,7 +236,7 @@ export class OwnerDesk {
       await this.d.chat.edit(id, next.text, next.layout);
       v.shown = shown;
     } catch (err) {
-      console.warn(`[owner] status message for call ${v.callId} not updated: ${errMsg(err)}`);
+      log.warn("status message not updated", { callId: v.callId, err });
     }
   }
 
@@ -261,7 +263,7 @@ export class OwnerDesk {
   async onMessage(m: OwnerMessage) {
     if (this.d.clock.now() - m.date > this.d.config().telegram.steering.stale_after_ms) return;
     const reply = (text: string) =>
-      this.d.chat.send(text, { replyTo: m.messageId }).catch((err) => console.warn(`[owner] reply not sent: ${errMsg(err)}`));
+      this.d.chat.send(text, { replyTo: m.messageId }).catch((err) => log.warn("reply not sent", { err }));
     const text = m.text?.trim();
     if (!text) return void (await reply("Only text messages can steer a call."));
     const hangUp = /^\/hangup(@\S+)?$/i.test(text);
@@ -294,7 +296,7 @@ export class OwnerDesk {
    */
   async onButton(b: OwnerButtonPress) {
     const answer = (notice: string) =>
-      this.d.chat.answerButton(b.pressId, notice).catch((err) => console.warn(`[owner] button not answered: ${errMsg(err)}`));
+      this.d.chat.answerButton(b.pressId, notice).catch((err) => log.warn("button not answered", { err }));
     const st = this.d.config().telegram.steering;
     const callId = this.messages.get(b.messageId);
     const v = callId ? this.views.get(callId) : undefined;

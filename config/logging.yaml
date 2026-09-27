@@ -1,0 +1,4 @@
+# The server's log files in DATA_DIR/logs (production: /var/lib/scamsitter/logs), one JSON object
+# per line: app-<date>.jsonl has every line, call-<date>-<call id>.jsonl one call's lines (dated
+# by the call's first line). Dates are UTC. Files older than this are deleted at startup and daily.
+retention_days: 30

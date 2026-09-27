@@ -1,7 +1,7 @@
-// Recent server log lines, for the debug panel on the test-call page (/debug/log). The
-// runtime mirrors console output into it, so the panel shows exactly what the terminal shows.
+import type { LogLevel } from "../core/log";
 
-export type LogLevel = "info" | "warn" | "error";
+// Recent server log lines, for the debug panel on the test-call page (/debug/log). The runtime's
+// log sink (src/runtime/logging.ts) writes every line into it, as the terminal shows it.
 
 export interface LogLine {
   seq: number;
@@ -28,27 +28,5 @@ export class LogBuffer {
 
   get last(): number {
     return this.seq;
-  }
-}
-
-/** Mirrors console.log/info/warn/error into `buf` (still printing as before). */
-export function mirrorConsole(buf: LogBuffer) {
-  const levels = { log: "info", info: "info", warn: "warn", error: "error" } as const;
-  for (const [method, level] of Object.entries(levels) as [keyof typeof levels, LogLevel][]) {
-    const orig = console[method].bind(console);
-    console[method] = (...args: unknown[]) => {
-      orig(...args);
-      try {
-        buf.push(level, args.map((a) => (typeof a === "string" ? a : a instanceof Error ? (a.stack ?? a.message) : safeJson(a))).join(" "));
-      } catch {}
-    };
-  }
-}
-
-function safeJson(v: unknown): string {
-  try {
-    return JSON.stringify(v);
-  } catch {
-    return String(v);
   }
 }

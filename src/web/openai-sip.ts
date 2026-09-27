@@ -1,11 +1,13 @@
 import { Hono } from "hono";
 import { NO_MEDIA, type CallManager } from "../core/call-manager";
 import type { ConfigStore } from "../core/config";
-import { errMsg } from "../core/orchestrator";
+import { logger } from "../core/log";
 import type { Repo } from "../core/ports";
 import { sipHeader, sipUser, type OpenAiSip, type SipHeader } from "../adapters/openai-live/sip";
 import { divertedFrom } from "../adapters/telnyx/webhook";
 import { RecentIds } from "./recent-ids";
+
+const log = logger("sip");
 
 // OpenAI SIP: the carrier sends the call to OpenAI, which posts `live.transport.incoming` here.
 // We register the call, then CallManager starts an ordinary CallSession whose voice agent
@@ -112,20 +114,20 @@ export function openAiSipRoutes(d: SipRoutesDeps) {
     if (await d.repo.findByCallControlId(ccid)) return;
     const sc = d.config.get().connection.sip;
     if (!sc.enabled) {
-      console.log(`[sip ${sessionId}] rejected (${sc.reject_status}): connection.sip.enabled is false`);
+      log.info(`rejected (${sc.reject_status}): connection.sip.enabled is false`, { sipSession: sessionId });
       await d.sip.reject(sessionId, sc.reject_status);
       return;
     }
     // Draining for a deploy (or shutting down): 486 Busy Here rather than being cut off later.
     if (!d.manager.accepting) {
-      console.log(`[sip ${sessionId}] rejected (486): not accepting calls (draining)`);
+      log.info("rejected (486): not accepting calls (draining)", { sipSession: sessionId });
       await d.sip.reject(sessionId, 486);
       return;
     }
     const callId = crypto.randomUUID();
     const test = d.browserSip.claim(sipHeader(headers, TEST_HEADER), callId);
     // Logged until the header mapping is confirmed on real calls (From/To/Diversion from Telnyx).
-    console.log(`[sip ${sessionId}] incoming call ${callId} (${headers.length} SIP headers, media ${mediaSecurity ?? "unknown"})`);
+    log.info(`incoming call (${headers.length} SIP headers, media ${mediaSecurity ?? "unknown"})`, { callId, sipSession: sessionId });
     await d.manager.registerIncoming({
       callId,
       callControlId: ccid,
@@ -146,7 +148,7 @@ export function openAiSipRoutes(d: SipRoutesDeps) {
         ? (wav) =>
             void d.manager
               .saveRecording(callId, wav, "wav")
-              .catch((err) => console.warn(`[call ${callId}] recording not saved: ${errMsg(err)}`))
+              .catch((err) => logger("call").warn("recording not saved", { callId, err }))
         : undefined,
     });
     try {
@@ -166,19 +168,19 @@ export function openAiSipRoutes(d: SipRoutesDeps) {
       ev = await d.sip.unwrap(raw, c.req.raw.headers);
     } catch (err) {
       // Usually OPENAI_WEBHOOK_SECRET doesn't match the endpoint (e.g. after a secret rotation).
-      console.warn(`[sip] webhook rejected: ${errMsg(err)}`);
+      log.warn("webhook rejected", { err });
       return c.text("invalid signature", 401);
     }
     const id = c.req.header("webhook-id") ?? ev.id;
     if (!seen.add(id)) return c.text("duplicate", 200);
     // live.call.incoming is the deprecated name; realtime.call.incoming is for the Realtime API.
     if (ev.type !== "live.transport.incoming") {
-      console.log(`[sip] webhook ${ev.type} ignored`);
+      log.info(`webhook ${ev.type} ignored`);
       return c.text("ignored", 200);
     }
     const { session_id, sip_headers, sip_media_security } = ev.data;
     // Acknowledge fast; accept in the background.
-    incoming(session_id, sip_headers ?? [], sip_media_security).catch((err) => console.error(`[sip ${session_id}] ${errMsg(err)}`));
+    incoming(session_id, sip_headers ?? [], sip_media_security).catch((err) => log.error("incoming call failed", { sipSession: session_id, err }));
     return c.text("ok", 200);
   });
 

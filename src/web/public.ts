@@ -4,6 +4,7 @@ import { streamSSE, type SSEStreamingApi } from "hono/streaming";
 import { NO_MEDIA, type CallManager } from "../core/call-manager";
 import type { AppConfig } from "../core/config";
 import { GAMES, START, goalMet, nextPlay, playSummary, playerName, rankIn, scoreOf, type BoardEntry, type Game, type PlayState } from "../core/game";
+import { logger } from "../core/log";
 import { errMsg } from "../core/orchestrator";
 import type { Clock, Referee, Repo } from "../core/ports";
 import { GoalWatch } from "../core/referee";
@@ -28,6 +29,8 @@ import type { ClientAssets } from "./admin";
 //   GET  call/:id/events      server-sent events: PlayState as Jev and the call flow move on,
 //                             until the call ends
 //   GET  call/:id/result      the game's score, rank and leaderboard once the call has ended
+
+const log = logger("public");
 
 /** Call-control ids of public calls. Their Live session ends when the sideband closes it. */
 const PREFIX = "web:";
@@ -182,10 +185,10 @@ export function publicRoutes(d: PublicDeps) {
             await d.repo.finishPlay(ev.callId, scoreOf(p.game, p.state, ev.at), Date.now());
             // On the call's log and the server's, so a missing score can be explained.
             const line = `game ${p.game}/${p.goal} ${p.player}: ${playSummary(p.game, p.state, ev.at)}`;
-            console.log(`[public ${ev.callId}] ${line}`);
+            log.info(line, { callId: ev.callId });
             await d.manager.note(ev.callId, "info", line);
           })
-          .catch((err) => console.warn(`[public ${ev.callId}] game not finished: ${errMsg(err)}`))
+          .catch((err) => log.warn("game not finished", { callId: ev.callId, err }))
           .finally(() => settling.delete(ev.callId));
       }
       return;
@@ -320,7 +323,7 @@ export function publicRoutes(d: PublicDeps) {
             level: "info",
             message: `referee: ${Object.entries(answers).map(([q, p]) => `${q} ${p.toFixed(2)}`).join(" · ")}`,
           }),
-        onError: (err) => console.warn(`[public ${callId}] referee failed: ${errMsg(err)}`),
+        onError: (err) => log.warn("referee failed", { callId, err }),
       }),
     };
     plays.set(callId, play);
@@ -340,7 +343,7 @@ export function publicRoutes(d: PublicDeps) {
         ? (wav) =>
             void d.manager
               .saveRecording(callId, wav, "wav")
-              .catch((err) => console.warn(`[call ${callId}] recording not saved: ${errMsg(err)}`))
+              .catch((err) => logger("call").warn("recording not saved", { callId, err }))
         : undefined,
     });
     try {
@@ -348,13 +351,13 @@ export function publicRoutes(d: PublicDeps) {
     } catch (err) {
       d.gate.release(callId);
       plays.delete(callId);
-      console.warn(`[public ${callId}] not started: ${errMsg(err)}`);
+      log.warn("not started", { callId, err });
       return c.json({ error: "busy", message: "Back in a minute." }, 503);
     }
     // Without its game row the call still works; it just isn't scored.
     await d.repo
       .createPlay({ callId, game, goal: goal.id, player, createdAt: startedAt })
-      .catch((err) => console.warn(`[public ${callId}] game not saved: ${errMsg(err)}`));
+      .catch((err) => log.warn("game not saved", { callId, err }));
     // attachMedia creates the Live session (voice.connect) and runs the call; on failure it
     // ends the call, which releases the slot.
     const attached = d.manager.attachMedia(callId, NO_MEDIA, "pcm24", {
@@ -365,10 +368,10 @@ export function publicRoutes(d: PublicDeps) {
     });
     try {
       const a = await Promise.race([answer, attached.then(() => answer)]);
-      console.log(`[public ${callId}] Live session ${a.sessionId}`);
+      log.info("Live session started", { callId, liveSession: a.sessionId });
       return c.json({ callId, sdp: a.sdp, elapsedMs: Date.now() - startedAt });
     } catch (err) {
-      console.error(`[public ${callId}] could not start: ${errMsg(err)}`);
+      log.error("could not start", { callId, err: errMsg(err) });
       return c.json({ error: "failed", message: "Couldn't connect. Try again." }, 502);
     }
   });

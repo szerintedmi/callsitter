@@ -1,9 +1,12 @@
 import OpenAI from "openai";
 import type { FunctionTool, Response, ResponseInputItem } from "openai/resources/responses/responses";
 import { fillCurrentTime, type LunaConfig, type LunaTool } from "../../core/config";
+import { logger } from "../../core/log";
 import type { Agent, AgentInput, AgentResult, Progress, SummaryResult, ToolContext } from "../../core/ports";
 import type { CallMeta, Classification, Suggestion, TokenUsage, ToolCallRecord, TranscriptEntry } from "../../core/types";
 import { renderTranscript } from "../jev/classifier";
+
+const log = logger("luna");
 
 // GPT-6 Luna via the Responses API with function tools
 // (https://developers.openai.com/api/docs/models/gpt-6-luna).
@@ -102,7 +105,7 @@ export class LunaAgent implements Agent {
       return await create(previousId);
     } catch (err) {
       if (!previousId || !isBrokenChain(err)) throw err;
-      console.warn(`[luna] could not continue ${previousId}, starting afresh: ${err instanceof Error ? err.message : err}`);
+      log.warn("could not continue the previous response, starting afresh", { previousId, err });
       return create(undefined);
     }
   }

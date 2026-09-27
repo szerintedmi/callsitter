@@ -1,5 +1,6 @@
 import { b64decode, b64encode, BYTES_PER_MS, isCodec, levelDbfs, SILENCE_BYTE, type AudioFormat, type Codec } from "./audio";
 import { fillCurrentTime, ownerAppendText, type AppConfig, type LiveAppend } from "./config";
+import { logger } from "./log";
 import { errMsg, Orchestrator, type Steer } from "./orchestrator";
 import type {
   Agent,
@@ -13,6 +14,8 @@ import type {
   VoiceSessionHandlers,
 } from "./ports";
 import type { CallMeta } from "./types";
+
+const log = logger("call");
 
 // One phone call: media leg ↔ voice session, with the orchestrator steering.
 // Maps 1:1 to a Durable Object in the Cloudflare port.
@@ -568,16 +571,18 @@ export class CallSession {
       jevTicks: this.orch.jevTicks,
       costs,
     });
-    console.log(
-      `[call ${this.callId}] ended (${reason}): ${(liveSeconds / 60).toFixed(1)} min, ${this.orch.jevTicks} Jev ticks, ` +
+    log.info(
+      `ended (${reason}): ${(liveSeconds / 60).toFixed(1)} min, ${this.orch.jevTicks} Jev ticks, ` +
         `${this.orch.lunaCalls} Luna calls, $${costs.totalUsd.toFixed(3)}`,
+      { callId: this.callId },
     );
     if (this.replyLatencies.length) {
       const sorted = [...this.replyLatencies].sort((a, b) => a - b);
       const q = (f: number) => sorted[Math.min(sorted.length - 1, Math.floor(f * sorted.length))]!;
-      console.log(
-        `[call ${this.callId}] agent reply latency (last caller transcript → first agent audio): ` +
+      log.info(
+        "agent reply latency (last caller transcript → first agent audio): " +
           `median ${q(0.5)} ms, p90 ${q(0.9)} ms over ${sorted.length} replies`,
+        { callId: this.callId },
       );
     }
     this.d.onStopped?.(this.callId);

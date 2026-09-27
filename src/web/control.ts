@@ -1,5 +1,8 @@
 import { Hono } from "hono";
 import type { CallManager } from "../core/call-manager";
+import { logger } from "../core/log";
+
+const log = logger("control");
 
 /**
  * Operator API for deploys (scripts/control.ts). Served on its own loopback-only listener, never
@@ -14,12 +17,12 @@ export function controlRoutes(manager: CallManager) {
     const ttl = Number(c.req.query("ttl") ?? 1200);
     if (!Number.isFinite(ttl) || ttl <= 0) return c.text("ttl must be a positive number of seconds", 400);
     manager.drain(ttl * 1000);
-    console.log(`[control] draining: new calls rejected for up to ${ttl} s`);
+    log.info(`draining: new calls rejected for up to ${ttl} s`);
     return c.json(status());
   });
   app.post("/resume", (c) => {
     manager.resume();
-    console.log("[control] resumed: accepting calls");
+    log.info("resumed: accepting calls");
     return c.json(status());
   });
   return app;

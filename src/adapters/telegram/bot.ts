@@ -1,3 +1,4 @@
+import { logger } from "../../core/log";
 import { errMsg } from "../../core/orchestrator";
 import type { MessageLayout, OwnerButtonPress, OwnerChat, OwnerMessage } from "../../core/ports";
 
@@ -8,6 +9,8 @@ import type { MessageLayout, OwnerButtonPress, OwnerChat, OwnerMessage } from ".
 // per bot works at a time, so dev and production need separate bots. Collapsed parts of a message
 // are expandable_blockquote entities (offsets in UTF-16 code units, as JS strings count), and
 // buttons are an inline keyboard whose presses arrive as callback queries.
+
+const log = logger("telegram");
 
 export interface TelegramOptions {
   /** from @BotFather */
@@ -131,7 +134,7 @@ export class TelegramBot implements OwnerChat {
         retryMs = RETRY_MIN_MS;
       } catch (err) {
         if (signal.aborted) return;
-        console.warn(`[telegram] ${errMsg(err)}; retrying in ${retryMs / 1000} s`);
+        log.warn(`polling failed; retrying in ${retryMs / 1000} s`, { err });
         await sleep(retryMs, signal);
         retryMs = Math.min(RETRY_MAX_MS, retryMs * 2);
         continue;
@@ -152,7 +155,7 @@ export class TelegramBot implements OwnerChat {
             await on.button({ pressId: q.id, messageId: q.message.message_id, data: q.data });
           }
         } catch (err) {
-          console.error("[telegram] handling an update failed", err);
+          log.error("handling an update failed", { err });
         }
       }
     }
