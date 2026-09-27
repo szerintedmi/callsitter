@@ -46,7 +46,12 @@ const callId = (v: string | undefined) => {
 /** Copies the files `find` selects in the VPS folder `dir` into the local `into` (a tar.gz stream); returns their paths. */
 async function pull(dir: string, find: string, into: string, what: string): Promise<string[]> {
   mkdirSync(into, { recursive: true });
-  const ssh = remote(`cd ${dir} && set -- $(find . -maxdepth 1 -type f ${find}) && [ $# -gt 0 ] || exit 3; tar -cz "$@"`);
+  // The server appends to today's log files as they're archived: GNU tar then exits 1 ("file
+  // changed as we read it"), but each file is complete up to its size when tar reached it.
+  const ssh = remote(
+    `cd ${dir} && set -- $(find . -maxdepth 1 -type f ${find}) && [ $# -gt 0 ] || exit 3; ` +
+      `tar -cz --warning=no-file-changed "$@"; s=$?; [ $s -eq 1 ] && exit 0; exit $s`,
+  );
   // -v lists each file: "x ./name" on stderr (bsdtar, macOS) or "./name" on stdout (GNU tar).
   const tar = Bun.spawn(["tar", "-xzvf", "-", "-C", into], { stdin: ssh.stdout, stdout: "pipe", stderr: "pipe" });
   const [code, listed, errs, tarCode] = await Promise.all([ssh.exited, new Response(tar.stdout).text(), new Response(tar.stderr).text(), tar.exited]);
