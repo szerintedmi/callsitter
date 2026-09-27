@@ -1,10 +1,11 @@
 import { Database } from "bun:sqlite";
-import { and, asc, desc, eq, gte, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { CallRecord, Repo, StoredEvent } from "../../core/ports";
+import type { BoardEntry, Game } from "../../core/game";
+import type { CallRecord, PlayRecord, Repo, StoredEvent } from "../../core/ports";
 import type { CallEvent } from "../../core/types";
 import * as schema from "./schema";
 
@@ -75,5 +76,41 @@ export class SqliteRepo implements Repo {
       .orderBy(asc(schema.events.id))
       .all();
     return rows.map((r) => ({ id: r.id, callId: r.callId, at: r.at, event: r.data as CallEvent }));
+  }
+
+  async createPlay(p: Pick<PlayRecord, "callId" | "game" | "goal" | "player" | "createdAt">) {
+    this.db.insert(schema.plays).values(p).onConflictDoNothing().run();
+  }
+
+  async finishPlay(callId: string, scoreMs: number | null, finishedAt: number) {
+    this.db.update(schema.plays).set({ scoreMs, finishedAt }).where(eq(schema.plays.callId, callId)).run();
+  }
+
+  async getPlay(callId: string) {
+    return this.db.select().from(schema.plays).where(eq(schema.plays.callId, callId)).get() ?? null;
+  }
+
+  async scores(game: Game, goal: string): Promise<BoardEntry[]> {
+    const p = schema.plays;
+    // scam: longest wins; get_through: fastest wins. Ties: the earlier game first.
+    const rows = this.db
+      .select({ player: p.player, scoreMs: p.scoreMs })
+      .from(p)
+      .where(and(eq(p.game, game), eq(p.goal, goal), isNotNull(p.scoreMs)))
+      .orderBy(game === "scam" ? desc(p.scoreMs) : asc(p.scoreMs), asc(p.finishedAt))
+      .all();
+    return rows.map((r) => ({ player: r.player, scoreMs: r.scoreMs! }));
+  }
+
+  async junkCallSeconds() {
+    const c = schema.calls;
+    // A "Scam me" game is a scammer's call however Jev judged it.
+    const scamGames = this.db.select({ id: schema.plays.callId }).from(schema.plays).where(eq(schema.plays.game, "scam"));
+    const row = this.db
+      .select({ ms: sql<number>`coalesce(sum(${c.endedAt} - ${c.startedAt}), 0)` })
+      .from(c)
+      .where(and(eq(c.status, "ended"), or(inArray(c.verdict, ["scam", "spam"]), inArray(c.id, scamGames)), isNotNull(c.endedAt)))
+      .get();
+    return Math.round((row?.ms ?? 0) / 1000);
   }
 }

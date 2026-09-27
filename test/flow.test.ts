@@ -24,8 +24,14 @@ describe("call flow (config/call-flow.yaml)", () => {
     expect(decide(cls(), state(), cfg)).toEqual({ kind: "tell_live", stage: "waste_time", message: message("waste_time") });
   });
 
-  test("confident spam also → waste time", () => {
-    expect(stageOf(decide(cls({ verdict: "spam" }), state(), cfg))).toBe("waste_time");
+  test("confident spam → a polite no, not time wasting; then nothing more", () => {
+    expect(stageOf(decide(cls({ verdict: "spam" }), state(), cfg))).toBe("decline_spam");
+    expect(decide(cls({ verdict: "spam" }), state({ stage: "decline_spam" }), cfg)).toMatchObject({ kind: "none" });
+  });
+
+  test("scam or spam below 0.85 switches nothing", () => {
+    expect(stageOf(decide(cls({ verdict: "scam", confidence: 0.8 }), state(), cfg))).not.toBe("waste_time");
+    expect(stageOf(decide(cls({ verdict: "spam", confidence: 0.8 }), state(), cfg))).not.toBe("decline_spam");
   });
 
   test("the text isn't re-sent while the call stays in its stage", () => {

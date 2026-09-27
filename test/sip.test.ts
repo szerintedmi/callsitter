@@ -212,7 +212,8 @@ describe("OpenAI SIP (fake OpenAI)", () => {
   test("caller transcript over the sideband → Jev → tell_live appended over the sideband", async () => {
     send("live_1", { type: "session.input_transcript.delta", delta: "Hello, this is your bank's fraud team, ", start_ms: 0, end_ms: 500 });
     send("live_1", { type: "session.input_transcript.delta", delta: "move your money to a safe account.", start_ms: 500, end_ms: 1500 });
-    await until(() => sidebands.get("live_1")!.sent.some((e) => String(e.content).includes("This is a scam or spam call.")), 5000);
+    const wasteTime = config.get().flow.rules.find((r) => r.stage === "waste_time")!.then!.tell_live!.text!.trim();
+    await until(() => sidebands.get("live_1")!.sent.some((e) => String(e.content).includes(wasteTime)), 5000);
   });
 
   test("reflected audio is recorded; session.closed ends the call and hangs up at OpenAI", async () => {

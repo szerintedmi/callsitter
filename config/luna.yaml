@@ -29,7 +29,8 @@ instructions: |
   - Genuine caller: get what {owner_name} needs, plus a way to reach them only if it matters (any
     contact they offer, not necessarily a phone number). Once nothing important is missing:
     thank them, say in one sentence what will be passed on, goodbye.
-  - Scam or spam: keep them going as long as possible; after plenty of back and forth, the agent
+  - Spam (sales, surveys): the agent politely declines, asks to be taken off their list, goodbye.
+  - Scam: keep them going as long as possible; after plenty of back and forth, the agent
     gives made-up details that won't work. No wrapping up or taking a message.
 
   {owner_name} follows the call live: when the caller asks for something to be passed on, even

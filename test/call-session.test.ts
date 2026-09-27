@@ -644,7 +644,6 @@ describe("call session silence watchdog", () => {
       expect(r.appended).toHaveLength(0);
       tick(r, 600);
       expect(r.appended).toHaveLength(1);
-      expect(r.appended[0]).toContain("This is a scam or spam call.");
       expect(r.appends).toMatchObject([{ source: "stage", stage: "waste_time", as: r.kinds[0], heldMs: 3100 }]);
       expect(r.appends[0]!.dropped).toBeUndefined();
       await r.session.stop("test");

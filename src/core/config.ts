@@ -11,6 +11,7 @@ import { CODECS } from "./audio";
 //   connection.yaml  how the call's audio reaches the agent (OpenAI SIP or Telnyx media stream)
 //   cost.yaml        rough per-call cost estimate
 //   public.yaml      the public "Scam me" page: limits that cap what strangers can spend
+//   games.yaml       the public page's games: goals, scoring and leaderboards
 //   telegram.yaml    the owner's Telegram: a status message per call, and steering the call from it
 
 /** gpt-live-1 built-in voices (openai BuiltInVoice in resources/live/live.d.ts). */
@@ -501,6 +502,38 @@ export const PublicConfig = z.object({
   greeting_wait_ms: z.number().int().min(0).max(10_000).default(3000),
 });
 
+const GameGoal = z.object({
+  // stored with each score: a new id starts a new leaderboard
+  id: z.string().regex(/^[a-z0-9_]+$/, "lowercase letters, digits and _"),
+  name: z.string().min(1).max(20),
+  brief: z.string().min(1).max(160),
+  hard: z.boolean().default(false),
+});
+// For the referee: what the caller must have said. Scam: the role they take on, and what they ask for.
+const ScamGoal = GameGoal.extend({ move: z.string().min(1).max(200), ask: z.string().min(1).max(200) });
+const GetThroughGoal = GameGoal.extend({ message: z.string().min(1).max(200) });
+const uniqueIds = (goals: { id: string }[]) => new Set(goals.map((g) => g.id)).size === goals.length;
+const RefereeQuestion = z.object({ prompt: z.string().min(1), yes: z.string().min(1), no: z.string().min(1) });
+
+// The public page's games (games.yaml, src/core/game.ts). caught_stages are call-flow.yaml rules.
+export const GamesConfig = z.object({
+  leaderboard_size: z.number().int().min(1).max(20).default(5),
+  // A separate Jev call on game calls that judges whether the goal was met (src/core/referee.ts).
+  referee: z.object({
+    model: z.string().default("jev-latest"),
+    timeout_ms: z.number().int().positive().default(2000),
+    min: unit.default(0.7),
+    context: z.string().min(1),
+    scam: z.object({ move: RefereeQuestion, ask: RefereeQuestion }),
+    get_through: z.object({ message: RefereeQuestion }),
+  }),
+  scam: z.object({
+    caught_stages: z.array(z.string().min(1)).min(1),
+    goals: z.array(ScamGoal).min(1).refine(uniqueIds, "goal ids must be unique"),
+  }),
+  get_through: z.object({ goals: z.array(GetThroughGoal).min(1).refine(uniqueIds, "goal ids must be unique") }),
+});
+
 // The owner's Telegram (TELEGRAM_* in .env): one status message per call, edited as it goes on,
 // and steering: the owner's messages reach Live as steering.text.
 export const TelegramConfig = z.object({
@@ -564,6 +597,7 @@ export type CallFlowConfig = z.infer<typeof CallFlowConfig>;
 export type ConnectionConfig = z.infer<typeof ConnectionConfig>;
 export type CostConfig = z.infer<typeof CostConfig>;
 export type PublicConfig = z.infer<typeof PublicConfig>;
+export type GamesConfig = z.infer<typeof GamesConfig>;
 export type TelegramConfig = z.infer<typeof TelegramConfig>;
 
 export interface AppConfig {
@@ -574,6 +608,7 @@ export interface AppConfig {
   connection: ConnectionConfig;
   cost: CostConfig;
   public: PublicConfig;
+  games: GamesConfig;
   telegram: TelegramConfig;
 }
 
@@ -585,6 +620,7 @@ const schemas = {
   connection: ConnectionConfig,
   cost: CostConfig,
   public: PublicConfig,
+  games: GamesConfig,
   telegram: TelegramConfig,
 } as const;
 
@@ -599,6 +635,7 @@ export const CONFIG_FILES: Record<ConfigName, string> = {
   connection: "connection.yaml",
   cost: "cost.yaml",
   public: "public.yaml",
+  games: "games.yaml",
   telegram: "telegram.yaml",
 };
 
@@ -664,6 +701,14 @@ export function checkFlow(flow: CallFlowConfig, jev: JevConfig): void {
   if (issues.length) throw new ConfigError(`Invalid config:\n${issues.join("\n")}`);
 }
 
+/** Checks games.yaml against call-flow.yaml: scam.caught_stages must be rules' stages. */
+export function checkGames(games: GamesConfig, flow: CallFlowConfig): void {
+  const missing = games.scam.caught_stages.filter((stage) => !flow.rules.some((r) => r.stage === stage));
+  if (missing.length) {
+    throw new ConfigError(`Invalid config:\n  games.yaml: scam.caught_stages: no call-flow.yaml rule has stage ${missing.join(", ")}`);
+  }
+}
+
 /** Checks luna.yaml progress.when against jev.yaml: it must name a Choice question and one of its answers. */
 export function checkProgress(luna: LunaConfig, jev: JevConfig): void {
   const w = luna.progress.when;
@@ -681,7 +726,7 @@ export function checkProgress(luna: LunaConfig, jev: JevConfig): void {
 export interface ConfigVars {
   /** OWNER_NAME; {owner_name} falls back to "the owner" */
   ownerName?: string;
-  /** AGENT_LANGUAGES; {agent_languages} falls back to "English" */
+  /** AGENT_LANGUAGES; {agent_languages} falls back to "any common language" */
   agentLanguages?: string;
 }
 
@@ -695,7 +740,7 @@ export interface ConfigVars {
 export function fillPlaceholders(cfg: AppConfig, vars: ConfigVars = {}): AppConfig {
   const values: Record<string, string> = {
     owner_name: vars.ownerName || "the owner",
-    agent_languages: vars.agentLanguages || "English",
+    agent_languages: vars.agentLanguages || "any common language",
   };
   values.owner_update_marker = cfg.jev.owner_update_marker.replace(/\{(owner_name|agent_languages)\}/g, (_, k: string) => values[k]!);
   const issues: string[] = [];
@@ -736,6 +781,7 @@ export async function loadConfig(source: ConfigSource, vars: ConfigVars = {}): P
   const cfg = Object.fromEntries(entries) as unknown as AppConfig;
   checkFlow(cfg.flow, cfg.jev);
   checkProgress(cfg.luna, cfg.jev);
+  checkGames(cfg.games, cfg.flow);
   return fillPlaceholders(cfg, vars);
 }
 

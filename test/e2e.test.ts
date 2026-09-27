@@ -232,7 +232,8 @@ describe("steel thread (fake vendors)", () => {
     voice.handlers!.onTranscriptDelta("caller", "c1", "we need to move your money to a safe account.");
     voice.handlers!.onTranscriptDone("caller", "c1");
     await until(() => voice.appended.length > 0);
-    expect(voice.appended[0]).toContain("This is a scam or spam call.");
+    const wasteTime = config.get().flow.rules.find((r) => r.stage === "waste_time")!.then!.tell_live!.text!;
+    expect(voice.appended[0]).toContain(wasteTime.trim());
 
     // The owner replies to the call's status message on Telegram → Live.
     expect(owner.sent[0]!.text).toContain("+447911123456");
