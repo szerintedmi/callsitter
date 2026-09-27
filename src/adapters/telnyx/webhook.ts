@@ -25,9 +25,12 @@ export interface TelnyxWebhook {
       custom_headers?: SipHeader[];
       hangup_cause?: string;
       hangup_source?: string;
+      /** call.cost: whether Telnyx could price the call; on "error" total_cost is null */
+      status?: string;
       /** call.cost: the call's total, a decimal string ("0.0225") */
-      total_cost?: string;
-      currency?: string;
+      total_cost?: string | null;
+      /** call.cost: the total by product (trunking, call control, recording), each with its currency */
+      cost_parts?: { currency?: string }[];
       recording_urls?: { mp3?: string; wav?: string };
       public_recording_urls?: { mp3?: string; wav?: string };
       recording_id?: string;

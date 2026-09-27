@@ -130,10 +130,13 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
       }
       case "call.cost": {
         const callId = await resolveCallId(p);
-        const usd = Number(p.total_cost);
-        if (!callId || !Number.isFinite(usd)) return;
-        if (p.currency && p.currency !== "USD") {
-          console.warn(`[call ${callId}] carrier cost in ${p.currency}, not USD: left out of the call's costs`);
+        if (!callId) return;
+        // Number(null) is 0: a failed pricing must not pass for a free call.
+        const usd = p.status === "success" && typeof p.total_cost === "string" ? Number(p.total_cost) : NaN;
+        const currencies = [...new Set((p.cost_parts ?? []).map((c) => c.currency ?? "USD"))];
+        if (!Number.isFinite(usd) || currencies.some((c) => c !== "USD")) {
+          const why = p.status !== "success" ? `status ${p.status ?? "missing"}` : !Number.isFinite(usd) ? `total ${p.total_cost}` : `in ${currencies.join(", ")}`;
+          await d.manager.note(callId, "warn", `carrier cost not added (${why})`);
           return;
         }
         await d.manager.carrierCost(callId, usd);

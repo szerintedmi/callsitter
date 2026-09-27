@@ -88,6 +88,21 @@ describe("call manager", () => {
     expect(costs.totalUsd).toBeCloseTo(costs.liveUsd + costs.lunaUsd + costs.jevUsd + 0.02, 6);
   });
 
+  test("the carrier's bill, arriving just after the wrap-up, keeps the summary's cost", async () => {
+    const usage = { model: "gpt-6-luna", inputTokens: 1_000_000, cachedTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0 };
+    const r = await rig({ run: async () => ({ toolCalls: [] }), summarize: async () => ({ text: "Sarah called.", usage }) });
+    const s = await r.manager.attachMedia("c1", NO_MEDIA, "pcma");
+    s.orch.onTranscriptDelta("caller", "u1", "It's Sarah.");
+    await s.stop("caller hung up");
+    await s.finished;
+    // Before persistence has stored the summary's costs.
+    await r.manager.carrierCost("c1", 0.02);
+    await r.persistence.flush();
+    const costs = (await r.repo.getCall("c1"))!.costs!;
+    expect(costs.lunaUsd).toBeGreaterThan(0);
+    expect(costs.totalUsd).toBeCloseTo(costs.liveUsd + costs.lunaUsd + costs.jevUsd + 0.02, 6);
+  });
+
   test("no new session starts once shutdown has begun", async () => {
     const r = await rig();
     const attach = r.manager.attachMedia("c1", NO_MEDIA, "pcma"); // still reading the call record

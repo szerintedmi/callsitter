@@ -289,7 +289,17 @@ describe("steel thread (fake vendors)", () => {
 
   test("call.cost after the call → the carrier's bill added to the stored costs", async () => {
     const before = (await repo.getCall(callId))!.costs!;
-    await webhook("call.cost", { call_control_id: ccid, client_state: btoa(JSON.stringify({ callId })), total_cost: "0.0225", currency: "USD" });
+    // A failed pricing (total_cost null) is noted, not stored as a free call.
+    await webhook("call.cost", { call_control_id: ccid, client_state: btoa(JSON.stringify({ callId })), status: "error", total_cost: null });
+    await until(async () => (await repo.listEvents(callId)).some((e) => e.event.type === "note" && e.event.message.includes("carrier cost not added (status error)")));
+    expect((await repo.getCall(callId))!.costs!.carrierUsd).toBeUndefined();
+    await webhook("call.cost", {
+      call_control_id: ccid,
+      client_state: btoa(JSON.stringify({ callId })),
+      status: "success",
+      total_cost: "0.0225",
+      cost_parts: [{ call_part: "sip-trunking", cost: "0.0125", currency: "USD" }, { call_part: "call-control", cost: "0.0100", currency: "USD" }],
+    });
     await until(async () => (await repo.getCall(callId))?.costs?.carrierUsd !== undefined);
     const call = (await repo.getCall(callId))!;
     expect(call.costs).toMatchObject({ liveUsd: before.liveUsd, carrierUsd: 0.0225 });

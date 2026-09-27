@@ -20,13 +20,20 @@ export interface AttachOptions {
   maxCallSeconds?: number;
 }
 
+/**
+ * How long an ended call's session stays reachable for the carrier's bill (Telnyx call.cost,
+ * seconds after the hangup). The session's cost meter is the truth until then: the stored costs
+ * can lag behind persistence.
+ */
+const KEEP_ENDED_MS = 10 * 60_000;
+
 /** For calls whose audio doesn't pass through us (OpenAI SIP): agent audio copies are dropped. */
 export const NO_MEDIA: MediaChannel = { sendAudio() {}, clear() {}, close() {} };
 
 export class CallManager {
   private sessions = new Map<string, CallSession>();
-  /** sessions whose call has ended but whose wrap-up (the summary) is still running */
-  private wrapping = new Map<string, CallSession>();
+  /** sessions whose call has ended: `until` is null while the wrap-up (the summary) runs, then when to forget them */
+  private ended = new Map<string, { session: CallSession; until: number | null }>();
   /** calls whose session is being set up (before it's in `sessions`), so a second attach waits for it */
   private attaching = new Map<string, Promise<CallSession>>();
   /** work that outlives a call's session (its wrap-up, saving recordings); shutdown waits for it */
@@ -134,9 +141,11 @@ export class CallManager {
         if (this.sessions.get(callId) === session) this.sessions.delete(callId);
         // The summary is still to come.
         if (session.finished) {
-          this.wrapping.set(callId, session);
-          const unwrap = () => void (this.wrapping.get(callId) === session && this.wrapping.delete(callId));
-          this.track(session.finished).then(unwrap, unwrap);
+          const entry = { session, until: null as number | null };
+          this.ended.set(callId, entry);
+          const wrapped = () => void (entry.until = this.d.clock.now() + KEEP_ENDED_MS);
+          this.track(session.finished).then(wrapped, wrapped);
+          this.pruneEnded();
         }
       },
     });
@@ -200,16 +209,22 @@ export class CallManager {
   }
 
   /**
-   * Adds the carrier's bill for the phone leg to the call's costs. It arrives after the hangup:
-   * a session that is still wrapping up takes it into its final costs; after that, it goes onto
-   * the stored ones.
+   * Adds the carrier's bill for the phone leg to the call's costs. It arrives after the hangup,
+   * so it goes to the session's cost meter while the session is kept (KEEP_ENDED_MS), and onto
+   * the stored costs after that (or after a restart), when persistence has long caught up.
    */
   async carrierCost(callId: string, usd: number) {
-    const session = this.sessions.get(callId) ?? this.wrapping.get(callId);
+    this.pruneEnded();
+    const session = this.sessions.get(callId) ?? this.ended.get(callId)?.session;
     if (session) return session.setCarrierCost(usd);
     const call = await this.d.repo.getCall(callId);
     if (!call?.costs) return; // never connected, or from before costs were recorded
     this.d.bus.publish({ type: "costs", callId, at: Math.max(0, this.d.clock.now() - call.startedAt), costs: withCarrier(call.costs, usd) });
+  }
+
+  private pruneEnded() {
+    const now = this.d.clock.now();
+    for (const [id, e] of this.ended) if (e.until !== null && e.until <= now) this.ended.delete(id);
   }
 
   /** ms since the call started, or null for an unknown call */
