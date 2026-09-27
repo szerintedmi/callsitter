@@ -100,7 +100,8 @@ gpt-live-1 can answer the SIP leg itself ([voice-sip](https://developers.openai.
 
 - Transcripts, Jev, the call flow and Luna run as usual. Steering goes out over the sideband as `session.instructions.append`, `session.thinking.append` or `session.commentary.append` (each `tell_live` says which with `as`).
 - Audio doesn't pass through the app. The sideband reflects both directions ("mono PCM16LE at 24 kHz"), so the call is recorded as a stereo WAV: caller on the left, agent on the right, placed by `start_ms` (`connection.yaml → sip.record`).
-- Hangups go to `POST /v1/live/sessions/{id}/hangup`. Settings are in `connection.yaml → sip`; the `media_stream` settings don't apply.
+- Hangups go to `POST /v1/live/sessions/{id}/hangup`. When Live ends the session itself (`session.closed`: the caller hung up shows as `remote_hangup` or `connection_lost`), the call just ends: a hangup for a closed session stalls for over 5 s. Settings are in `connection.yaml → sip`; the `media_stream` settings don't apply.
+- Live keeps running through silence on its own (no filler audio needed), and the silence watchdog listens to the sideband's reflected caller audio. Each call's log file has the speech segments the watchdog heard and any gaps in that audio (`src/core/speech-trace.ts`); the timeline gets a one-line summary.
 
 Setup:
 
@@ -111,10 +112,12 @@ Setup:
 
     It writes `OPENAI_PROJECT_ID`, `OPENAI_WEBHOOK_SECRET`, `TELNYX_SIP_CONNECTION_ID` and `TELNYX_SIP_CREDENTIAL_ID` to `.env`. Restart the server afterwards: `--watch` doesn't reload `.env`.
 2. Add `openai/webhook` to the public path regex in `deploy/cloudflared.yml`, then restart the tunnel.
-3. For real calls, follow [Telnyx's GPT-Live guide](https://developers.telnyx.com/docs/voice/sip-trunking/gpt-live-configuration-guide):
-   - Create an FQDN connection to `sip.api.openai.com:5061` with TLS, SRTP mandatory, and PCMA/PCMU.
-   - Assign the number to it, with "Translated Number" set to the project ID.
-   - This takes the number off the Call Control app, so the media-stream path no longer receives its calls.
+3. For real calls, run `bun scripts/direct-sip.ts on` (`status`, `off`, `--dry-run`). It follows [Telnyx's GPT-Live guide](https://developers.telnyx.com/docs/voice/sip-trunking/gpt-live-configuration-guide):
+   - an FQDN connection to `sip.api.openai.com:5061` with TLS, SRTP mandatory, G.711 A-law/µ-law, and media anchored in London;
+   - the number on it, with "Translated Number" set to the project ID, and Telnyx's own dual-channel recording on;
+   - the OpenAI webhook pointed at `PUBLIC_WS_BASE`'s host (from the laptop, `PUBLIC_WS_BASE=wss://<production host> bun scripts/direct-sip.ts on` points it at production).
+
+   This takes the number off the Call Control app, so the media-stream path no longer receives its calls. `off` puts back what `on` saved in `DATA_DIR/direct-sip-restore.json`.
 
 ## Layout
 
@@ -191,6 +194,8 @@ These differ from the original plan:
 
 - OpenAI SIP:
   - Verified on 2026-09-24: Telnyx Call Control → `sip:<project>@sip.api.openai.com` with TLS and SRTP reaches OpenAI. The webhook, accept, sideband, greeting, recording and hangup all worked.
+  - Verified on 2026-09-27 with the number on an FQDN connection (8 calls from a UK mobile): no gaps in the sideband's caller audio; on the three checked, the watchdog heard the same speech as Telnyx's recording; silence prompts and the silent-line hangup worked. Turn gaps in Telnyx's recording (caller stops → agent starts): median 2.10 s over the media stream, 1.78–1.86 s over SIP. Telnyx ↔ OpenAI took 640–740 ms per turn with the default anchor, 520–580 ms anchored in London.
+  - `sip-eu.api.openai.com` refuses our project: "401 This endpoint is only accessible by projects with geography restrictions enabled" (an EU data-residency project).
   - Whether Telnyx passes the `X-ScamSitter-Test` header from a `transfer` through to OpenAI.
   - Which From/To/Diversion headers arrive. They're logged on every SIP call.
   - Whether the sideband gets `session.started` on attach. The adapter treats an open socket as ready.

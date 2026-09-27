@@ -72,7 +72,7 @@ export class OpenAiWebRtc {
         };
         let session: VoiceSession;
         try {
-          session = await recordedSideband(this.o.apiKey, this.o.liveUrl, sessionId, o, { ...h, onClose: () => (hangup(), h.onClose()) }, opts);
+          session = await recordedSideband(this.o.apiKey, this.o.liveUrl, sessionId, o, { ...h, onClose: (reason) => (hangup(), h.onClose(reason)) }, opts);
         } catch (err) {
           hangup();
           throw err;

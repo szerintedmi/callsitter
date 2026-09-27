@@ -37,7 +37,8 @@ export interface VoiceSessionHandlers {
   /** the vendor's periodic usage report (Live: session.usage.updated, about once a minute) */
   onUsage?(usage: VoiceUsage): void;
   onError(err: Error): void;
-  onClose(): void;
+  /** the session is gone: `reason` is why, when the vendor ended it (absent: the connection dropped) */
+  onClose(reason?: string): void;
 }
 
 export interface VoiceUsage {
