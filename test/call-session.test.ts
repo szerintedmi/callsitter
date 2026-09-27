@@ -212,6 +212,32 @@ describe("call session over OpenAI SIP (caller audio only reflected by the sideb
     expect(r.appended).toContain(r.prompt);
   });
 
+  test("the call's notes say how much reflected caller audio arrived, and its gaps", async () => {
+    const r = await rig({ sip: true });
+    for (let i = 0; i < 10; i++) {
+      r.handlers().onCallerAudio!(loud());
+      r.advance(100);
+    }
+    r.advance(600);
+    for (let i = 0; i < 5; i++) {
+      r.handlers().onCallerAudio!(loud());
+      r.advance(100);
+    }
+    await r.session.hangup("test");
+    expect(r.notes).toContain("sideband caller audio: 1.5 s received over 2.1 s, 1 gap ≥ 200 ms, longest 600 ms");
+  });
+
+  test("Live ending the session ends the call without a hangup; a dropped sideband still hangs up", async () => {
+    const ended = await rig({ sip: true });
+    ended.handlers().onClose("remote_hangup");
+    expect(ended.session.phase).not.toBe("active");
+    expect(ended.hangups).toEqual([]);
+
+    const dropped = await rig({ sip: true });
+    dropped.handlers().onClose();
+    expect(dropped.hangups).toEqual(["cc1"]);
+  });
+
   test("reflected audio is never sent back to Live, and no silence is fed in", async () => {
     const r = await rig({ sip: true });
     r.handlers().onCallerAudio!(loud());
@@ -830,5 +856,13 @@ describe("call session silence watchdog", () => {
     r.stall(100);
     expect(r.sent.slice(before)).toEqual(["1111"]);
     await r.session.stop("test");
+  });
+});
+
+describe("call session: Live closing the session", () => {
+  test("over the Telnyx media stream, it hangs up the phone", async () => {
+    const r = await rig();
+    r.handlers().onClose("expired");
+    expect(r.hangups).toEqual(["cc1"]);
   });
 });

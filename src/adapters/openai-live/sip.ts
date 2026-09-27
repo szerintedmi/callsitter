@@ -125,12 +125,12 @@ export function recordedSideband(
     o,
     {
       ...h,
-      onClose: () => {
+      onClose: (reason) => {
         if (recorder && !saved) {
           saved = true;
           opts.onRecording!(recorder.toWav());
         }
-        h.onClose();
+        h.onClose(reason);
       },
     },
     { recorder, greetAfter: opts.greetAfter },

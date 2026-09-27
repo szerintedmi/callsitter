@@ -2,6 +2,7 @@ import { b64decode, b64encode, BYTES_PER_MS, isCodec, levelDbfs, SILENCE_BYTE, t
 import { fillCurrentTime, ownerAppendText, type AppConfig, type LiveAppend } from "./config";
 import { logger } from "./log";
 import { errMsg, Orchestrator, type Steer } from "./orchestrator";
+import { SpeechTrace } from "./speech-trace";
 import type {
   Agent,
   Classifier,
@@ -105,6 +106,8 @@ export class CallSession {
   private billedLiveSeconds: number | undefined;
   /** caller audio that arrived while Live was still connecting (sent once it's up) */
   private earlyCallerAudio: string[] = [];
+  /** OpenAI SIP: what the watchdog heard, logged for checking against a recording */
+  private trace: SpeechTrace | null;
 
   constructor(private d: CallSessionDeps) {
     this.orch = new Orchestrator({
@@ -121,6 +124,7 @@ export class CallSession {
         hangup: (reason) => this.hangupAfterGoodbye(reason),
       },
     });
+    this.trace = d.mediaViaVoice ? new SpeechTrace(d.meta.callId) : null;
   }
 
   get callId() {
@@ -237,7 +241,9 @@ export class CallSession {
       onCallerAudio: (b64) => {
         if (this.stopped) return;
         this.callerAudioAt = this.d.clock.now();
-        this.detectCallerSpeech(b64decode(b64));
+        const bytes = b64decode(b64);
+        this.trace?.callerAudio(this.orch.elapsed(), bytes.length / BYTES_PER_MS[this.codec]);
+        this.detectCallerSpeech(bytes);
       },
       onTranscriptDelta: (s, id, delta) => {
         if (s === "caller") {
@@ -258,9 +264,14 @@ export class CallSession {
       onDelegation: (req) => void this.orch.delegate(req),
       onUsage: (u) => this.onUsage(u.seconds, u.contextRatio),
       onError: (err) => this.note("error", err.message),
-      onClose: () => {
+      onClose: (reason) => {
         // While connecting, a failed connect rejects instead (and says why).
-        if (this._phase === "active") void this.hangup("voice session closed");
+        if (this._phase !== "active") return;
+        const why = reason ? `voice session closed (${reason.replaceAll("_", " ")})` : "voice session closed";
+        // OpenAI SIP and WebRTC: the phone leg is Live's own, so once Live has ended the session
+        // there is nothing to hang up (asking OpenAI to hang up a closed session stalls for > 5 s).
+        if (reason && this.d.mediaViaVoice) void this.stop(why);
+        else void this.hangup(why);
       },
     };
   }
@@ -281,9 +292,11 @@ export class CallSession {
    * while the caller talked, and instructions cut off the reply Live was about to give.
    */
   private detectCallerSpeech(bytes: Uint8Array) {
-    if (levelDbfs(bytes, this.codec) >= this.d.config().connection.speech_detection.caller_dbfs) {
+    const dbfs = levelDbfs(bytes, this.codec);
+    if (dbfs >= this.d.config().connection.speech_detection.caller_dbfs) {
       this.callerSpeechAt = this.callerAudioAt;
       this.lastActivityAt = Math.max(this.lastActivityAt, this.callerAudioAt);
+      this.trace?.speech("caller", this.orch.elapsed(), bytes.length / BYTES_PER_MS[this.codec], dbfs);
     }
   }
 
@@ -316,7 +329,9 @@ export class CallSession {
     const now = this.d.clock.now();
     this.agentPlayoutUntil = Math.max(now, this.agentPlayoutUntil) + bytes.length / BYTES_PER_MS[this.codec];
     // Live streams continuously, padding pauses with silence or faint noise; only speech counts.
-    if (levelDbfs(bytes, this.codec) < this.d.config().connection.speech_detection.agent_dbfs) return;
+    const dbfs = levelDbfs(bytes, this.codec);
+    if (dbfs < this.d.config().connection.speech_detection.agent_dbfs) return;
+    this.trace?.speech("agent", this.orch.elapsed(), bytes.length / BYTES_PER_MS[this.codec], dbfs);
     this.agentSpeechUntil = this.agentPlayoutUntil;
     this.agentSpeechAt = now;
     this.lastActivityAt = Math.max(this.lastActivityAt, this.agentPlayoutUntil);
@@ -585,6 +600,8 @@ export class CallSession {
         { callId: this.callId },
       );
     }
+    const heard = this.trace?.summary();
+    if (heard) this.note("info", heard);
     this.d.onStopped?.(this.callId);
 
     const transcript = this.orch.transcript.all();

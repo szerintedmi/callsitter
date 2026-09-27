@@ -212,7 +212,7 @@ class LiveSession implements VoiceSession {
         this.h.onError(new Error(`Live: ${ev.error.code}: ${ev.error.message}`));
         break;
       case "session.closed":
-        this.shutdown();
+        this.shutdown(ev.reason);
         break;
     }
   }
@@ -247,7 +247,7 @@ class LiveSession implements VoiceSession {
     return this.whenClosed;
   }
 
-  private shutdown() {
+  private shutdown(reason?: string) {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.sweep);
@@ -256,7 +256,7 @@ class LiveSession implements VoiceSession {
       this.ws.close();
     } catch {}
     try {
-      this.h.onClose();
+      this.h.onClose(reason);
     } finally {
       this.markClosed();
     }
