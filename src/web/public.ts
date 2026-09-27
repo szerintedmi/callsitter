@@ -3,7 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 import { streamSSE, type SSEStreamingApi } from "hono/streaming";
 import { NO_MEDIA, type CallManager } from "../core/call-manager";
 import type { AppConfig } from "../core/config";
-import { GAMES, START, goalMet, nextPlay, playerName, rankIn, scoreOf, type BoardEntry, type Game, type PlayState } from "../core/game";
+import { GAMES, START, goalMet, nextPlay, playSummary, playerName, rankIn, scoreOf, type BoardEntry, type Game, type PlayState } from "../core/game";
 import { errMsg } from "../core/orchestrator";
 import type { Clock, Referee, Repo } from "../core/ports";
 import { GoalWatch } from "../core/referee";
@@ -146,7 +146,7 @@ export function publicRoutes(d: PublicDeps) {
   /** calls waiting for the page to say its audio is up */
   const connected = new Map<string, () => void>();
   /** each live public call's game and what its page shows, and the pages listening */
-  const plays = new Map<string, { game: Game; state: PlayState; watch: GoalWatch; streams: Set<SSEStreamingApi> }>();
+  const plays = new Map<string, { game: Game; goal: string; player: string; state: PlayState; watch: GoalWatch; streams: Set<SSEStreamingApi> }>();
   /** ended game calls whose score isn't saved yet (the referee's last look) */
   const settling = new Set<string>();
   const push = (p: { state: PlayState; streams: Set<SSEStreamingApi> }) => {
@@ -178,8 +178,14 @@ export function publicRoutes(d: PublicDeps) {
         settling.add(ev.callId);
         void p.watch
           .final()
-          .then(() => d.repo.finishPlay(ev.callId, scoreOf(p.game, p.state, ev.at), Date.now()))
-          .catch((err) => console.warn(`[public ${ev.callId}] score not saved: ${errMsg(err)}`))
+          .then(async () => {
+            await d.repo.finishPlay(ev.callId, scoreOf(p.game, p.state, ev.at), Date.now());
+            // On the call's log and the server's, so a missing score can be explained.
+            const line = `game ${p.game}/${p.goal} ${p.player}: ${playSummary(p.game, p.state, ev.at)}`;
+            console.log(`[public ${ev.callId}] ${line}`);
+            await d.manager.note(ev.callId, "info", line);
+          })
+          .catch((err) => console.warn(`[public ${ev.callId}] game not finished: ${errMsg(err)}`))
           .finally(() => settling.delete(ev.callId));
       }
       return;
@@ -292,6 +298,8 @@ export function publicRoutes(d: PublicDeps) {
     const startedAt = Date.now();
     const play = {
       game,
+      goal: goal.id,
+      player,
       state: START,
       streams: new Set<SSEStreamingApi>(),
       watch: new GoalWatch({

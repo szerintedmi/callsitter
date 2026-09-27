@@ -8,12 +8,33 @@ import type { TranscriptEntry } from "./types";
 // transcript arrives (Jev's pauses come before it, mid-turn too) until every question is met, and
 // once more when the call ends, so the last words still count.
 
+/** The words in `text`, e.g. "Mm-hmm." is one. */
+const words = (text: string) => text.split(/\s+/).filter((w) => /\p{L}/u.test(w)).length;
+
+/**
+ * The caller's turn that `transcript` (final, in order) ends with, or null before they speak.
+ * Speech-to-text splits a caller's sentence into several finals, often around an agent
+ * backchannel ("Mm-hmm"): the turn goes back over those, to its first caller final.
+ */
+export function lastCallerTurn(transcript: readonly TranscriptEntry[], backchannelWords: number): { at: number; endAt: number } | null {
+  const i = transcript.findLastIndex((e) => e.speaker === "caller");
+  if (i < 0) return null;
+  const last = transcript[i]!;
+  let at = last.at;
+  for (let j = i - 1; j >= 0; j--) {
+    const e = transcript[j]!;
+    if (e.speaker === "caller") at = e.at;
+    else if (words(e.text) > backchannelWords) break;
+  }
+  return { at, endAt: last.endAt ?? last.at };
+}
+
 export interface GoalWatchDeps {
   referee: Referee;
   game: Game;
   goal: RefereeInput["goal"];
   config: () => RefereeInput["config"];
-  /** `question` was met in the caller's `turn` that did it (ms since call start) */
+  /** `question` was met in the caller's `turn` that did it (ms since call start; lastCallerTurn) */
   onMet(question: string, turn: { at: number; endAt: number }): void;
   /** every judgement, for the call's log */
   onJudged(answers: Record<string, number>): void;
@@ -74,15 +95,14 @@ export class GoalWatch {
 
   private async judge(): Promise<void> {
     const transcript = [...this.entries.values()].sort((a, b) => a.seq - b.seq);
-    const last = transcript.findLast((e) => e.speaker === "caller");
-    if (!last) return;
+    const cfg = this.d.config();
+    const turn = lastCallerTurn(transcript, cfg.backchannel_words);
+    if (!turn) return;
     try {
-      const cfg = this.d.config();
       const answers = await this.d.referee.judge({ game: this.d.game, goal: this.d.goal, transcript, config: cfg });
       this.d.onJudged(answers);
       for (const q of REFEREE_QUESTIONS[this.d.game]) {
         if (this.met.has(q) || (answers[q] ?? 0) < cfg.min) continue;
-        const turn = { at: last.at, endAt: last.endAt ?? last.at };
         this.met.set(q, turn.endAt);
         this.d.onMet(q, turn);
       }

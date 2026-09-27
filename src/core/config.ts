@@ -523,6 +523,7 @@ export const GamesConfig = z.object({
     model: z.string().default("jev-latest"),
     timeout_ms: z.number().int().positive().default(2000),
     min: unit.default(0.7),
+    backchannel_words: z.number().int().min(0).max(10).default(2),
     context: z.string().min(1),
     scam: z.object({ move: RefereeQuestion, ask: RefereeQuestion }),
     get_through: z.object({ message: RefereeQuestion }),

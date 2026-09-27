@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { buildRefereeRequest } from "../src/adapters/jev/referee";
 import { openSqlite, SqliteRepo } from "../src/adapters/storage/sqlite";
 import { ConfigError, checkGames } from "../src/core/config";
-import { START, goalMet, nextPlay, playerName, rankIn, scoreOf, type PlayState } from "../src/core/game";
-import { GoalWatch } from "../src/core/referee";
+import { START, goalMet, nextPlay, playSummary, playerName, rankIn, scoreOf, type PlayState } from "../src/core/game";
+import { GoalWatch, lastCallerTurn } from "../src/core/referee";
 import type { TranscriptEntry } from "../src/core/types";
 import type { CallEvent } from "../src/core/types";
 import { cls, loadRepoConfig } from "./helpers";
@@ -65,6 +65,8 @@ test("the referee judges each pause until every question is met, then once more 
     onError: (err) => { throw err; },
   });
   const say = (seq: number, at: number): TranscriptEntry => ({ seq, speaker: "caller", text: `line ${seq}`, at, endAt: at + 500, final: true });
+  // An agent reply between the caller's turns
+  const reply = (seq: number, at: number): TranscriptEntry => ({ seq, speaker: "agent", text: "Right, and what's this about?", at, endAt: at + 500, final: true });
   // A pause before any finished caller line: nothing to judge, and later pauses still run.
   w.check();
   await Bun.sleep(5);
@@ -75,19 +77,56 @@ test("the referee judges each pause until every question is met, then once more 
   await Bun.sleep(5);
   expect(judged).toEqual([1, 1]);
   answers = { move: 0.9, ask: 0.2 };
-  w.add(say(2, 4000));
+  w.add(reply(2, 2000));
+  w.add(say(3, 4000));
   w.check();
   await Bun.sleep(5);
   expect(met).toEqual([["move", { at: 4000, endAt: 4500 }]]); // the caller's turn that did it
   answers = { move: 0.9, ask: 0.8 };
-  w.add(say(3, 9000));
+  w.add(reply(4, 6000));
+  w.add(say(5, 9000));
   w.check();
   await Bun.sleep(5);
   expect(met).toEqual([["move", { at: 4000, endAt: 4500 }], ["ask", { at: 9000, endAt: 9500 }]]);
   w.check();
   await w.final();
-  expect(judged).toEqual([1, 1, 2, 3]); // no more once all are met
+  expect(judged).toEqual([1, 1, 3, 5]); // no more once all are met
   expect(logged).toHaveLength(4);
+});
+
+test("a caller's turn goes back over their split lines and the agent's backchannels, to its start", () => {
+  let seq = 0;
+  const line = (speaker: "caller" | "agent", at: number, endAt: number, text: string): TranscriptEntry =>
+    ({ seq: ++seq, speaker, text, at, endAt, final: true });
+  // A recorded call: caught at 68.9s, in the middle of the ask.
+  const transcript = [
+    line("caller", 39_800, 54_300, "We have to reset the router."),
+    line("agent", 54_300, 59_700, "Okay, I see. So what would you need from me, exactly?"),
+    line("caller", 62_900, 65_200, "Uh, I just need you to"),
+    line("caller", 65_200, 68_900, ", uh, start a reset the router by"),
+    line("agent", 68_900, 69_600, "Mm-hmm."),
+    line("caller", 69_600, 72_400, "like starting the"),
+    line("caller", 72_600, 73_300, "- little program"),
+  ];
+  expect(lastCallerTurn(transcript, 2)).toEqual({ at: 62_900, endAt: 73_300 });
+  expect(lastCallerTurn(transcript, 0)).toEqual({ at: 69_600, endAt: 73_300 });
+  expect(lastCallerTurn([line("agent", 0, 1000, "Hello.")], 2)).toBeNull();
+  // Scored from the move until the catch, as the ask started before it.
+  const caught = nextPlay(goalMet(goalMet(START, "move", turn(10_700)), "ask", lastCallerTurn(transcript, 2)!), stage(games.scam.caught_stages[0]!, 68_900), games)!;
+  expect(scoreOf("scam", caught)).toBe(58_200);
+});
+
+test("the call's log says what a game scored, or why it didn't", () => {
+  const moved = goalMet(START, "move", turn(10_700));
+  const caught = (s: PlayState, at: number) => nextPlay(s, stage(games.scam.caught_stages[0]!, at), games)!;
+  expect(playSummary("scam", caught(goalMet(moved, "ask", turn(73_300, 62_900)), 68_900))).toBe(
+    "move 10.7s · ask 62.9s · caught 68.9s → score 58.2s",
+  );
+  expect(playSummary("scam", caught(goalMet(moved, "ask", turn(99_200, 94_000)), 68_900))).toBe(
+    "move 10.7s · ask 94.0s · caught 68.9s → no score (asked after caught)",
+  );
+  expect(playSummary("scam", moved, 60_000)).toBe("move 10.7s · ask — · caught — → no score (never asked)");
+  expect(playSummary("get_through", START, 60_000)).toBe("message — · caught — → no score (message not passed on)");
 });
 
 test("the lean runs from genuine (-1) to scam or spam (1)", () => {
