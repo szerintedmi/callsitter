@@ -3,11 +3,11 @@ import type { Referee, RefereeInput } from "../../core/ports";
 import { renderTranscript } from "./classifier";
 
 // The public games' referee on TypeSafe Jev (games.yaml referee): one systemOne call with the
-// game's questions, the goal in the state. Separate from the call's own Jev (JevClassifier).
+// game's question, the goal in the state. Separate from the call's own Jev (JevClassifier).
 
-/** The goal as the referee reads it: its name and what each question looks for. */
+/** The goal as the referee reads it: its name and what the question looks for. */
 export function describeGoal(goal: RefereeInput["goal"]): string {
-  return "message" in goal ? `${goal.name}. Message: ${goal.message}.` : `${goal.name}. Move: ${goal.move}. Ask: ${goal.ask}.`;
+  return "message" in goal ? `${goal.name}. Message: ${goal.message}.` : `${goal.name}. Start: ${goal.start}.`;
 }
 
 export function buildRefereeRequest(i: RefereeInput) {

@@ -19,7 +19,7 @@ questions:
       scam: Fraud. The caller wants money, credentials, codes, personal details or remote access under false pretences. Asking to be called back, for a message to be passed on or for harmless details such as a meter reading isn't fraud by itself.
       spam: Sales, marketing, surveys or robocalls. The caller pushes an offer {owner_name} didn't ask for. Not fraud, but unwanted.
       genuine: An ordinary reason to call that asks for nothing risky, e.g. friends, family, neighbours, work, a GP surgery, pharmacy, school, tradesperson or delivery. It doesn't need to be verified.
-      unclear: Too early to tell. The caller hasn't yet said why they're calling.
+      unclear: Too early to tell. The caller hasn't yet said what they want; who they say they are (a bank, a tax office, the police, a utility), even out of the blue, isn't enough.
   urgency:
     prompt: How urgent is it that {owner_name} personally hears about this call soon?
     levels:

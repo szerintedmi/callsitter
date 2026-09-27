@@ -2,9 +2,9 @@ import type { GamesConfig } from "./config";
 import type { CallEvent } from "./types";
 
 // The public page's games (config/games.yaml): what a call means for the player. Pure.
-//   scam         the player is the scammer: scored from their move (the referee says they've taken
-//                on the goal's role) until caught, longest wins, if they asked for what the goal
-//                wants before being caught
+//   scam         the player is the scammer: 10 points a second from the scam's start (the
+//                referee says they've claimed to be who the goal says) until the call ends,
+//                scam.undetected_multiplier times that before they're caught; most wins
 //   get_through  the player is a real caller: scored by how long until the referee says they
 //                passed on their message, unless caught first; fastest wins
 
@@ -21,15 +21,12 @@ export interface PlayState {
   stage: string | null;
   /** when the call first entered one of games.yaml scam.caught_stages */
   caughtAt: number | null;
-  /** scam: the move (taking on the role); get through: the message passed on. As the referee
-   * judged it: the end of the caller's turn that did it */
+  /** As the referee judged it, from the caller's line that did it. Scam: the start, from the
+   * line's start; get through: the message passed on, at the line's end */
   goalAt: number | null;
-  /** scam: when the caller asked for what the goal wants: the start of the turn that did it, so
-   * being caught mid-ask still counts the ask */
-  askedAt: number | null;
 }
 
-export const START: PlayState = { verdict: null, lean: 0, stage: null, caughtAt: null, goalAt: null, askedAt: null };
+export const START: PlayState = { verdict: null, lean: 0, stage: null, caughtAt: null, goalAt: null };
 
 /** The state after `ev`, or null if `ev` doesn't change it. */
 export function nextPlay(prev: PlayState, ev: CallEvent, games: GamesConfig): PlayState | null {
@@ -48,50 +45,58 @@ export function nextPlay(prev: PlayState, ev: CallEvent, games: GamesConfig): Pl
   return next;
 }
 
-/** The referee's questions (games.yaml referee), and which PlayState time each one sets. */
-export const REFEREE_QUESTIONS = { scam: ["move", "ask"], get_through: ["message"] } as const satisfies Record<Game, readonly string[]>;
-const SETS: Record<string, "goalAt" | "askedAt"> = { move: "goalAt", message: "goalAt", ask: "askedAt" };
+/** Each game's referee question (games.yaml referee): its "yes" sets PlayState.goalAt. */
+export const REFEREE_QUESTION = { scam: "start", get_through: "message" } as const satisfies Record<Game, string>;
 
-/** The referee says `question` was met in the caller's `turn` (only the first time counts). */
-export function goalMet(prev: PlayState, question: string, turn: { at: number; endAt: number }): PlayState {
-  const key = SETS[question];
-  if (!key || prev[key] !== null) return prev;
-  return { ...prev, [key]: key === "askedAt" ? turn.at : turn.endAt };
+/** The referee says the game's question was met in the caller's `line` (only the first time counts). */
+export function goalMet(prev: PlayState, game: Game, line: { at: number; endAt: number }): PlayState {
+  if (prev.goalAt !== null) return prev;
+  return { ...prev, goalAt: game === "scam" ? line.at : line.endAt };
+}
+
+/** A scam point is a tenth of a second (a score of 18.1 s is 181 points). */
+export const POINT_MS = 100;
+
+/**
+ * Scam: the whole points (tenths of a second) from the start until `endAt`, split at the catch.
+ * The page shows the same split (src/web/client/public.ts), so its points add up to the score.
+ */
+export function scamTicks(s: PlayState, endAt: number): { undetected: number; caught: number } {
+  if (s.goalAt === null) return { undetected: 0, caught: 0 };
+  const undetectedMs = Math.max(0, Math.min(s.caughtAt ?? endAt, endAt) - s.goalAt);
+  const caughtMs = Math.max(0, endAt - s.goalAt - undetectedMs);
+  return { undetected: Math.floor(undetectedMs / POINT_MS), caught: Math.floor(caughtMs / POINT_MS) };
 }
 
 /**
  * The player's score in ms, or null if they didn't make it.
- * Scam: from the move until caught, or until the call ended (`endAt`) if never caught; only if
- * they asked for what the goal wants before being caught.
+ * Scam: points (POINT_MS each) from the start until the call ended (`endAt`), the ones before
+ * being caught counted `undetectedMultiplier` times.
  * Get through: until the message was passed on, unless caught before it.
  */
-export function scoreOf(game: Game, s: PlayState, endAt: number | null = null): number | null {
+export function scoreOf(game: Game, s: PlayState, endAt: number | null, undetectedMultiplier: number): number | null {
   if (s.goalAt === null) return null;
-  if (s.caughtAt !== null && s.caughtAt < s.goalAt) return null;
-  if (game === "get_through") return s.goalAt;
-  if (s.askedAt === null || (s.caughtAt !== null && s.caughtAt < s.askedAt)) return null;
-  if (s.caughtAt !== null) return s.caughtAt - s.goalAt;
-  return endAt === null ? null : Math.max(0, endAt - s.goalAt);
+  if (game === "get_through") return s.caughtAt !== null && s.caughtAt < s.goalAt ? null : s.goalAt;
+  if (endAt === null) return null;
+  const t = scamTicks(s, endAt);
+  return Math.round(undetectedMultiplier * t.undetected + t.caught) * POINT_MS;
 }
 
 /**
  * For the call's log: the game's times and its score, or why it has none, e.g.
- * "move 10.7s · ask 62.9s · caught 68.9s → score 58.2s".
+ * "start 30.1s · caught 38.5s · ended 120.0s → score 984 points".
  */
-export function playSummary(game: Game, s: PlayState, endAt: number | null = null): string {
+export function playSummary(game: Game, s: PlayState, endAt: number | null, undetectedMultiplier: number): string {
   const secs = (ms: number | null) => (ms === null ? "—" : `${(ms / 1000).toFixed(1)}s`);
   const times = game === "scam"
-    ? `move ${secs(s.goalAt)} · ask ${secs(s.askedAt)} · caught ${secs(s.caughtAt)}`
+    ? `start ${secs(s.goalAt)} · caught ${secs(s.caughtAt)} · ended ${secs(endAt)}`
     : `message ${secs(s.goalAt)} · caught ${secs(s.caughtAt)}`;
-  const score = scoreOf(game, s, endAt);
-  if (score !== null) return `${times} → score ${secs(score)}`;
-  const caughtBefore = (at: number) => s.caughtAt !== null && s.caughtAt < at;
+  const score = scoreOf(game, s, endAt, undetectedMultiplier);
+  if (score !== null) return `${times} → score ${game === "scam" ? `${score / POINT_MS} points` : secs(score)}`;
   const why =
-    s.goalAt === null ? (game === "scam" ? "no move" : "message not passed on")
-    : caughtBefore(s.goalAt) ? `caught before the ${game === "scam" ? "move" : "message"}`
-    : s.askedAt === null ? "never asked"
-    : caughtBefore(s.askedAt) ? "asked after caught"
-    : "call still going";
+    s.goalAt === null ? (game === "scam" ? "never started the scam" : "message not passed on")
+    : game === "scam" ? "call still going"
+    : "caught before the message";
   return `${times} → no score (${why})`;
 }
 

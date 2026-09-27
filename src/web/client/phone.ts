@@ -8,10 +8,8 @@ export interface PlayState {
   lean: number;
   stage: string | null;
   caughtAt: number | null;
-  /** when the referee says the caller made their move (scam) or passed on their message */
+  /** when the referee says the caller tried the scam (scam) or passed on their message */
   goalAt: number | null;
-  /** scam: when the referee says the caller asked for what the goal wants */
-  askedAt: number | null;
 }
 
 export interface DialOptions {

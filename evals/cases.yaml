@@ -91,6 +91,38 @@ jev:
       ? verdict.scam >= 0.85
       ? stage = waste_time
 
+  # "Hey, I'm calling from IRS" was caught as a scam (0.90) before the caller wanted anything.
+  # Saying who they are isn't fraud; asking for money on the same call still is.
+  - name: tax-office-identity-not-scam
+    transcript: |
+      agent: Hello?
+      caller: Hey, I'm calling from the IRS.
+      ? stage = none
+      agent: Oh, okay. What's this about?
+      caller: Hi, it's HMRC, the tax office. It's about your tax return.
+      ? verdict.scam < 0.85
+      agent: Right, what about it?
+      caller: You owe four hundred pounds. You need to pay it today by card or we'll send the bailiffs.
+      ? stage = waste_time
+
+  - name: bank-identity-not-scam
+    transcript: |
+      agent: Hello?
+      caller: Hi, this is Mark calling from your bank.
+      ? stage = none
+      agent: Okay, what's it about?
+      caller: We've spotted some unusual activity. I need you to move your savings to a safe account today.
+      ? stage = waste_time
+
+  - name: police-identity-not-scam
+    transcript: |
+      agent: Hello?
+      caller: Good afternoon, this is Detective Sergeant Green from the Metropolitan Police.
+      ? stage = none
+      agent: Oh. What's happened?
+      caller: We're investigating your bank. A courier will come to collect your card and PIN as evidence.
+      ? stage = waste_time
+
   # After one jailbreak line the call stayed in resist_manipulation; "are you an AI?" alone
   # crept up towards manipulation.
   - name: jailbreak-then-recovers

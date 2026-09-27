@@ -110,13 +110,13 @@ beforeAll(async () => {
       config: () => config.get(),
       gate: new PublicGate({ repo, config: () => config.get(), clock: { now: () => Date.now() } }),
       webrtc: new OpenAiWebRtc({ apiKey: "sk-test", fetch: fakeFetch, baseURL: "https://openai.test/v1", liveUrl: `ws://127.0.0.1:${liveServer.port}` }),
-      // Scam: the move once the caller says "police", the ask once they mention a card.
+      // Scam: the start once the caller says "police".
       // Get through: the message once they say they're late. Slow to judge once they say "slowly".
       referee: {
         judge: async (i): Promise<Record<string, number>> => {
           const said = (re: RegExp) => (i.transcript.some((e) => e.speaker === "caller" && re.test(e.text)) ? 0.9 : 0.1);
           if (said(/slowly/) > 0.5) await Bun.sleep(300);
-          return i.game === "scam" ? { move: said(/police/i), ask: said(/card/) } : { message: said(/late/) };
+          return i.game === "scam" ? { start: said(/police/i) } : { message: said(/late/) };
         },
       },
     },
@@ -275,7 +275,7 @@ describe("public page (fake OpenAI)", () => {
   test("streams the game to the page (Jev's lean, the stage, when caught) until the call ends", async () => {
     const { callId } = (await (await call()).json()) as { callId: string };
     const next = await events(callId);
-    expect(await next()).toEqual(["message", { verdict: null, lean: 0, stage: null, caughtAt: null, goalAt: null, askedAt: null }]);
+    expect(await next()).toEqual(["message", { verdict: null, lean: 0, stage: null, caughtAt: null, goalAt: null }]);
     classify(callId, "scam", { scam: 0.5, spam: 0.3, genuine: 0.05, unclear: 0.15 });
     const [, scam] = await next();
     expect(scam).toMatchObject({ verdict: "scam", stage: null, caughtAt: null });
@@ -301,41 +301,37 @@ describe("public page (fake OpenAI)", () => {
     return r!.json() as Promise<any>;
   };
 
-  test("scam me: scored from the move (the referee) until caught, if they asked first; each player's best on the goal's leaderboard", async () => {
-    const play = async (player: string, moveAt: number | null, caughtAt: number | null, askAt: number | null = moveAt === null ? null : moveAt + 1000) => {
+  test("scam me: scored from the start (the referee) until the call ends; every score on the goal's leaderboard", async () => {
+    // Times near the call's start, as its real length (a fraction of a second) sets the end.
+    const play = async (player: string, start: boolean, caughtAt: number | null) => {
       const { callId } = (await (await call({ sdp: "v=0 offer", ...GAME, goal: "police", player })).json()) as { callId: string };
       expect((await fetch(`${base()}/call/${callId}/result`)).status).toBe(202);
       say(callId, "Hello, how are you?", 1000);
       classify(callId, "unclear", { unclear: 0.9 });
-      if (moveAt !== null) {
-        say(callId, "This is the police, about your bank.", moveAt);
-        classify(callId, "scam", { scam: 0.9 });
-        await Bun.sleep(20);
-      }
-      if (askAt !== null) {
-        say(callId, "Hand your card to the courier.", askAt);
-        classify(callId, "scam", { scam: 0.9 });
-        await Bun.sleep(20);
-      }
+      await Bun.sleep(20);
       if (caughtAt !== null) bus.publish({ type: "stage", callId, at: caughtAt, stage: "waste_time", as: "thinking" });
+      if (start) {
+        say(callId, "This is the police, about your bank.", 1010); // the line starts at 10 ms
+        classify(callId, "scam", { scam: 0.9 });
+        await Bun.sleep(20);
+      }
       await hangUp(callId);
       return resultOf(callId);
     };
-    expect(await play("ann", 5000, 35_000)).toMatchObject({ game: "scam", goal: "police", player: "ANN", scoreMs: 30_000, rank: 1 });
-    expect(await play("bob", 10_000, 60_000)).toMatchObject({ scoreMs: 50_000, rank: 1 });
-    // Chatting until caught, without the move: no score. The move but caught before asking: none.
-    expect(await play("cat", null, 20_000)).toMatchObject({ scoreMs: null, rank: null });
-    expect(await play("dan", 5000, 20_000, null)).toMatchObject({ scoreMs: null, rank: null });
-    // Ann's worse game takes its own place on the board, below her best.
-    const again = await play("ann", 20_000, 30_000);
-    expect(again).toMatchObject({ scoreMs: 10_000, rank: 3 });
-    expect(again.board).toEqual([
-      { player: "BOB", scoreMs: 50_000 },
-      { player: "ANN", scoreMs: 30_000 },
-      { player: "ANN", scoreMs: 10_000 },
-    ]);
+    /** whole points (100 ms each) from the start at 10 ms until the call ended */
+    const points = (r: { durationMs: number }) => Math.floor((r.durationMs - 10) / 100) * 100;
+    // Never caught: all of it double. Caught before the start: all of it single.
+    const ann = await play("ann", true, null);
+    expect(ann).toMatchObject({ game: "scam", goal: "police", player: "ANN", scoreMs: 2 * points(ann) });
+    const bob = await play("bob", true, 5);
+    expect(bob).toMatchObject({ scoreMs: points(bob) });
+    // Chatting, even for long after caught, without saying who they are: no score.
+    expect(await play("cat", false, 5)).toMatchObject({ scoreMs: null, rank: null });
+    expect(bob.board).toContainEqual({ player: "ANN", scoreMs: ann.scoreMs });
+    expect(bob.rank).toBe(bob.board.findIndex((e: { scoreMs: number }) => e.scoreMs === bob.scoreMs) + 1);
     const lobby = (await (await fetch(`${base()}/call/lobby`)).json()) as any;
-    expect(lobby.boards.scam.police).toEqual(again.board);
+    expect(lobby.boards.scam.police).toEqual(bob.board);
+    expect(lobby.undetectedMultiplier).toBe(2);
     expect((await fetch(`${base()}/call/nope/result`)).status).toBe(404);
   });
 

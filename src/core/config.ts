@@ -515,8 +515,9 @@ const GameGoal = z.object({
   brief: z.string().min(1).max(160),
   hard: z.boolean().default(false),
 });
-// For the referee: what the caller must have said. Scam: the role they take on, and what they ask for.
-const ScamGoal = GameGoal.extend({ move: z.string().min(1).max(200), ask: z.string().min(1).max(200) });
+// For the referee: what the caller must have said. Scam: who they claim to be, which starts the
+// scam; `intro` tells the player how to start it (the call page).
+const ScamGoal = GameGoal.extend({ intro: z.string().min(1).max(40), start: z.string().min(1).max(200) });
 const GetThroughGoal = GameGoal.extend({ message: z.string().min(1).max(200) });
 const uniqueIds = (goals: { id: string }[]) => new Set(goals.map((g) => g.id)).size === goals.length;
 const RefereeQuestion = z.object({ prompt: z.string().min(1), yes: z.string().min(1), no: z.string().min(1) });
@@ -529,13 +530,13 @@ export const GamesConfig = z.object({
     model: z.string().default("jev-latest"),
     timeout_ms: z.number().int().positive().default(2000),
     min: unit.default(0.7),
-    backchannel_words: z.number().int().min(0).max(10).default(2),
     context: z.string().min(1),
-    scam: z.object({ move: RefereeQuestion, ask: RefereeQuestion }),
+    scam: z.object({ start: RefereeQuestion }),
     get_through: z.object({ message: RefereeQuestion }),
   }),
   scam: z.object({
     caught_stages: z.array(z.string().min(1)).min(1),
+    undetected_multiplier: z.number().min(1).default(2),
     goals: z.array(ScamGoal).min(1).refine(uniqueIds, "goal ids must be unique"),
   }),
   get_through: z.object({ goals: z.array(GetThroughGoal).min(1).refine(uniqueIds, "goal ids must be unique") }),

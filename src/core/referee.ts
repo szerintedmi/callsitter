@@ -1,41 +1,20 @@
-import { REFEREE_QUESTIONS, type Game } from "./game";
+import { REFEREE_QUESTION, type Game } from "./game";
 import type { Referee, RefereeInput } from "./ports";
 import type { TranscriptEntry } from "./types";
 
 // The referee of one public game call (games.yaml referee): a separate Jev call that asks the
-// game's questions (scam: move, ask; get through: message). The call's own Jev, Live and Luna
-// never see the goal. It judges final transcripts only, so it runs as each caller turn's final
-// transcript arrives (Jev's pauses come before it, mid-turn too) until every question is met, and
+// game's question (scam: start; get through: message). The call's own Jev, Live and Luna never
+// see the goal. It judges final transcripts only, so it runs as each caller line's final
+// transcript arrives (Jev's pauses come before it, mid-turn too) until the question is met, and
 // once more when the call ends, so the last words still count.
-
-/** The words in `text`, e.g. "Mm-hmm." is one. */
-const words = (text: string) => text.split(/\s+/).filter((w) => /\p{L}/u.test(w)).length;
-
-/**
- * The caller's turn that `transcript` (final, in order) ends with, or null before they speak.
- * Speech-to-text splits a caller's sentence into several finals, often around an agent
- * backchannel ("Mm-hmm"): the turn goes back over those, to its first caller final.
- */
-export function lastCallerTurn(transcript: readonly TranscriptEntry[], backchannelWords: number): { at: number; endAt: number } | null {
-  const i = transcript.findLastIndex((e) => e.speaker === "caller");
-  if (i < 0) return null;
-  const last = transcript[i]!;
-  let at = last.at;
-  for (let j = i - 1; j >= 0; j--) {
-    const e = transcript[j]!;
-    if (e.speaker === "caller") at = e.at;
-    else if (words(e.text) > backchannelWords) break;
-  }
-  return { at, endAt: last.endAt ?? last.at };
-}
 
 export interface GoalWatchDeps {
   referee: Referee;
   game: Game;
   goal: RefereeInput["goal"];
   config: () => RefereeInput["config"];
-  /** `question` was met in the caller's `turn` that did it (ms since call start; lastCallerTurn) */
-  onMet(question: string, turn: { at: number; endAt: number }): void;
+  /** the game's question was met in the caller's `line` that did it (ms since call start) */
+  onMet(line: { at: number; endAt: number }): void;
   /** every judgement, for the call's log */
   onJudged(answers: Record<string, number>): void;
   onError(err: unknown): void;
@@ -50,27 +29,22 @@ export class GoalWatch {
   /** caller words arrived during a judgement: judge again after it */
   private again = false;
   private stopped = false;
-  /** questions met, with when */
-  readonly met = new Map<string, number>();
+  private done = false;
 
   constructor(private d: GoalWatchDeps) {}
-
-  private get done() {
-    return REFEREE_QUESTIONS[this.d.game].every((q) => this.met.has(q));
-  }
 
   add(entry: TranscriptEntry) {
     if (entry.final && entry.text) this.entries.set(entry.seq, entry);
   }
 
-  /** A caller turn is final: judge the transcript so far, unless every question is met. */
+  /** A caller line is final: judge the transcript so far, unless the question is met. */
   check() {
     if (this.done || this.stopped) return;
     if (this.busy) this.again = true;
     else this.start();
   }
 
-  /** The call has ended: one last judgement if a question is still open. */
+  /** The call has ended: one last judgement if the question is still open. */
   async final(): Promise<void> {
     await this.loop;
     if (!this.done && !this.stopped) await this.start();
@@ -95,17 +69,15 @@ export class GoalWatch {
 
   private async judge(): Promise<void> {
     const transcript = [...this.entries.values()].sort((a, b) => a.seq - b.seq);
+    const line = transcript.findLast((e) => e.speaker === "caller");
+    if (!line) return;
     const cfg = this.d.config();
-    const turn = lastCallerTurn(transcript, cfg.backchannel_words);
-    if (!turn) return;
     try {
       const answers = await this.d.referee.judge({ game: this.d.game, goal: this.d.goal, transcript, config: cfg });
       this.d.onJudged(answers);
-      for (const q of REFEREE_QUESTIONS[this.d.game]) {
-        if (this.met.has(q) || (answers[q] ?? 0) < cfg.min) continue;
-        this.met.set(q, turn.endAt);
-        this.d.onMet(q, turn);
-      }
+      if (this.done || (answers[REFEREE_QUESTION[this.d.game]] ?? 0) < cfg.min) return;
+      this.done = true;
+      this.d.onMet({ at: line.at, endAt: line.endAt ?? line.at });
     } catch (err) {
       this.d.onError(err);
     }
