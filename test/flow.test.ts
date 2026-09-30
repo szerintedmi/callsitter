@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { checkFlow, ConfigError, parseConfig } from "../src/core/config";
 import { decide, holds, type FlowState } from "../src/core/flow";
-import { cls, loadRepoConfig } from "./helpers";
+import { cls, loadConfigWithLuna } from "./helpers";
 
 // The repo's config/call-flow.yaml, so these tests pin the behaviour it describes.
-const cfg = await loadRepoConfig();
+const cfg = await loadConfigWithLuna();
 const message = (stage: string) => cfg.flow.rules.find((r) => r.stage === stage)!.then!.tell_live!;
 
 const state = (p: Partial<FlowState> = {}): FlowState => ({
@@ -29,8 +29,8 @@ describe("call flow (config/call-flow.yaml)", () => {
     expect(decide(cls({ verdict: "spam" }), state({ stage: "decline_spam" }), cfg)).toMatchObject({ kind: "none" });
   });
 
-  test("scam or spam below 0.85 switches nothing", () => {
-    expect(stageOf(decide(cls({ verdict: "scam", confidence: 0.8 }), state(), cfg))).not.toBe("waste_time");
+  test("scam below 0.80 or spam below 0.85 switches nothing", () => {
+    expect(stageOf(decide(cls({ verdict: "scam", confidence: 0.75 }), state(), cfg))).not.toBe("waste_time");
     expect(stageOf(decide(cls({ verdict: "spam", confidence: 0.8 }), state(), cfg))).not.toBe("decline_spam");
   });
 
@@ -236,9 +236,6 @@ describe("call flow engine", () => {
       /rules\[x\]\.then\.tell_live\.max_hold_ms: max_hold_ms only applies to send: when_agent_idle/,
     );
     expect(() => flow([{ stage: "x", then: { tell_live: { ...say, send: "later" } } }])).toThrow(/rules\[x\]\.then\.tell_live\.send/);
-    expect(() => parseConfig("flow", { rules: [{ stage: "x" }], when_live_asks_for_help: { tell_live: say } })).toThrow(
-      /when_live_asks_for_help\.tell_live\.text: needs \{luna_response\}/,
-    );
     expect(() =>
       parseConfig("flow", { rules: [{ stage: "x" }], silence: { tell_live: { as: "instructions", text: "{luna_response}" } } }),
     ).toThrow(/silence\.tell_live\.text: \{luna_response\} is only filled in with ask_luna/);

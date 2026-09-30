@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { LunaAgent } from "../src/adapters/luna/agent";
 import type { AgentInput } from "../src/core/ports";
-import { loadRepoConfig } from "./helpers";
+import { loadConfigWithLuna } from "./helpers";
 
 // LunaAgent against a fake Responses API endpoint.
 
@@ -17,7 +17,7 @@ const toolCall = (id: string, name: string, args: object) => ({
 });
 
 async function rig(replies: (object | { status: number; error: string })[]) {
-  const config = await loadRepoConfig();
+  const config = await loadConfigWithLuna();
   const requests: any[] = [];
   const fetch = (async (_url: string, init?: RequestInit) => {
     requests.push(JSON.parse(String(init?.body)));
@@ -48,7 +48,7 @@ describe("Luna adapter", () => {
     expect(r.requests[1].input).toEqual([{ type: "function_call_output", call_id: "call_r1", output: "ending call" }]);
     // Not inherited along a chain; {current_time} is filled per run.
     expect(new Set(r.requests.map((q) => q.instructions)).size).toBe(1);
-    expect(r.requests[0].instructions).toStartWith(r.config.luna.instructions.split("{current_time}")[0]!);
+    expect(r.requests[0].instructions).toStartWith(r.config.luna.instructions!.split("{current_time}")[0]!);
     expect(r.requests[0].instructions).not.toContain("{current_time}");
   });
 

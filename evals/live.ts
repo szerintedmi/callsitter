@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import type { ClientEvent, ServerEvent } from "openai/resources/live/live";
 import { LIVE_URL } from "../src/adapters/openai-live/session";
 import { b64decode, b64encode, BYTES_PER_MS, levelDbfs } from "../src/core/audio";
-import { fillCurrentTime, ownerAppendText, type AppConfig, type LiveAppend } from "../src/core/config";
+import { fillCurrentTime, LUNA_RESPONSE, ownerAppendText, type AppConfig, type LiveAppend } from "../src/core/config";
 import { parseOwnerMessage } from "../src/core/owner-desk";
 import { StereoRecorder } from "../src/core/wav";
 import { parseLines, type Line, type LiveCase, type Settings } from "./cases";
@@ -42,7 +42,7 @@ export async function runLiveCase(c: LiveCase, cfg: AppConfig, s: Settings, apiK
   });
   await Bun.write(recordTo, reply.wav);
   const timing = speechTiming(reply.wav, cfg.connection.speech_detection.agent_dbfs);
-  const notes = [reply.delegated && "asked for help (answered with the fallback)", reply.timedOut && "timed out"].filter(Boolean);
+  const notes = [reply.delegated && "asked for help", reply.timedOut && "timed out"].filter(Boolean);
   const conversation = [...history.map((l) => `${l.speaker}: ${l.text}`), `caller: ${c.caller}`].join("\n");
   const g = await judge.grade({ conversation, produced: `The agent's reply:\n${reply.text}`, passIf: c.pass_if });
   const secs = (ms: number | null) => (ms === null ? "-" : `${(ms / 1000).toFixed(1)} s`);
@@ -53,7 +53,10 @@ export async function runLiveCase(c: LiveCase, cfg: AppConfig, s: Settings, apiK
   return { pass: g.pass, detail: g.reason, log, recording: recordTo, timing };
 }
 
-/** A call-flow stage's tell_live text, as the flow would send it; `button:<label>` is a Telegram steering button's. */
+/**
+ * A call-flow stage's tell_live text, as the flow would send it; `button:<label>` is a Telegram
+ * steering button's, `silence` the silence watchdog's.
+ */
 function stageText(cfg: AppConfig, stage: string): { as: LiveAppend; text: string } {
   const st = cfg.telegram.steering;
   // The owner's typed Telegram message, as CallSession.steerFromOwner sends it.
@@ -68,6 +71,7 @@ function stageText(cfg: AppConfig, stage: string): { as: LiveAppend; text: strin
     if ("stage" in b) return stageText(cfg, b.stage);
     return { as: b.as, text: ownerAppendText(st, b.text) };
   }
+  if (stage === "silence") return { as: cfg.flow.silence.tell_live.as, text: cfg.flow.silence.tell_live.text };
   const t = cfg.flow.rules.find((r) => r.stage === stage)?.then?.tell_live;
   if (!t) throw new Error(`no call-flow rule "${stage}" with tell_live`);
   return { as: t.as, text: t.text };
@@ -211,9 +215,10 @@ function converse(o: Conversation): Promise<{ text: string; delegated: boolean; 
           agentSpeechUntil = Math.max(agentSpeechUntil, Date.now());
           break;
         case "session.delegation.created": {
-          // The app would ask Luna; the eval answers with the configured fallback.
+          // As the app answers: the fixed text, or where the app would ask Luna, the fallback.
           delegated = true;
-          const f = o.cfg.flow.when_live_asks_for_help.fallback;
+          const help = o.cfg.flow.when_live_asks_for_help;
+          const f = help.tell_live.text.includes(LUNA_RESPONSE) ? help.fallback : help.tell_live;
           send({ type: APPEND_EVENT[f.as], delegation_id: ev.delegation.id, content: f.text });
           break;
         }

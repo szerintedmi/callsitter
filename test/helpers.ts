@@ -6,6 +6,32 @@ import { verdictAnswer } from "../src/replay/keyword-classifier";
 
 export const loadRepoConfig = (): Promise<AppConfig> => loadConfig(new YamlDirSource("./config"));
 
+/**
+ * The repo config with Luna steering mid-call, for tests of that machinery (ask_luna rules and
+ * Luna's answers to Live's delegations): a low_confidence rule after still_unclear (Jev unsure →
+ * Luna), Luna answering delegations, and her mid-call instructions and limits.
+ */
+export const loadConfigWithLuna = (): Promise<AppConfig> => {
+  const yaml = new YamlDirSource("./config");
+  return loadConfig({
+    read: async (n) => {
+      const raw = (await yaml.read(n)) as Record<string, any>;
+      if (n === "flow") {
+        const supervisor = { as: "commentary", text: "SUPERVISOR: {luna_response}" };
+        raw.rules.push({ stage: "low_confidence", when: { verdict: { unsure: 0.4 } }, then: { ask_luna: true, tell_live: supervisor } });
+        const genuine = raw.rules.find((r: { stage: string }) => r.stage === "genuine");
+        genuine.when.stage = [...genuine.when.stage, "low_confidence"];
+        raw.when_live_asks_for_help = { tell_live: supervisor, fallback: "No specific guidance; carry on naturally." };
+      }
+      if (n === "luna") {
+        raw.instructions = "You supervise a voice agent that answers {owner_name}'s phone. Current time: {current_time}.";
+        raw.limits = { max_calls: 10, cooldown_ms: 15000 };
+      }
+      return raw;
+    },
+  });
+};
+
 /** Classification shorthand: the repo's extra Jev questions as a choice or a probability. */
 export interface ClsInput extends Partial<Omit<Classification, "answers">> {
   /** P(ready) of the `done` question; unset = not answered */

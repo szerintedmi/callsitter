@@ -628,6 +628,7 @@ export class CallSession {
         const res = await this.d.agent.summarize(this.d.meta, transcript, {
           previousResponseId: this.orch.lunaResponseId,
           ownerMessages: this.orch.ownerMessages,
+          stage: this.orch.stage,
         });
         const usage = res.usage ? this.orch.costs.addLuna(res.usage) : undefined;
         if (res.text) this.d.bus.publish({ type: "summary", callId: this.callId, at: this.orch.elapsed(), text: res.text, ...(usage ? { usage } : {}) });
