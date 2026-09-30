@@ -3,11 +3,31 @@ import { MemoryEventBus } from "../src/core/event-bus";
 import { Orchestrator, type Steer } from "../src/core/orchestrator";
 import type { AgentInput } from "../src/core/ports";
 import type { Suggestion } from "../src/core/types";
-import { cls, loadRepoConfig, scripted, type ClsInput } from "./helpers";
+import { cls, loadConfigWithLuna, loadRepoConfig, scripted, type ClsInput } from "./helpers";
 
 describe("orchestrator", () => {
-  test("Luna's reply is sent through her rule's tell_live, and the call enters its stage", async () => {
+  test("without {luna_response}, Live's request for help is answered at once and Luna isn't asked", async () => {
     const config = await loadRepoConfig();
+    const help = config.flow.when_live_asks_for_help.tell_live;
+    const sent: Steer[] = [];
+    let runs = 0;
+    const orch = new Orchestrator({
+      meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+      config: () => config,
+      classifier: scripted({}),
+      agent: { run: async () => (runs++, { toolCalls: [] }), summarize: async () => ({ text: "" }) },
+      bus: new MemoryEventBus(),
+      steer: { tellLive: (s) => void sent.push(s), hangup: async () => {} },
+      clock: { now: () => 0 },
+    });
+    expect(await orch.delegate({ id: "d1" })).toBe(help.text);
+    expect(sent).toEqual([{ message: help, source: "delegation", delegation: { id: "d1", fallback: help } }]);
+    expect(runs).toBe(0);
+    expect(orch.lunaCalls).toBe(0);
+  });
+
+  test("Luna's reply is sent through her rule's tell_live, and the call enters its stage", async () => {
+    const config = await loadConfigWithLuna();
     const appended: unknown[] = [];
     const stages: string[] = [];
     const bus = new MemoryEventBus();
@@ -42,7 +62,7 @@ describe("orchestrator", () => {
 
   describe("classification trigger", () => {
     async function rig() {
-      const config = await loadRepoConfig();
+      const config = await loadConfigWithLuna();
       config.flow.timing.classify = { settle_ms: 600, max_wait_ms: 4000, retry_min_ms: 500, retry_max_ms: 8000 };
       let now = 0;
       let release: (() => void) | null = null;
@@ -121,7 +141,7 @@ describe("orchestrator", () => {
   });
 
   test("a failed Jev call is retried with capped exponential backoff", async () => {
-    const config = await loadRepoConfig();
+    const config = await loadConfigWithLuna();
     config.flow.timing.classify = { settle_ms: 600, max_wait_ms: 4000, retry_min_ms: 500, retry_max_ms: 1500 };
     let now = 0;
     const attempts: number[] = [];
@@ -153,7 +173,7 @@ describe("orchestrator", () => {
   });
 
   test("each Luna run continues the previous completed run's conversation", async () => {
-    const config = await loadRepoConfig();
+    const config = await loadConfigWithLuna();
     const seen: (string | undefined)[] = [];
     const results: (() => Promise<{ toolCalls: []; responseId?: string }>)[] = [
       async () => ({ toolCalls: [], responseId: "resp_1" }),
@@ -180,7 +200,7 @@ describe("orchestrator", () => {
 
   describe("Luna scheduling", () => {
     async function rig() {
-      const config = await loadRepoConfig();
+      const config = await loadConfigWithLuna();
       config.flow.timing.classify = { settle_ms: 600, max_wait_ms: 4000, retry_min_ms: 500, retry_max_ms: 8000 };
       config.luna.limits.cooldown_ms = 15_000;
       let now = 0;
@@ -294,7 +314,7 @@ describe("orchestrator", () => {
   describe("guidance from before a newer decision", () => {
     /** Jev says genuine first (→ Luna), then a confident scam (→ waste_time), unless told otherwise. */
     async function rig(jev: ClsInput[] = [{ verdict: "genuine", confidence: 0.3 }, {}]) {
-      const config = await loadRepoConfig();
+      const config = await loadConfigWithLuna();
       const sent: Steer[] = [];
       const notes: string[] = [];
       const releases: (() => void)[] = [];
@@ -382,7 +402,7 @@ describe("orchestrator", () => {
 describe("progress summaries for the owner (luna.yaml progress)", () => {
   /** Jev's answer to owner_update, one per Jev call (the last repeats) */
   async function rig(o: { ownerStatus?: boolean; news?: number[]; failFirst?: number } = {}) {
-    const config = await loadRepoConfig();
+    const config = await loadConfigWithLuna();
     config.luna.progress = { ...config.luna.progress, min_interval_ms: 5000, max_interval_ms: 30_000 };
     let now = 0;
     const calls: { transcript: string[]; owner: readonly string[] | undefined; suggestions: readonly Suggestion[] | undefined }[] = [];
@@ -485,7 +505,7 @@ describe("progress summaries for the owner (luna.yaml progress)", () => {
   });
 
   test("refreshed after max_interval_ms (default 30 s) anyway if the caller said anything", async () => {
-    expect((await loadRepoConfig()).luna.progress.max_interval_ms).toBe(30_000);
+    expect((await loadConfigWithLuna()).luna.progress.max_interval_ms).toBe(30_000);
     const r = await rig({ news: [0.1] });
     await r.say("Hmm.");
     expect(r.calls).toHaveLength(0);
@@ -551,7 +571,7 @@ describe("progress summaries for the owner (luna.yaml progress)", () => {
 describe("call costs", () => {
   test("Luna is priced from her tokens: uncached, cached and cache-write input, output, times the tier", async () => {
     const { priceLuna } = await import("../src/core/cost");
-    const config = await loadRepoConfig();
+    const config = await loadConfigWithLuna();
     const u = { model: "gpt-6-luna", inputTokens: 2_000_000, cachedTokens: 1_000_000, cacheWriteTokens: 500_000, outputTokens: 1_000_000, reasoningTokens: 0 };
     // 0.5M uncached × $0.1 + 1M cached × $0.01 + 0.5M writes × $0.125 + 1M out × $0.5
     expect(priceLuna(u, config.cost).costUsd).toBeCloseTo(0.05 + 0.01 + 0.0625 + 0.5, 6);
@@ -560,7 +580,7 @@ describe("call costs", () => {
   });
 
   test("each Luna run's usage is priced on its event and added to the call's costs", async () => {
-    const config = await loadRepoConfig();
+    const config = await loadConfigWithLuna();
     const lunaEvents: unknown[] = [];
     const bus = new MemoryEventBus();
     bus.subscribe((e) => void (e.type === "luna" && lunaEvents.push(e.usage)));

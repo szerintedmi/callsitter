@@ -81,7 +81,9 @@ export const LunaConfig = z.object({
       cooldown_ms: z.number().int().min(0).default(15000),
     })
     .default({ max_calls: 4, cooldown_ms: 15000 }),
-  instructions: z.string().min(1),
+  // Mid-call guidance (ask_luna rules, or {luna_response} in when_live_asks_for_help); only
+  // needed when call-flow.yaml asks Luna mid-call.
+  instructions: z.string().min(1).optional(),
   summarize_on_hangup: z.boolean().default(true),
   summary_instructions: z
     .string()
@@ -341,9 +343,10 @@ export const CallFlowConfig = z
       .prefault({}),
     // Checked top to bottom after every Jev call; the first rule whose `when` holds runs.
     rules: z.array(Rule).min(1),
-    // Live asked for help itself (session.delegation.created): Luna's reply fills
-    // {luna_response}. Live is waiting, so it always gets an answer: `fallback` when Luna has
-    // none, is over her limits, or the call moved on.
+    // Live asked for help itself (session.delegation.created). With {luna_response} in the text,
+    // Luna is asked and her reply fills it; Live is waiting, so it always gets an answer:
+    // `fallback` when Luna has none, is over her limits, or the call moved on. Without it, the
+    // text goes out at once and Luna isn't asked.
     when_live_asks_for_help: z
       .strictObject({
         tell_live: TellLiveInput.default({ as: "commentary", text: "SUPERVISOR: {luna_response}" }),
@@ -352,9 +355,6 @@ export const CallFlowConfig = z
       .prefault({}),
   })
   .superRefine((c, ctx) => {
-    if (!c.when_live_asks_for_help.tell_live.text.includes(LUNA_RESPONSE)) {
-      ctx.addIssue({ code: "custom", path: ["when_live_asks_for_help", "tell_live", "text"], message: `needs ${LUNA_RESPONSE}` });
-    }
     for (const [path, text] of [
       [["silence", "tell_live", "text"], c.silence.tell_live.text],
       [["when_live_asks_for_help", "fallback"], c.when_live_asks_for_help.fallback],
@@ -583,15 +583,19 @@ export const TelegramConfig = z.object({
         .default(`SUPERVISOR: ${OWNER_MESSAGE}`)
         .refine((t) => t.includes(OWNER_MESSAGE), `needs ${OWNER_MESSAGE}`),
       // Buttons under a live call's status message; a tap sends `text` as `as`, and with hang_up
-      // ends the call once the agent's goodbye has played (so does /hangup).
+      // ends the call once the agent's goodbye has played (so does /hangup). A `stage` button
+      // moves the call into that call-flow stage instead, sending the rule's tell_live.
       buttons: z
         .array(
-          z.strictObject({
-            label: z.string().min(1).max(30),
-            text: z.string().min(1).max(500),
-            as: z.enum(LIVE_APPENDS).default("thinking"),
-            hang_up: z.boolean().default(false),
-          }),
+          z.union([
+            z.strictObject({
+              label: z.string().min(1).max(30),
+              text: z.string().min(1).max(500),
+              as: z.enum(LIVE_APPENDS).default("thinking"),
+              hang_up: z.boolean().default(false),
+            }),
+            z.strictObject({ label: z.string().min(1).max(30), stage: labelName }),
+          ]),
         )
         .max(8)
         .default([]),
@@ -726,6 +730,26 @@ export function checkGames(games: GamesConfig, flow: CallFlowConfig): void {
   }
 }
 
+/** Luna's mid-call instructions are needed once call-flow.yaml asks her mid-call. */
+export function checkLunaGuidance(luna: LunaConfig, flow: CallFlowConfig): void {
+  const asks = flow.rules.some((r) => r.then?.ask_luna) || flow.when_live_asks_for_help.tell_live.text.includes(LUNA_RESPONSE);
+  if (asks && !luna.instructions) {
+    throw new ConfigError(
+      `Invalid config:\n  luna.yaml: instructions: needed, call-flow.yaml asks Luna mid-call (ask_luna or ${LUNA_RESPONSE} in when_live_asks_for_help)`,
+    );
+  }
+}
+
+/** Checks that telegram.yaml's stage buttons name call-flow.yaml rules with a fixed tell_live (no Luna). */
+export function checkButtons(telegram: TelegramConfig, flow: CallFlowConfig): void {
+  const issues = telegram.steering.buttons.flatMap((b, i) =>
+    "stage" in b && !flow.rules.some((r) => r.stage === b.stage && r.then?.tell_live && !r.then.ask_luna)
+      ? [`  telegram.yaml: steering.buttons.${i}.stage: no call-flow.yaml rule ${b.stage} with tell_live (and no ask_luna)`]
+      : [],
+  );
+  if (issues.length) throw new ConfigError(`Invalid config:\n${issues.join("\n")}`);
+}
+
 /** Checks luna.yaml progress.when against jev.yaml: it must name a Choice question and one of its answers. */
 export function checkProgress(luna: LunaConfig, jev: JevConfig): void {
   const w = luna.progress.when;
@@ -799,6 +823,8 @@ export async function loadConfig(source: ConfigSource, vars: ConfigVars = {}): P
   checkFlow(cfg.flow, cfg.jev);
   checkProgress(cfg.luna, cfg.jev);
   checkGames(cfg.games, cfg.flow);
+  checkButtons(cfg.telegram, cfg.flow);
+  checkLunaGuidance(cfg.luna, cfg.flow);
   return fillPlaceholders(cfg, vars);
 }
 

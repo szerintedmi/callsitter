@@ -86,6 +86,8 @@ const desk = telegram
       callLink,
       canSteer: telegram.canListen,
       steer: (callId, text, as) => manager.get(callId)?.steerFromOwner(text, as) ?? { ok: false, reason: "the call isn't connected yet" },
+      enterStage: (callId, stage, label) =>
+        manager.get(callId)?.stageFromOwner(stage, label) ?? { ok: false, reason: "the call isn't connected yet" },
       hangUp: (callId) => manager.get(callId)?.hangUpFromOwner() ?? { ok: false, reason: "the call isn't connected yet" },
     })
   : undefined;

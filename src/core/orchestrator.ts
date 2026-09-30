@@ -281,6 +281,23 @@ export class Orchestrator {
     void this.apply({ kind: "tell_live", stage: TIME_UP, message: tu.tell_live });
   }
 
+  /**
+   * The owner's stage button (telegram.yaml steering.buttons): the call enters that call-flow
+   * stage as if its rule had matched, and Live gets the rule's tell_live. Luna sees the button
+   * from her next run on; pending Luna guidance is dropped. False if there's no such stage.
+   */
+  enterStage(stage: string, label: string): boolean {
+    const message = this.d.config().flow.rules.find((r) => r.stage === stage)?.then?.tell_live;
+    if (this.ended || !message) return false;
+    this.ownerMessages.push(`(button) ${label}`);
+    this.decision = stage;
+    if (this.deferredLuna) this.note("info", `queued Luna call (${this.deferredLuna.reason}) cancelled: the owner moved the call on`);
+    this.deferredLuna = null;
+    this.bump(`the owner moved the call to ${stage}`);
+    void this.apply({ kind: "tell_live", stage, message });
+    return true;
+  }
+
   private bump(cause: string, byOwner = false) {
     this.revision++;
     if (!byOwner) this.flowRevision++;
@@ -327,7 +344,8 @@ export class Orchestrator {
     // one stay after it, so Jev sees them as new.
     const open = transcript.findIndex((e) => !e.final);
     const through = (open < 0 ? transcript.at(-1) : transcript[open - 1])?.seq;
-    void this.d.agent.progress(this.d.meta, transcript, { ownerMessages: [...this.ownerMessages], suggestions: this.suggestions, signal: ac.signal })
+    void this.d.agent
+      .progress(this.d.meta, transcript, { ownerMessages: [...this.ownerMessages], suggestions: this.suggestions, stage: this.stage, signal: ac.signal })
       .then((r) => {
         const usage = r.usage ? this.costs.addLuna(r.usage) : undefined;
         if (this.ended) return;
@@ -520,9 +538,16 @@ export class Orchestrator {
 
   /**
    * The voice model delegated a request to the client; Luna's reply answers it, or the
-   * fallback if Luna had none (or it went stale). Returns Luna's reply or the fallback text.
+   * fallback if Luna had none (or it went stale). Without {luna_response} in
+   * when_live_asks_for_help, its text answers at once and Luna isn't asked. Returns the text sent.
    */
   async delegate(req: DelegationRequest): Promise<string> {
+    const help = this.d.config().flow.when_live_asks_for_help;
+    if (!help.tell_live.text.includes(LUNA_RESPONSE)) {
+      if (this.ended) return "";
+      this.d.steer.tellLive({ message: help.tell_live, source: "delegation", delegation: { id: req.id, fallback: help.tell_live } });
+      return help.tell_live.text;
+    }
     const out = await this.runLuna(`voice agent asked for help (delegation ${req.id})`, { delegationId: req.id });
     if (out || this.ended) return out;
     const { fallback } = this.d.config().flow.when_live_asks_for_help;

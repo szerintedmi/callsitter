@@ -156,7 +156,7 @@ export interface Agent {
   summarize(
     meta: CallMeta,
     transcript: readonly TranscriptEntry[],
-    opts?: { previousResponseId?: string; ownerMessages?: readonly string[] },
+    opts?: { previousResponseId?: string; ownerMessages?: readonly string[]; stage?: string | null },
   ): Promise<SummaryResult>;
   /** Rolling summary for the owner's status message (luna.yaml progress); agents without it have none. */
   progress?(
@@ -166,6 +166,8 @@ export interface Agent {
       ownerMessages?: readonly string[];
       /** the owner's buttons from the previous update, kept unless they no longer fit */
       suggestions?: readonly Suggestion[];
+      /** the call-flow stage: how the agent was told to handle the call (null: not told yet) */
+      stage?: string | null;
       signal?: AbortSignal;
     },
   ): Promise<Progress>;

@@ -5,7 +5,7 @@ import { MemoryEventBus } from "../src/core/event-bus";
 import type { AppConfig, TellLive } from "../src/core/config";
 import type { Agent, VoiceSessionHandlers } from "../src/core/ports";
 import type { CallEvent } from "../src/core/types";
-import { cls, loadRepoConfig, scripted } from "./helpers";
+import { cls, loadConfigWithLuna, scripted } from "./helpers";
 
 const FALLBACK = "No specific guidance; carry on naturally.";
 /** A tell_live on the repo's defaults (send: when_agent_idle, max_hold_ms: 8000), unless overridden. */
@@ -20,7 +20,7 @@ const msg = (as: TellLive["as"], text: string, o: Partial<TellLive> = {}): TellL
 async function rig(
   opts: { agent?: Agent; sip?: boolean; config?: (c: AppConfig) => void } & Pick<CallSessionDeps, "dryRun"> = {},
 ) {
-  const config = await loadRepoConfig();
+  const config = await loadConfigWithLuna();
   opts.config?.(config);
   config.flow.silence = { ...config.flow.silence, enabled: true, after_ms: 7000, max_prompts: 2, hang_up: true };
   config.connection.speech_detection = { caller_dbfs: -40, agent_dbfs: -50 };
@@ -115,6 +115,19 @@ describe("owner steering from Telegram", () => {
     await r.session.stop("caller hung up");
     expect(r.session.steerFromOwner("hi", "commentary")).toEqual({ ok: false, reason: "that call has ended" });
     expect(r.appends.filter((a) => a.source === "owner")).toEqual([]);
+  });
+
+  test("a stage button moves the call into that stage, sending the rule's tell_live", async () => {
+    const r = await rig();
+    const rule = r.config.flow.rules.find((x) => x.stage === "waste_time")!.then!.tell_live!;
+    expect(r.session.stageFromOwner("waste_time", "Scam")).toEqual({ ok: true });
+    expect(r.session.orch.stage).toBe("waste_time");
+    expect(r.appended.at(-1)).toBe(rule.text);
+    expect(r.appends.at(-1)).toMatchObject({ source: "stage", stage: "waste_time", as: rule.as });
+    expect(r.session.orch.ownerMessages).toEqual(["(button) Scam"]);
+    expect(r.session.stageFromOwner("no_such", "X")).toEqual({ ok: false, reason: "there's no no_such stage in call-flow.yaml" });
+    await r.session.stop("caller hung up");
+    expect(r.session.stageFromOwner("genuine", "Genuine")).toEqual({ ok: false, reason: "that call has ended" });
   });
 
   test("Luna's guidance from a run that started before the owner steered is dropped", async () => {
@@ -248,7 +261,7 @@ describe("call session over OpenAI SIP (caller audio only reflected by the sideb
 
 describe("call session: recorded greeting", () => {
   test("plays at once while Live connects; Live starts from it; the caller's early words reach Live", async () => {
-    const config = await loadRepoConfig();
+    const config = await loadConfigWithLuna();
     const media: string[] = [];
     const toLive: string[] = [];
     let opts: any;
@@ -377,8 +390,8 @@ describe("call session: delegation", () => {
 
 describe("call session lifecycle", () => {
   /** A session whose Live connection never comes up unless aborted (or as `deps` says). */
-  async function stalled(tune: (c: Awaited<ReturnType<typeof loadRepoConfig>>) => void, deps: Partial<CallSessionDeps> = {}) {
-    const config = await loadRepoConfig();
+  async function stalled(tune: (c: Awaited<ReturnType<typeof loadConfigWithLuna>>) => void, deps: Partial<CallSessionDeps> = {}) {
+    const config = await loadConfigWithLuna();
     tune(config);
     const hangups: string[] = [];
     const ended: Extract<CallEvent, { type: "call.ended" }>[] = [];

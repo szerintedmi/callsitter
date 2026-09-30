@@ -25,8 +25,11 @@ const LiveCase = z.strictObject({
 });
 const LunaCase = z.strictObject({
   name: z.string(),
-  // guidance: a Luna run (her guidance and tool calls); progress: her rolling update for the owner
-  run: z.enum(["guidance", "progress"]).default("guidance"),
+  // guidance: a Luna run (her guidance and tool calls); progress: her rolling update for the
+  // owner; summary: her end-of-call summary
+  run: z.enum(["guidance", "progress", "summary"]).default("guidance"),
+  // the call-flow stage the call is in, as progress and summary see it; omitted: none yet
+  stage: z.string().optional(),
   // why Luna is consulted (guidance only)
   reason: z.string().default("low confidence"),
   transcript: z.string(),

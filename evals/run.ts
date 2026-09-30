@@ -22,6 +22,10 @@ export interface Outcome {
   detail: string;
   /** what was produced, for the report */
   log: string;
+  /** live cases: the run's stereo WAV (left: caller, right: agent) */
+  recording?: string;
+  /** live cases: when the agent replied after the caller stopped, and its longest pause (ms) */
+  timing?: { replyAfterMs: number | null; longestPauseMs: number | null };
 }
 
 const { values, positionals } = parseArgs({
@@ -66,10 +70,16 @@ const typesafe = selected.some((x) => x.kind === "jev") ? need("TYPESAFE_API_KEY
 let judge: Judge | undefined; // only for live and luna cases
 const getJudge = () => (judge ??= new Judge(openai, s.judge_model));
 
-async function runOne(kind: Kind, c: (typeof selected)[number]["c"]): Promise<Outcome> {
+// Results and recordings of this run: .out/<stamp>.json, and .out/<stamp>/<case>-<run>.wav.
+const out = `${import.meta.dir}/.out`;
+// The pid keeps runs started side by side (e.g. two --config dirs) apart.
+const stamp = `${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
+const recordings = `${out}/${stamp}`;
+
+async function runOne(kind: Kind, c: (typeof selected)[number]["c"], run: number): Promise<Outcome> {
   try {
     if (kind === "jev") return await runJevCase(c as (typeof cases.jev)[number], cfg, typesafe);
-    if (kind === "live") return await runLiveCase(c as (typeof cases.live)[number], cfg, s, openai, getJudge());
+    if (kind === "live") return await runLiveCase(c as (typeof cases.live)[number], cfg, s, openai, getJudge(), `${recordings}/${c.name}-${run + 1}.wav`);
     return await runLunaCase(c as (typeof cases.luna)[number], cfg, openai, getJudge());
   } catch (err) {
     return { pass: false, detail: `error: ${err instanceof Error ? err.message : String(err)}`, log: "" };
@@ -85,7 +95,7 @@ await Promise.all(
   Array.from({ length: Math.min(CONCURRENCY, jobs.length) }, async () => {
     while (next < jobs.length) {
       const job = jobs[next++]!;
-      const outcome = await runOne(job.kind, job.c);
+      const outcome = await runOne(job.kind, job.c, job.run);
       results.push({ kind: job.kind, name: job.c.name, run: job.run, outcome });
       console.log(`${outcome.pass ? "✓" : "✗"} ${job.kind} ${job.c.name}${runs > 1 ? ` #${job.run + 1}` : ""}: ${outcome.detail}`);
       if (values.verbose || !outcome.pass) if (outcome.log) console.log(indent(outcome.log));
@@ -101,11 +111,11 @@ for (const { kind, c } of selected) {
   if (passed < mine.length) failed++;
   console.log(`  ${passed === mine.length ? "✓" : "✗"} ${passed}/${mine.length}  ${kind.padEnd(4)} ${c.name}`);
 }
-const out = `${import.meta.dir}/.out`;
 await mkdir(out, { recursive: true });
-const file = `${out}/${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+const file = `${out}/${stamp}.json`;
 await Bun.write(file, JSON.stringify(results, null, 2));
 console.log(`\n${selected.length - failed}/${selected.length} cases passed every run · details: ${file}`);
+if (results.some((r) => r.outcome.recording)) console.log(`recordings (left: caller, right: agent): ${recordings}/`);
 process.exit(failed ? 1 : 0);
 
 function indent(s: string): string {

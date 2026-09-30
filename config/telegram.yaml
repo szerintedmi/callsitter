@@ -33,16 +33,17 @@ steering:
     "~": thinking
   # What Live gets. The Live prompt already follows SUPERVISOR lines.
   text: "SUPERVISOR: {owner_message}"
-  # Buttons under a live call's status message: a tap sends `text` (in `text` above) as `as`.
-  # Worded like the call flow's own verdict texts (call-flow.yaml), which never leaked into
-  # speech; as commentary, a bare "It's a genuine call." was once read out word for word.
+  # Buttons under a live call's status message: a tap sends `text` (in `text` above) as `as`, or
+  # with `stage`, moves the call into that call-flow.yaml stage as if its rule had matched: Live
+  # gets the rule's tell_live, and the rules go on from there. The Live prompt only knows how to
+  # handle an unclear call, so the verdict buttons send the stage texts, which say how.
   buttons:
     - label: Genuine
-      text: This is a genuine call. From now on handle it as one until instructed otherwise.
-      as: thinking
-    - label: Spam/Scam
-      text: This is a scam or spam call. From now on handle it as one.
-      as: thinking
+      stage: genuine
+    - label: Scam
+      stage: waste_time
+    - label: Spam
+      stage: decline_spam
     # Ends the call once the goodbye has played (steering texts alone can't hang up); so does
     # sending /hangup.
     - label: Hang up

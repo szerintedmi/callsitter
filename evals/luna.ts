@@ -16,12 +16,19 @@ export async function runLunaCase(c: LunaCase, cfg: AppConfig, apiKey: string, j
   const transcript: TranscriptEntry[] = lines.map((l, i) => ({ seq: i + 1, speaker: l.speaker, text: l.text, at: i * 3000, final: true }));
   const luna = new LunaAgent({ apiKey, config: () => cfg.luna });
   const meta = { callId: "eval", from: "+440000000000", to: "+440000000001", startedAt: Date.now() };
+  const stage = c.stage ?? null;
+  if (c.run === "summary") {
+    const { text } = await luna.summarize(meta, transcript, { stage });
+    const g = await judge.grade({ conversation: c.transcript.trim(), produced: `Luna's end-of-call summary for the owner:\n${text}`, passIf: c.pass_if });
+    return { pass: g.pass, detail: g.reason, log: text };
+  }
   if (c.run === "progress") {
-    const { usage: _, ...update } = await luna.progress(meta, transcript);
+    const { usage: _, ...update } = await luna.progress(meta, transcript, { stage });
     const produced = JSON.stringify(update, null, 2);
     const g = await judge.grade({ conversation: c.transcript.trim(), produced: `Luna's status update for the owner (suggestions become buttons; a tap sends text to the agent):\n${produced}`, passIf: c.pass_if });
     return { pass: g.pass, detail: g.reason, log: produced };
   }
+  if (!cfg.luna.instructions) return { pass: false, detail: "luna.yaml has no mid-call instructions (Luna doesn't steer calls)", log: "" };
   const res = await luna.run({
     meta,
     transcript,

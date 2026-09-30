@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { YamlDirSource } from "../src/adapters/config/yaml-fs";
 import { ConfigError, fillCurrentTime, fillPlaceholders, loadConfig, parseConfig, type ConfigName } from "../src/core/config";
-import { loadRepoConfig } from "./helpers";
+import { loadConfigWithLuna, loadRepoConfig } from "./helpers";
 
 describe("config", () => {
   test("repo config/*.yaml files are valid", async () => {
@@ -47,6 +47,33 @@ describe("config", () => {
     await expect(loadConfig(source)).rejects.toThrow(/call-flow\.yaml: rules\[wrap_up\]\.when\.done: no Choice question done/);
   });
 
+  test("Luna's mid-call instructions are required once call-flow.yaml asks her mid-call", async () => {
+    const yaml = new YamlDirSource("./config");
+    const withLunaRule = {
+      read: async (n: ConfigName) => {
+        const raw = (await yaml.read(n)) as { rules: unknown[] };
+        if (n === "flow") raw.rules.push({ stage: "ask", then: { ask_luna: true } });
+        return raw;
+      },
+    };
+    await expect(loadConfig(withLunaRule)).rejects.toThrow(/luna\.yaml: instructions: needed, call-flow\.yaml asks Luna mid-call/);
+    await expect(loadConfigWithLuna()).resolves.toBeDefined();
+  });
+
+  test("telegram.yaml stage buttons must name a call-flow stage with a fixed tell_live", async () => {
+    const yaml = new YamlDirSource("./config");
+    const withButton = (stage: string) => ({
+      read: async (n: ConfigName) => {
+        const raw = (await yaml.read(n)) as { steering: { buttons: unknown[] } };
+        if (n === "telegram") raw.steering.buttons = [{ label: "X", stage }];
+        return raw;
+      },
+    });
+    await expect(loadConfig(withButton("genuine"))).resolves.toBeDefined();
+    await expect(loadConfig(withButton("still_unclear"))).rejects.toThrow(/steering\.buttons\.0\.stage: no call-flow\.yaml rule still_unclear/);
+    await expect(loadConfig(withButton("low_confidence"))).rejects.toThrow(/no call-flow\.yaml rule low_confidence with tell_live \(and no ask_luna\)/);
+  });
+
   test("{owner_name} is filled in every config text, falling back to \"the owner\"", async () => {
     const yaml = new YamlDirSource("./config");
     // Checks the filling, not the prompts' wording.
@@ -54,8 +81,6 @@ describe("config", () => {
     expect(named).not.toMatch(/\{(owner_name|agent_languages)\}/);
     expect(named).toContain("Alex");
     expect(named).toContain("English and Hungarian");
-    // Filled per Luna reply, not at load.
-    expect(named).toContain("{luna_response}");
     const unnamed = JSON.stringify(await loadConfig(yaml));
     expect(unnamed).not.toMatch(/\{(owner_name|agent_languages)\}/);
     expect(unnamed).toContain("the owner");
@@ -65,8 +90,10 @@ describe("config", () => {
   });
 
   test("{current_time} is left for sending, in Live's, Jev's and Luna's prompts only", async () => {
-    const cfg = await loadConfig(new YamlDirSource("./config"));
+    const cfg = await loadConfigWithLuna();
     for (const text of [cfg.live.instructions, cfg.jev.context, cfg.luna.instructions]) expect(text).toContain("{current_time}");
+    // Filled per Luna reply, not at load.
+    expect(JSON.stringify(cfg.flow)).toContain("{luna_response}");
     expect(fillCurrentTime("It is {current_time}.", Date.UTC(2026, 8, 25, 18, 10))).toBe("It is Fri 2026-Sep-25 19:10 BST.");
     expect(fillCurrentTime("{current_time}", Date.UTC(2026, 11, 1, 9, 5))).toBe("Tue 2026-Dec-01 09:05 GMT");
     const raw = await loadRepoConfig();

@@ -38,6 +38,7 @@ export function renderContext(
   c: Classification | null,
   reason: string,
   ownerMessages: readonly string[] = [],
+  stage?: string | null,
 ) {
   const lines = [
     `Caller number: ${meta.from || "unknown"}${meta.divertedFrom ? ` (diverted from ${meta.divertedFrom})` : ""}`,
@@ -47,6 +48,9 @@ export function renderContext(
     lines.push(
       `Classifier: verdict=${c.verdict} (confidence ${c.confidence.toFixed(2)}), urgency=${c.urgency.toFixed(2)}`,
     );
+  }
+  if (stage !== undefined) {
+    lines.push(`How the agent was told to handle the call (call-flow stage): ${stage ? stage.replaceAll("_", " ") : "not told yet (unclear)"}`);
   }
   if (ownerMessages.length) {
     lines.push("", "The phone's owner told the agent during the call (oldest first); follow it:", ...ownerMessages.map((m) => `- ${m}`));
@@ -113,7 +117,7 @@ export class LunaAgent implements Agent {
   async run(input: AgentInput): Promise<AgentResult> {
     const cfg = this.opts.config();
     const tools = input.enabledTools.map((t) => TOOL_DEFS[t]);
-    const instructions = fillCurrentTime(cfg.instructions, Date.now());
+    const instructions = fillCurrentTime(cfg.instructions ?? "", Date.now());
     const toolCalls: ToolCallRecord[] = [];
     let conversation: ResponseInputItem[] = [
       { role: "user", content: renderContext(input.meta, input.transcript, input.classification, input.reason, input.ownerMessages) },
@@ -158,14 +162,14 @@ export class LunaAgent implements Agent {
   async summarize(
     meta: CallMeta,
     transcript: readonly TranscriptEntry[],
-    opts: { previousResponseId?: string; ownerMessages?: readonly string[] } = {},
+    opts: { previousResponseId?: string; ownerMessages?: readonly string[]; stage?: string | null } = {},
   ): Promise<SummaryResult> {
     const cfg = this.opts.config();
     const res = await this.createChained(opts.previousResponseId, (prev) =>
       this.client.responses.create({
         model: cfg.model,
         instructions: cfg.summary_instructions,
-        input: renderContext(meta, transcript, null, "end-of-call summary", opts.ownerMessages),
+        input: renderContext(meta, transcript, null, "end-of-call summary", opts.ownerMessages, opts.stage),
         previous_response_id: prev,
         reasoning: { effort: "low" },
         store: false,
@@ -181,10 +185,10 @@ export class LunaAgent implements Agent {
   async progress(
     meta: CallMeta,
     transcript: readonly TranscriptEntry[],
-    opts: { ownerMessages?: readonly string[]; suggestions?: readonly Suggestion[]; signal?: AbortSignal } = {},
+    opts: { ownerMessages?: readonly string[]; suggestions?: readonly Suggestion[]; stage?: string | null; signal?: AbortSignal } = {},
   ): Promise<Progress> {
     const cfg = this.opts.config();
-    let input = renderContext(meta, transcript, null, "status update for the owner while the call goes on", opts.ownerMessages);
+    let input = renderContext(meta, transcript, null, "status update for the owner while the call goes on", opts.ownerMessages, opts.stage);
     if (opts.suggestions?.length) {
       input += "\n\nThe owner's current buttons (label: text):\n" + opts.suggestions.map((s) => `- ${s.label}: ${s.text}`).join("\n");
     }

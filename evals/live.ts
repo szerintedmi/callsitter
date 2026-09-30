@@ -3,8 +3,9 @@ import OpenAI from "openai";
 import type { ClientEvent, ServerEvent } from "openai/resources/live/live";
 import { LIVE_URL } from "../src/adapters/openai-live/session";
 import { b64decode, b64encode, BYTES_PER_MS, levelDbfs } from "../src/core/audio";
-import { fillCurrentTime, ownerAppendText, type AppConfig, type LiveAppend } from "../src/core/config";
+import { fillCurrentTime, LUNA_RESPONSE, ownerAppendText, type AppConfig, type LiveAppend } from "../src/core/config";
 import { parseOwnerMessage } from "../src/core/owner-desk";
+import { StereoRecorder } from "../src/core/wav";
 import { parseLines, type Line, type LiveCase, type Settings } from "./cases";
 import type { Judge } from "./judge";
 import type { Outcome } from "./run";
@@ -13,6 +14,7 @@ import type { Outcome } from "./run";
 // https://developers.openai.com/cookbook/examples/audio/voice_agent_evaluation): the conversation
 // so far goes in as startup text history, then TTS audio of the caller's turn streams in real
 // time. Its own small client, not the app's adapter: what's under test is the prompt and config.
+// Each run is recorded to `recordTo` as a stereo WAV (left: the caller's turn, right: the agent).
 
 const FORMAT = "pcm24" as const; // TTS "pcm" is 24 kHz PCM16LE, Live's audio/pcm at 24000
 const FRAME_MS = 20;
@@ -25,7 +27,7 @@ const APPEND_EVENT = {
   commentary: "session.commentary.append",
 } as const satisfies Record<LiveAppend, ClientEvent["type"]>;
 
-export async function runLiveCase(c: LiveCase, cfg: AppConfig, s: Settings, apiKey: string, judge: Judge): Promise<Outcome> {
+export async function runLiveCase(c: LiveCase, cfg: AppConfig, s: Settings, apiKey: string, judge: Judge, recordTo: string): Promise<Outcome> {
   const callerAudio = await tts(c.caller, s, apiKey);
   const history = parseLines(c.history);
   const reply = await converse({
@@ -38,13 +40,23 @@ export async function runLiveCase(c: LiveCase, cfg: AppConfig, s: Settings, apiK
     quietMs: s.live_quiet_ms,
     timeoutMs: s.live_timeout_ms,
   });
-  const notes = [reply.delegated && "asked for help (answered with the fallback)", reply.timedOut && "timed out"].filter(Boolean);
+  await Bun.write(recordTo, reply.wav);
+  const timing = speechTiming(reply.wav, cfg.connection.speech_detection.agent_dbfs);
+  const notes = [reply.delegated && "asked for help", reply.timedOut && "timed out"].filter(Boolean);
   const conversation = [...history.map((l) => `${l.speaker}: ${l.text}`), `caller: ${c.caller}`].join("\n");
   const g = await judge.grade({ conversation, produced: `The agent's reply:\n${reply.text}`, passIf: c.pass_if });
-  return { pass: g.pass, detail: g.reason, log: `agent: ${reply.text || "(silent)"}${notes.length ? `\n    (${notes.join(", ")})` : ""}` };
+  const secs = (ms: number | null) => (ms === null ? "-" : `${(ms / 1000).toFixed(1)} s`);
+  const log = [
+    `agent: ${reply.text || "(silent)"}${notes.length ? `\n    (${notes.join(", ")})` : ""}`,
+    `    replied after ${secs(timing.replyAfterMs)}, longest pause ${secs(timing.longestPauseMs)} · recording: ${recordTo}`,
+  ].join("\n");
+  return { pass: g.pass, detail: g.reason, log, recording: recordTo, timing };
 }
 
-/** A call-flow stage's tell_live text, as the flow would send it; `button:<label>` is a Telegram steering button's. */
+/**
+ * A call-flow stage's tell_live text, as the flow would send it; `button:<label>` is a Telegram
+ * steering button's, `silence` the silence watchdog's.
+ */
 function stageText(cfg: AppConfig, stage: string): { as: LiveAppend; text: string } {
   const st = cfg.telegram.steering;
   // The owner's typed Telegram message, as CallSession.steerFromOwner sends it.
@@ -56,11 +68,43 @@ function stageText(cfg: AppConfig, stage: string): { as: LiveAppend; text: strin
     const label = stage.slice("button:".length);
     const b = st.buttons.find((x) => x.label === label);
     if (!b) throw new Error(`no telegram.yaml steering button "${label}"`);
+    if ("stage" in b) return stageText(cfg, b.stage);
     return { as: b.as, text: ownerAppendText(st, b.text) };
   }
+  if (stage === "silence") return { as: cfg.flow.silence.tell_live.as, text: cfg.flow.silence.tell_live.text };
   const t = cfg.flow.rules.find((r) => r.stage === stage)?.then?.tell_live;
   if (!t) throw new Error(`no call-flow rule "${stage}" with tell_live`);
   return { as: t.as, text: t.text };
+}
+
+/**
+ * From a recording (left: caller, right: agent): how long after the caller's last speech the
+ * agent started, and its longest silence between its first and last speech (null: no reply).
+ */
+function speechTiming(wav: ArrayBuffer, dbfs: number): { replyAfterMs: number | null; longestPauseMs: number | null } {
+  const samples = new Int16Array(wav, 44);
+  const frame = (24000 * FRAME_MS) / 1000;
+  const speech = (ch: 0 | 1) => {
+    const out: boolean[] = [];
+    for (let f = 0; (f + 1) * frame * 2 <= samples.length; f++) {
+      let sum = 0;
+      for (let i = 0; i < frame; i++) sum += samples[(f * frame + i) * 2 + ch]! ** 2;
+      out.push(10 * Math.log10(sum / frame / 32768 ** 2) >= dbfs);
+    }
+    return out;
+  };
+  const caller = speech(0);
+  const agent = speech(1);
+  const callerEnd = caller.lastIndexOf(true);
+  const first = agent.findIndex((s, i) => s && i > callerEnd);
+  if (first < 0) return { replyAfterMs: null, longestPauseMs: null };
+  let longest = 0;
+  let gap = 0;
+  for (let i = first; i <= agent.lastIndexOf(true); i++) {
+    gap = agent[i] ? 0 : gap + 1;
+    longest = Math.max(longest, gap);
+  }
+  return { replyAfterMs: (first - callerEnd) * FRAME_MS, longestPauseMs: longest * FRAME_MS };
 }
 
 async function tts(text: string, s: Settings, apiKey: string): Promise<Uint8Array> {
@@ -87,7 +131,7 @@ interface Conversation {
 }
 
 /** Streams the caller's turn and collects what the agent says until it goes quiet. */
-function converse(o: Conversation): Promise<{ text: string; delegated: boolean; timedOut: boolean }> {
+function converse(o: Conversation): Promise<{ text: string; delegated: boolean; timedOut: boolean; wav: ArrayBuffer }> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(LIVE_URL, { headers: { Authorization: `Bearer ${o.apiKey}` }, perMessageDeflate: false });
     const send = (ev: ClientEvent) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(ev));
@@ -101,6 +145,7 @@ function converse(o: Conversation): Promise<{ text: string; delegated: boolean; 
     let delegated = false;
     let afterSent = false;
     let pump: ReturnType<typeof setInterval> | undefined;
+    let rec = new StereoRecorder(24000, Date.now());
     const deadline = setTimeout(() => finish(true), o.timeoutMs);
 
     const finish = (timedOut: boolean) => {
@@ -108,7 +153,7 @@ function converse(o: Conversation): Promise<{ text: string; delegated: boolean; 
       clearTimeout(deadline);
       send({ type: "session.close" });
       setTimeout(() => ws.close(), 200);
-      resolve({ text: reply.replace(/\s+/g, " ").trim(), delegated, timedOut });
+      resolve({ text: reply.replace(/\s+/g, " ").trim(), delegated, timedOut, wav: rec.toWav() });
     };
 
     // Live only advances while input audio arrives: silence, then the caller, then silence.
@@ -119,6 +164,7 @@ function converse(o: Conversation): Promise<{ text: string; delegated: boolean; 
         const frame = new Uint8Array(frameBytes);
         if (at >= 0 && at < o.callerAudio.length) frame.set(o.callerAudio.subarray(at, at + frameBytes));
         send({ type: "session.input_audio.append", audio: b64encode(frame) });
+        rec.addCaller(frame, start);
         sentMs += FRAME_MS;
       }
       const callerDoneAt = LEAD_MS + callerMs;
@@ -153,10 +199,12 @@ function converse(o: Conversation): Promise<{ text: string; delegated: boolean; 
         case "session.started":
           for (const t of o.told) send({ type: APPEND_EVENT[t.as], delegation_id: null, content: t.text });
           start = Date.now();
+          rec = new StereoRecorder(24000, start);
           pump = setInterval(tick, 10);
           break;
         case "session.output_audio.delta": {
           const bytes = b64decode(ev.delta);
+          if (start) rec.addAgent(bytes, Date.now());
           if (levelDbfs(bytes, FORMAT) < agentDbfs) break; // padding between phrases
           agentSpeechUntil = Math.max(Date.now(), agentSpeechUntil) + bytes.length / BYTES_PER_MS[FORMAT];
           break;
@@ -167,9 +215,10 @@ function converse(o: Conversation): Promise<{ text: string; delegated: boolean; 
           agentSpeechUntil = Math.max(agentSpeechUntil, Date.now());
           break;
         case "session.delegation.created": {
-          // The app would ask Luna; the eval answers with the configured fallback.
+          // As the app answers: the fixed text, or where the app would ask Luna, the fallback.
           delegated = true;
-          const f = o.cfg.flow.when_live_asks_for_help.fallback;
+          const help = o.cfg.flow.when_live_asks_for_help;
+          const f = help.tell_live.text.includes(LUNA_RESPONSE) ? help.fallback : help.tell_live;
           send({ type: APPEND_EVENT[f.as], delegation_id: ev.delegation.id, content: f.text });
           break;
         }

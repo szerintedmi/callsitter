@@ -10,8 +10,9 @@ const log = logger("owner");
 // The owner's chat (Telegram, telegram.yaml): one status message per call, sent as the call
 // comes in and edited as it goes on, and the owner's messages back, which steer the call. A reply
 // to any message about a call steers that call; any other message steers the newest live call.
-// Buttons under a live call's status message send telegram.yaml steering.buttons texts, and Luna's
-// suggestions from her latest rolling summary (steering.suggestions).
+// Buttons under a live call's status message send telegram.yaml steering.buttons texts or move the
+// call into a call-flow stage, and Luna's suggestions from her latest rolling summary
+// (steering.suggestions).
 
 export interface OwnerDeskDeps {
   bus: EventBus;
@@ -22,6 +23,8 @@ export interface OwnerDeskDeps {
   callLink?: (callId: string) => string;
   /** sends the owner's message to the call's Live session (CallSession.steerFromOwner) */
   steer: (callId: string, text: string, as: LiveAppend) => OwnerSteerResult;
+  /** moves the call into a call-flow stage, sending its tell_live (CallSession.stageFromOwner) */
+  enterStage: (callId: string, stage: string, label: string) => OwnerSteerResult;
   /** ends the call once the agent's goodbye has played (CallSession.hangUpFromOwner) */
   hangUp: (callId: string) => OwnerSteerResult;
   /** whether steering is possible at all (it needs a chat we can hear from) */
@@ -291,7 +294,8 @@ export class OwnerDesk {
   }
 
   /**
-   * A steering button under a status message: sends its text to that call. A suggestion replaced
+   * A steering button under a status message: sends its text to that call, or moves it into its
+   * call-flow stage. A suggestion replaced
    * since it was shown still sends what it said, as long as its generation is kept.
    */
   async onButton(b: OwnerButtonPress) {
@@ -300,7 +304,7 @@ export class OwnerDesk {
     const st = this.d.config().telegram.steering;
     const callId = this.messages.get(b.messageId);
     const v = callId ? this.views.get(callId) : undefined;
-    let button: { text: string; as: LiveAppend; hang_up?: boolean } | undefined;
+    let button: TelegramConfig["steering"]["buttons"][number] | { text: string; as: LiveAppend; hang_up?: boolean } | undefined;
     if (b.data.startsWith(BUTTON)) button = st.buttons[Number(b.data.slice(BUTTON.length))];
     else if (b.data.startsWith(SUGGESTION) && st.suggestions.enabled) {
       const [gen, i] = b.data.slice(SUGGESTION.length).split(":").map(Number);
@@ -310,6 +314,12 @@ export class OwnerDesk {
     if (!button) return void (await answer("That button no longer does anything."));
     if (!callId || !v || v.ended) return void (await answer("That call has ended."));
     if (!this.steeringOn()) return void (await answer("Steering is turned off."));
+    if ("stage" in button) {
+      const res = this.d.enterStage(v.callId, button.stage, button.label);
+      const as = this.d.config().flow.rules.find((r) => r.stage === button.stage)?.then?.tell_live?.as;
+      if (res.ok && as) this.noteSteer(v, as, `${button.label} (stage: ${button.stage.replaceAll("_", " ")})`);
+      return void (await answer(res.ok ? `Sent: ${button.label}` : `Not sent: ${res.reason}.`));
+    }
     if (button.hang_up) {
       const res = this.hangUpCall(v, button);
       return void (await answer(res.ok ? "Hanging up after the goodbye." : `Not hung up: ${res.reason}.`));
@@ -323,8 +333,8 @@ export class OwnerDesk {
    * Live, then the call hangs up once it has played.
    */
   private hangUpCall(v: CallView, button?: { text: string; as: LiveAppend }): OwnerSteerResult {
-    const goodbye = button ?? this.d.config().telegram.steering.buttons.find((b) => b.hang_up);
-    if (goodbye) {
+    const goodbye = button ?? this.d.config().telegram.steering.buttons.find((b) => "hang_up" in b && b.hang_up);
+    if (goodbye && "text" in goodbye) {
       const said = this.steerCall(v, goodbye.text, goodbye.as);
       if (!said.ok) return said;
     }
@@ -338,11 +348,14 @@ export class OwnerDesk {
   /** Sends the owner's text to the call, and shows it on the status message. */
   private steerCall(v: CallView, text: string, as: LiveAppend): OwnerSteerResult {
     const res = this.d.steer(v.callId, text, as);
-    if (res.ok) {
-      v.steers.push({ at: this.d.clock.now() - v.startedAt, as, text });
-      this.schedule(v);
-    }
+    if (res.ok) this.noteSteer(v, as, text);
     return res;
+  }
+
+  /** Shows the owner's steering on the status message. */
+  private noteSteer(v: CallView, as: LiveAppend, text: string) {
+    v.steers.push({ at: this.d.clock.now() - v.startedAt, as, text });
+    this.schedule(v);
   }
 
   private help(): string {
