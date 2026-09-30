@@ -583,15 +583,19 @@ export const TelegramConfig = z.object({
         .default(`SUPERVISOR: ${OWNER_MESSAGE}`)
         .refine((t) => t.includes(OWNER_MESSAGE), `needs ${OWNER_MESSAGE}`),
       // Buttons under a live call's status message; a tap sends `text` as `as`, and with hang_up
-      // ends the call once the agent's goodbye has played (so does /hangup).
+      // ends the call once the agent's goodbye has played (so does /hangup). A `stage` button
+      // moves the call into that call-flow stage instead, sending the rule's tell_live.
       buttons: z
         .array(
-          z.strictObject({
-            label: z.string().min(1).max(30),
-            text: z.string().min(1).max(500),
-            as: z.enum(LIVE_APPENDS).default("thinking"),
-            hang_up: z.boolean().default(false),
-          }),
+          z.union([
+            z.strictObject({
+              label: z.string().min(1).max(30),
+              text: z.string().min(1).max(500),
+              as: z.enum(LIVE_APPENDS).default("thinking"),
+              hang_up: z.boolean().default(false),
+            }),
+            z.strictObject({ label: z.string().min(1).max(30), stage: labelName }),
+          ]),
         )
         .max(8)
         .default([]),
@@ -726,6 +730,16 @@ export function checkGames(games: GamesConfig, flow: CallFlowConfig): void {
   }
 }
 
+/** Checks that telegram.yaml's stage buttons name call-flow.yaml rules with a fixed tell_live (no Luna). */
+export function checkButtons(telegram: TelegramConfig, flow: CallFlowConfig): void {
+  const issues = telegram.steering.buttons.flatMap((b, i) =>
+    "stage" in b && !flow.rules.some((r) => r.stage === b.stage && r.then?.tell_live && !r.then.ask_luna)
+      ? [`  telegram.yaml: steering.buttons.${i}.stage: no call-flow.yaml rule ${b.stage} with tell_live (and no ask_luna)`]
+      : [],
+  );
+  if (issues.length) throw new ConfigError(`Invalid config:\n${issues.join("\n")}`);
+}
+
 /** Checks luna.yaml progress.when against jev.yaml: it must name a Choice question and one of its answers. */
 export function checkProgress(luna: LunaConfig, jev: JevConfig): void {
   const w = luna.progress.when;
@@ -799,6 +813,7 @@ export async function loadConfig(source: ConfigSource, vars: ConfigVars = {}): P
   checkFlow(cfg.flow, cfg.jev);
   checkProgress(cfg.luna, cfg.jev);
   checkGames(cfg.games, cfg.flow);
+  checkButtons(cfg.telegram, cfg.flow);
   return fillPlaceholders(cfg, vars);
 }
 

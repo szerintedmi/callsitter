@@ -117,6 +117,19 @@ describe("owner steering from Telegram", () => {
     expect(r.appends.filter((a) => a.source === "owner")).toEqual([]);
   });
 
+  test("a stage button moves the call into that stage, sending the rule's tell_live", async () => {
+    const r = await rig();
+    const rule = r.config.flow.rules.find((x) => x.stage === "waste_time")!.then!.tell_live!;
+    expect(r.session.stageFromOwner("waste_time", "Scam")).toEqual({ ok: true });
+    expect(r.session.orch.stage).toBe("waste_time");
+    expect(r.appended.at(-1)).toBe(rule.text);
+    expect(r.appends.at(-1)).toMatchObject({ source: "stage", stage: "waste_time", as: rule.as });
+    expect(r.session.orch.ownerMessages).toEqual(["(button) Scam"]);
+    expect(r.session.stageFromOwner("no_such", "X")).toEqual({ ok: false, reason: "there's no no_such stage in call-flow.yaml" });
+    await r.session.stop("caller hung up");
+    expect(r.session.stageFromOwner("genuine", "Genuine")).toEqual({ ok: false, reason: "that call has ended" });
+  });
+
   test("Luna's guidance from a run that started before the owner steered is dropped", async () => {
     let finish!: (v: { instructions: string; toolCalls: [] }) => void;
     const r = await rig({

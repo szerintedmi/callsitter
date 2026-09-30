@@ -281,6 +281,23 @@ export class Orchestrator {
     void this.apply({ kind: "tell_live", stage: TIME_UP, message: tu.tell_live });
   }
 
+  /**
+   * The owner's stage button (telegram.yaml steering.buttons): the call enters that call-flow
+   * stage as if its rule had matched, and Live gets the rule's tell_live. Luna sees the button
+   * from her next run on; pending Luna guidance is dropped. False if there's no such stage.
+   */
+  enterStage(stage: string, label: string): boolean {
+    const message = this.d.config().flow.rules.find((r) => r.stage === stage)?.then?.tell_live;
+    if (this.ended || !message) return false;
+    this.ownerMessages.push(`(button) ${label}`);
+    this.decision = stage;
+    if (this.deferredLuna) this.note("info", `queued Luna call (${this.deferredLuna.reason}) cancelled: the owner moved the call on`);
+    this.deferredLuna = null;
+    this.bump(`the owner moved the call to ${stage}`);
+    void this.apply({ kind: "tell_live", stage, message });
+    return true;
+  }
+
   private bump(cause: string, byOwner = false) {
     this.revision++;
     if (!byOwner) this.flowRevision++;

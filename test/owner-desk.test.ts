@@ -18,6 +18,7 @@ async function rig(o: { steer?: (callId: string, text: string, as: LiveAppend) =
   const edits: { id: number; text: string; layout?: MessageLayout }[] = [];
   const steered: { callId: string; text: string; as: LiveAppend }[] = [];
   const hungUp: string[] = [];
+  const staged: { callId: string; stage: string; label: string }[] = [];
   const answers: { pressId: string; notice?: string }[] = [];
   const chat: OwnerChat = {
     async send(text, opts) {
@@ -48,6 +49,7 @@ async function rig(o: { steer?: (callId: string, text: string, as: LiveAppend) =
       steered.push({ callId, text, as });
       return o.steer?.(callId, text, as) ?? { ok: true };
     },
+    enterStage: (callId, stage, label) => (staged.push({ callId, stage, label }), { ok: true }),
     hangUp: (callId) => (hungUp.push(callId), { ok: true }),
   });
   const start = (callId: string, from = "+441") => bus.publish({ type: "call.started", callId, meta: { callId, from, to: "+442", startedAt: now } });
@@ -61,6 +63,7 @@ async function rig(o: { steer?: (callId: string, text: string, as: LiveAppend) =
     edits,
     steered,
     hungUp,
+    staged,
     answers,
     start,
     message,
@@ -101,7 +104,7 @@ describe("owner desk: the call's status message", () => {
     expect(text).toContain("❓ Is Peter home?");
     expect(r.lastQuote()).toBe("0:01 caller: Hi, it's the bank.");
     expect(text).toContain("Reply to steer");
-    expect(r.edits[0]!.layout?.buttons?.[0]?.map((b) => b.label)).toEqual(["Genuine", "Spam/Scam", "Hang up"]);
+    expect(r.edits[0]!.layout?.buttons?.[0]?.map((b) => b.label)).toEqual(["Genuine", "Scam", "Spam", "Hang up"]);
     expect(text).toContain("https://admin.example.com/calls/c1");
   });
 
@@ -279,25 +282,37 @@ describe("owner desk: steering", () => {
 
   test("a button sends its text to that call, as its kind", async () => {
     const r = await rig();
+    r.config.telegram.steering.buttons = [{ label: "Ask", text: "Ask what it's about.", as: "commentary", hang_up: false }];
     r.start("c1");
     await settle();
     const status = r.sent[0]!;
-    expect(status.layout?.buttons?.[0]).toEqual([
-      { label: "Genuine", data: "steer:0" },
-      { label: "Spam/Scam", data: "steer:1" },
-      { label: "Hang up", data: "steer:2" },
-    ]);
+    expect(status.layout?.buttons?.[0]).toEqual([{ label: "Ask", data: "steer:0" }]);
     await r.desk.onButton({ pressId: "q1", messageId: status.id, data: "steer:0" });
-    const genuine = r.config.telegram.steering.buttons[0]!;
-    expect(r.steered).toEqual([{ callId: "c1", text: genuine.text, as: genuine.as }]);
-    expect(r.answers).toEqual([{ pressId: "q1", notice: `Sent: ${genuine.text}` }]);
+    expect(r.steered).toEqual([{ callId: "c1", text: "Ask what it's about.", as: "commentary" }]);
+    expect(r.answers).toEqual([{ pressId: "q1", notice: "Sent: Ask what it's about." }]);
     await settle();
-    expect(r.lastEdit()).toContain(`${genuine.as}: ${genuine.text}`);
+    expect(r.lastEdit()).toContain("commentary: Ask what it's about.");
 
     r.bus.publish({ type: "call.ended", callId: "c1", at: 1, endedAt: 0, reason: "caller hung up", costUsd: 0, lunaCalls: 0, jevTicks: 0 });
-    await r.desk.onButton({ pressId: "q2", messageId: status.id, data: "steer:1" });
+    await r.desk.onButton({ pressId: "q2", messageId: status.id, data: "steer:0" });
     expect(r.answers.at(-1)).toEqual({ pressId: "q2", notice: "That call has ended." });
     expect(r.steered).toHaveLength(1);
+    r.desk.detach();
+  });
+
+  test("a stage button moves that call into its call-flow stage", async () => {
+    const r = await rig();
+    r.config.telegram.steering.buttons = [{ label: "Scam", stage: "waste_time" }];
+    r.start("c1");
+    await settle();
+    const status = r.sent[0]!;
+    await r.desk.onButton({ pressId: "q1", messageId: status.id, data: "steer:0" });
+    expect(r.staged).toEqual([{ callId: "c1", stage: "waste_time", label: "Scam" }]);
+    expect(r.steered).toEqual([]);
+    expect(r.answers).toEqual([{ pressId: "q1", notice: "Sent: Scam" }]);
+    await settle();
+    const as = r.config.flow.rules.find((x) => x.stage === "waste_time")!.then!.tell_live!.as;
+    expect(r.lastEdit()).toContain(`${as}: Scam (stage: waste time)`);
     r.desk.detach();
   });
 
@@ -306,7 +321,8 @@ describe("owner desk: steering", () => {
     r.start("c1");
     await settle();
     const status = r.sent[0]!;
-    const goodbye = r.config.telegram.steering.buttons.find((b) => b.hang_up)!;
+    const goodbye = r.config.telegram.steering.buttons.find((b) => "hang_up" in b && b.hang_up)!;
+    if (!("text" in goodbye)) throw new Error("no hang_up button");
     await r.desk.onButton({ pressId: "q1", messageId: status.id, data: `steer:${r.config.telegram.steering.buttons.indexOf(goodbye)}` });
     expect(r.steered).toEqual([{ callId: "c1", text: goodbye.text, as: goodbye.as }]);
     expect(r.hungUp).toEqual(["c1"]);

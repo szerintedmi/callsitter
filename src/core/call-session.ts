@@ -381,6 +381,18 @@ export class CallSession {
   }
 
   /**
+   * The owner's stage button (telegram.yaml steering.buttons): the call enters that call-flow
+   * stage, and Live gets the rule's tell_live as the call flow would send it.
+   */
+  stageFromOwner(stage: string, label: string): OwnerSteerResult {
+    if (!this.d.config().telegram.steering.enabled) return { ok: false, reason: "steering is turned off (telegram.yaml)" };
+    if (this.stopped) return { ok: false, reason: "that call has ended" };
+    if (this._phase !== "active") return { ok: false, reason: "the call isn't connected yet" };
+    if (!this.orch.enterStage(stage, label)) return { ok: false, reason: `there's no ${stage} stage in call-flow.yaml` };
+    return { ok: true };
+  }
+
+  /**
    * The owner ended the call from Telegram: it hangs up once the agent's goodbye (a steering text
    * sent just before) has played, like the call flow's hang-ups.
    */

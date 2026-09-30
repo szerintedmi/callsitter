@@ -47,6 +47,20 @@ describe("config", () => {
     await expect(loadConfig(source)).rejects.toThrow(/call-flow\.yaml: rules\[wrap_up\]\.when\.done: no Choice question done/);
   });
 
+  test("telegram.yaml stage buttons must name a call-flow stage with a fixed tell_live", async () => {
+    const yaml = new YamlDirSource("./config");
+    const withButton = (stage: string) => ({
+      read: async (n: ConfigName) => {
+        const raw = (await yaml.read(n)) as { steering: { buttons: unknown[] } };
+        if (n === "telegram") raw.steering.buttons = [{ label: "X", stage }];
+        return raw;
+      },
+    });
+    await expect(loadConfig(withButton("genuine"))).resolves.toBeDefined();
+    await expect(loadConfig(withButton("still_unclear"))).rejects.toThrow(/steering\.buttons\.0\.stage: no call-flow\.yaml rule still_unclear/);
+    await expect(loadConfig(withButton("low_confidence"))).rejects.toThrow(/no call-flow\.yaml rule low_confidence with tell_live \(and no ask_luna\)/);
+  });
+
   test("{owner_name} is filled in every config text, falling back to \"the owner\"", async () => {
     const yaml = new YamlDirSource("./config");
     // Checks the filling, not the prompts' wording.
