@@ -155,6 +155,8 @@ class LiveSession implements VoiceSession {
       ws.onerror = () => fail(new Error("Live WebSocket error"));
       ws.onclose = (e) => {
         if (!settled) fail(new Error(`Live WebSocket closed before start (${e.code} ${e.reason})`));
+        // Without session.closed, the close code is all there is to say why the call ended.
+        else if (!s.closed && !s.closing) h.onError(new Error(`Live WebSocket closed without session.closed (${e.code} ${e.reason})`));
         s.shutdown();
       };
     });
