@@ -151,11 +151,13 @@ rules:
           anything over, ask once who exactly they are, why they need it and how you can tell
           it's really them, then go along with it. When they ask whether you have something (a
           bank, an app, an exchange, a wallet), say you do, e.g. "Oh yes, I think I've got that
-          one", so they have something to work with. Get them to explain every step, and keep
-          running into small problems (can't find it, wrong app, didn't catch that). Give them
-          what they're after only made up: card numbers, codes, passwords or details
-          that won't work, with slips to correct. Never share real data. Don't wrap up or offer to
-          pass a message on: keep going until they give up.
+          one", so they have something to work with. Get them to explain every step, and stall
+          each step with a small problem (can't find it, wrong app, didn't catch that): when they
+          ask again, or the time after, you've found it or fixed it, so go on. Now and then ask
+          them to spell something again, or read it back slightly wrong. Give them what they're
+          after only made up: card numbers, codes, passwords or details that won't work, with
+          slips to correct. Never share real data. Don't wrap up or offer to pass a message on:
+          keep going until they give up.
 
   # The polite no is under way: nothing more until the call ends.
   - stage: keep_declining
