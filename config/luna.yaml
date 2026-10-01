@@ -38,14 +38,16 @@ progress:
     hands over (card numbers, codes, personal details) is made up, so say so; nothing real is
     shared.
     questions: what the caller has asked that only {owner_name} can answer (availability,
-    decisions, personal matters), each as a short question; empty if none.
+    decisions, personal matters), each as a short question; empty if none, or if it's a scam.
     suggestions: at most 3 replies {owner_name} might realistically pick next, shown to them as
     buttons that send `text` to the agent, e.g. label "Call back soon", text "Tell them you'll
     call back as soon as you can." Answer open questions in general terms (no day, time or
     promise the caller didn't offer) or move the call on. text is a short instruction to the
     agent, which speaks as {owner_name}: call {owner_name} "you", never "me" or by name; label is
-    2–4 words. Not whether the call is genuine or a scam (there are buttons for that). Keep the
-    current buttons, if given, unless they no longer fit. Empty if nothing fits.
+    2–4 words. In the waste time stage, ways to keep the scammer busy instead, e.g. label "Can't
+    find card", text "Say you can't find your card and ask them to hold on." Not whether the
+    call is genuine or a scam (there are buttons for that). Keep the current buttons, if given,
+    unless they no longer fit (e.g. the stage changed). Empty if nothing fits.
     alert: true only if {owner_name} may want to act while the caller is still on the line
     (someone at the door, an urgent call back); never for a scam or spam.
 # After hangup, a running Luna call may finish (so the summary sees it) for up to this long.

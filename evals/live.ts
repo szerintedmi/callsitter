@@ -6,7 +6,7 @@ import { b64decode, b64encode, BYTES_PER_MS, levelDbfs } from "../src/core/audio
 import { fillCurrentTime, LUNA_RESPONSE, ownerAppendText, type AppConfig, type LiveAppend } from "../src/core/config";
 import { parseOwnerMessage } from "../src/core/owner-desk";
 import { StereoRecorder } from "../src/core/wav";
-import { parseLines, type Line, type LiveCase, type Settings } from "./cases";
+import { parseHistory, type Line, type LiveCase, type Settings } from "./cases";
 import type { Judge } from "./judge";
 import type { Outcome } from "./run";
 
@@ -29,11 +29,12 @@ const APPEND_EVENT = {
 
 export async function runLiveCase(c: LiveCase, cfg: AppConfig, s: Settings, apiKey: string, judge: Judge, recordTo: string): Promise<Outcome> {
   const callerAudio = await tts(c.caller, s, apiKey);
-  const history = parseLines(c.history);
+  const items = parseHistory(c.history);
+  const history = items.filter((i): i is Line => "speaker" in i);
   const reply = await converse({
     cfg,
     apiKey,
-    history,
+    history: items.map((i) => ("told" in i ? { told: stageText(cfg, i.told).text } : i)),
     told: c.told.map((stage) => stageText(cfg, stage)),
     afterCaller: c.after_caller.map((stage) => stageText(cfg, stage)),
     callerAudio,
@@ -122,7 +123,8 @@ async function tts(text: string, s: Settings, apiKey: string): Promise<Uint8Arra
 interface Conversation {
   cfg: AppConfig;
   apiKey: string;
-  history: Line[];
+  /** `told` lines go in as developer messages: Live takes appends only once the session has started */
+  history: (Line | { told: string })[];
   told: { as: LiveAppend; text: string }[];
   afterCaller: { as: LiveAppend; text: string }[];
   callerAudio: Uint8Array;
@@ -185,7 +187,9 @@ function converse(o: Conversation): Promise<{ text: string; delegated: boolean; 
           delegation: { type: "client" },
           // "Developer and user messages use input_text; assistant messages use text or output_text."
           input: o.history.map((m) =>
-            m.speaker === "agent"
+            "told" in m
+              ? { type: "message" as const, role: "developer" as const, content: [{ type: "input_text" as const, text: m.told }] }
+              : m.speaker === "agent"
               ? { type: "message" as const, role: "assistant" as const, content: [{ type: "output_text" as const, text: m.text }] }
               : { type: "message" as const, role: "user" as const, content: [{ type: "input_text" as const, text: m.text }] },
           ),

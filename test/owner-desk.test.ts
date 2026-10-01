@@ -248,6 +248,24 @@ describe("owner desk: steering", () => {
       { callId: "c1", text: "stop, don't give that", as: "instructions" },
       { callId: "c1", text: "keep them talking", as: "thinking" },
     ]);
+    // A reply says how each went out, so a silent one isn't a surprise.
+    expect(r.sent.slice(1).map((m) => m.text.split(":")[0])).toEqual(["Sent as instructions", "Sent as thinking"]);
+    expect(r.sent.at(-1)!.text).toContain("isn't spoken now");
+  });
+
+  test("below the call flow's threshold, the verdict is only leaning", async () => {
+    const r = await rig();
+    r.start("c1");
+    await settle();
+    r.bus.publish({ type: "classification", callId: "c1", at: 2000, classification: cls({ verdict: "scam", confidence: 0.62 }) });
+    await settle();
+    expect(r.lastEdit()).toContain("leaning scam 62%");
+    r.bus.publish({ type: "classification", callId: "c1", at: 3000, classification: cls({ verdict: "scam", confidence: 0.81 }) });
+    await settle();
+    expect(r.lastEdit()).toContain("\nscam 81%");
+    r.bus.publish({ type: "classification", callId: "c1", at: 4000, classification: cls({ verdict: "unclear", confidence: 0.6 }) });
+    await settle();
+    expect(r.lastEdit()).toContain("\nunclear 60%");
   });
 
   test("says why a message couldn't steer anything", async () => {

@@ -546,11 +546,15 @@ export function createTimeline(root: HTMLElement): Timeline {
         break;
       case "costs":
         // Final costs, with the end-of-call summary priced in.
+        lunaCalls = ev.costs.luna.calls;
+        set(st.luna, String(lunaCalls));
         row({ kind: "note info", at: ev.at, body: "cost " + esc(describeCosts(ev.costs)) + " · Luna " + ev.costs.luna.calls + " calls, " + esc(describeLunaTokens(ev.costs.luna)) });
         set(st.cost, esc(describeCosts(ev.costs)));
         break;
       case "progress": {
         // Luna's rolling summary for the owner's Telegram status message; never reaches Live.
+        lunaCalls++;
+        set(st.luna, String(lunaCalls));
         const sug = ev.suggestions ?? [];
         row({
           kind: "progress",
