@@ -83,6 +83,13 @@ export interface CallMeta {
 
 export type CallStatus = "ringing" | "active" | "ended";
 
+/**
+ * Who ended a call: the screener (call flow, Luna, silence, time limits), the caller, the owner
+ * from Telegram, OpenAI Live closing the session (safety filter, time limit, lost connection), or
+ * the server (failed starts, restarts, errors). The end reason says the rest.
+ */
+export type EndedBy = "bot" | "caller" | "owner" | "live" | "system";
+
 /** Who asked Luna: a call-flow rule (on Jev's answers) or Live itself (a delegation). */
 /** summary: the end-of-call summary, which ends with a summary event rather than a luna one */
 export type LunaTrigger = "rule" | "delegation" | "summary";
@@ -178,6 +185,8 @@ export type CallEvent =
       /** wall clock */
       endedAt: number;
       reason: string;
+      /** missing on calls from before it was recorded */
+      endedBy?: EndedBy;
       costUsd: number;
       /** Luna requests of every kind so far (guidance, rolling summaries), as costs.luna.calls */
       lunaCalls: number;

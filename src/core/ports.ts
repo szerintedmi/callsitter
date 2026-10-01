@@ -1,7 +1,7 @@
 import type { AudioFormat } from "./audio";
 import type { AppConfig, GamesConfig, JevConfig, LiveAppend, LunaTool } from "./config";
 import type { BoardEntry, Game } from "./game";
-import type { CallCosts, CallEvent, CallMeta, CallStatus, Classification, Speaker, Suggestion, TokenUsage, ToolCallRecord, TranscriptEntry } from "./types";
+import type { CallCosts, CallEvent, CallMeta, CallStatus, EndedBy, Classification, Speaker, Suggestion, TokenUsage, ToolCallRecord, TranscriptEntry } from "./types";
 
 // Ports: everything core needs from the outside world. Adapters implement these.
 
@@ -185,6 +185,8 @@ export interface CallRecord {
   startedAt: number;
   endedAt: number | null;
   endReason: string | null;
+  /** null on calls from before it was recorded */
+  endedBy: EndedBy | null;
   verdict: string | null;
   /** the last call-flow stage */
   stage: string | null;

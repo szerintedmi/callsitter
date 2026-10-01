@@ -2,7 +2,7 @@ import type { AudioFormat } from "./audio";
 import { CallSession, type CallSessionDeps } from "./call-session";
 import { withCarrier } from "./cost";
 import type { BlobStore, EventBus, MediaChannel, Repo, VoiceAgent } from "./ports";
-import type { CallMeta, SipHeader } from "./types";
+import type { CallMeta, EndedBy, SipHeader } from "./types";
 
 // Registry of live calls plus the call lifecycle (incoming → media → hangup → recording).
 
@@ -165,15 +165,15 @@ export class CallManager {
     return this.sessions.get(callId);
   }
 
-  async hangup(callId: string, reason: string) {
+  async hangup(callId: string, reason: string, by: EndedBy = "system") {
     this.pending.delete(callId);
     const s = this.sessions.get(callId);
-    if (s) return s.stop(reason);
+    if (s) return s.stop(reason, by);
     const attaching = this.attaching.get(callId);
     if (attaching) {
       // Its session is on the way: stop it once it exists. A failed start has ended the call already.
       const started = await attaching.catch(() => null);
-      return started?.stop(reason);
+      return started?.stop(reason, by);
     }
     // Hung up before media connected (or after a restart): just close the record.
     const call = await this.d.repo.getCall(callId);
@@ -184,6 +184,7 @@ export class CallManager {
         at: this.d.clock.now() - call.startedAt,
         endedAt: this.d.clock.now(),
         reason,
+        endedBy: by,
         costUsd: 0,
         lunaCalls: 0,
         jevTicks: 0,

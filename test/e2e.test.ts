@@ -388,7 +388,7 @@ describe("telephony failures", () => {
     expect((await repo.getCall("orphan"))?.status).toBe("ringing");
     await manager.reapOrphans(0, "server restarted");
     await until(async () => (await repo.getCall("orphan"))?.status === "ended");
-    expect((await repo.getCall("orphan"))?.endReason).toBe("server restarted");
+    expect(await repo.getCall("orphan")).toMatchObject({ endReason: "server restarted", endedBy: "system" });
     expect(telnyxRequests.some((r) => r.url.includes("v3%3Aorphan/actions/hangup"))).toBe(true);
   });
 });
@@ -438,7 +438,7 @@ describe("browser test call", () => {
     await until(() => closed); // closes after the grace period
     const ended = (await repo.getCall(callId))!;
     expect(ended.status).toBe("ended");
-    expect(ended.endReason).toBe("hung up in browser");
+    expect(ended).toMatchObject({ endReason: "hung up in browser", endedBy: "caller" });
     // Browser calls are recorded as a stereo WAV (mic left, Live's audio right).
     await until(async () => (await repo.getCall(callId))?.recordingPath != null);
     const rec = await (await fetch(`${base()}/recordings/${callId}`)).arrayBuffer();
