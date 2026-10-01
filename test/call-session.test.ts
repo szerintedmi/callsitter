@@ -888,4 +888,20 @@ describe("call session: Live closing the session", () => {
     r.handlers().onClose("expired");
     expect(r.hangups).toEqual(["cc1"]);
   });
+
+  test("the end reason says why, and who ended the call", async () => {
+    const ends = async (reason?: string) => {
+      const r = await rig({ sip: true });
+      const ended: Extract<CallEvent, { type: "call.ended" }>[] = [];
+      r.bus.subscribe((e) => void (e.type === "call.ended" && ended.push(e)));
+      r.handlers().onClose(reason);
+      // Every later end waits on the same wrap-up.
+      await r.session.stop("test");
+      return { reason: ended[0]!.reason, by: ended[0]!.endedBy };
+    };
+    expect(await ends("content")).toEqual({ reason: "voice session closed: OpenAI safety filter (content)", by: "live" });
+    expect(await ends("remote_hangup")).toEqual({ reason: "voice session closed: caller hung up (remote_hangup)", by: "caller" });
+    expect(await ends("something_new")).toEqual({ reason: "voice session closed: something new (something_new)", by: "live" });
+    expect(await ends()).toEqual({ reason: "voice session closed", by: "live" });
+  });
 });

@@ -582,7 +582,7 @@ export function createTimeline(root: HTMLElement): Timeline {
         endedAt = startedAt === null ? null : startedAt + ev.at;
         // Calls from before costs were recorded only have the estimate.
         const cost = ev.costs ? describeCosts(ev.costs) : "est. $" + ev.costUsd.toFixed(3);
-        const { g } = row({ kind: "end", at: ev.at, body: "<b>ended</b> " + esc(ev.reason) + ' <span class="muted">· ' + esc(cost) + "</span>" });
+        const { g } = row({ kind: "end", at: ev.at, body: "<b>ended</b> " + (ev.endedBy ? "by " + esc(ev.endedBy) + ": " : "") + esc(ev.reason) + ' <span class="muted">· ' + esc(cost) + "</span>" });
         set(st.cost, esc(cost));
         // A rule's hang-up waits for the agent's goodbye to play out.
         if (flowHangup) connect("f", flowHangup, g, true);

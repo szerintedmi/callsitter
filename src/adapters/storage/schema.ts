@@ -1,5 +1,5 @@
 import { integer, real, sqliteTable, text, index } from "drizzle-orm/sqlite-core";
-import type { CallCosts } from "../../core/types";
+import type { CallCosts, EndedBy } from "../../core/types";
 
 export const calls = sqliteTable("calls", {
   id: text("id").primaryKey(),
@@ -13,6 +13,8 @@ export const calls = sqliteTable("calls", {
   startedAt: integer("started_at").notNull(),
   endedAt: integer("ended_at"),
   endReason: text("end_reason"),
+  // Who ended it (EndedBy); null on calls from before it was recorded.
+  endedBy: text("ended_by").$type<EndedBy>(),
   verdict: text("verdict"),
   // The column predates the call flow (it held the strategy id); a stage is the same idea.
   stage: text("strategy"),

@@ -213,7 +213,7 @@ export function testCallRoutes(d: TestCallDeps) {
               });
               break;
             case "hangup":
-              void d.manager.get(callId)?.hangup("hung up in browser");
+              void d.manager.get(callId)?.hangup("hung up in browser", "caller");
               break;
             case "underrun":
               // The page's player ran dry mid-speech (audio late): heard as crackle or a gap.
@@ -228,7 +228,7 @@ export function testCallRoutes(d: TestCallDeps) {
         onClose() {
           unsubscribe?.();
           d.browserCalls.unregister(ccid);
-          if (started) void d.manager.hangup(callId, "browser disconnected");
+          if (started) void d.manager.hangup(callId, "browser disconnected", "caller");
         },
       };
     }),

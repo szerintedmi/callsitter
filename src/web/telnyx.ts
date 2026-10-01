@@ -129,7 +129,7 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
         // Usually after the media stream has closed and the call has ended here: kept anyway, as
         // it says who hung up and how the line was.
         await d.manager.carrierHangup(callId, payloadInfo(p, HANGUP_SKIP));
-        await d.manager.hangup(callId, `hangup: ${p.hangup_cause ?? "unknown"} (${p.hangup_source ?? "?"})`);
+        await d.manager.hangup(callId, `hangup: ${p.hangup_cause ?? "unknown"} (${p.hangup_source ?? "?"})`, p.hangup_source === "caller" ? "caller" : "system");
         return;
       }
       case "call.cost": {

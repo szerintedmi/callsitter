@@ -34,7 +34,7 @@ function projection(ev: CallEvent): Partial<Omit<CallRecord, "id">> | undefined 
     case "stage":
       return { stage: ev.stage };
     case "call.ended":
-      return { status: "ended", endedAt: ev.endedAt, endReason: ev.reason, lunaCalls: ev.lunaCalls, costUsd: ev.costs?.totalUsd ?? ev.costUsd, costs: ev.costs ?? null };
+      return { status: "ended", endedAt: ev.endedAt, endReason: ev.reason, endedBy: ev.endedBy ?? null, lunaCalls: ev.lunaCalls, costUsd: ev.costs?.totalUsd ?? ev.costUsd, costs: ev.costs ?? null };
     case "summary":
       return { summary: ev.text };
     case "costs":

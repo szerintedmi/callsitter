@@ -14,7 +14,7 @@ import type {
   VoiceSession,
   VoiceSessionHandlers,
 } from "./ports";
-import type { CallMeta } from "./types";
+import type { CallMeta, EndedBy } from "./types";
 
 const log = logger("call");
 
@@ -52,6 +52,15 @@ export type OwnerSteerResult = { ok: true } | { ok: false; reason: string };
 /** caller audio kept while Live connects (~10 s of 20 ms frames) */
 const EARLY_AUDIO_MAX_FRAMES = 500;
 
+/** Live's session.closed reasons: who ended the call, and how the end reason says it. */
+const LIVE_CLOSED: Record<string, { by: EndedBy; text: string }> = {
+  remote_hangup: { by: "caller", text: "caller hung up" },
+  content: { by: "live", text: "OpenAI safety filter" },
+  expired: { by: "live", text: "session time limit" },
+  connection_lost: { by: "live", text: "connection lost" },
+  close_requested: { by: "live", text: "closed on request" },
+};
+
 /**
  * idle → connecting (Live connecting, greeting playing) → active → stopping (hung up: Luna
  * draining, summary) → finalized. The call deadline runs from connecting on.
@@ -78,7 +87,7 @@ export class CallSession {
   /** send: when_agent_idle messages held back so they don't cut the agent off (see flushHeldInstructions) */
   private held: { steer: Steer; since: number }[] = [];
   /** a hangup the call flow or Luna asked for, waiting for the agent's goodbye to play out */
-  private pendingHangup: { reason: string; since: number; done: Promise<void>; resolve: () => void } | null = null;
+  private pendingHangup: { reason: string; by: EndedBy; since: number; done: Promise<void>; resolve: () => void } | null = null;
   /** last caller audio loud enough to be speech (wall clock) */
   private callerSpeechAt = 0;
   /** last non-silent agent audio received (wall clock) */
@@ -121,7 +130,7 @@ export class CallSession {
       dryRun: d.dryRun,
       steer: {
         tellLive: (m) => this.tellLive(m),
-        hangup: (reason) => this.hangupAfterGoodbye(reason),
+        hangup: (reason) => this.hangupAfterGoodbye(reason, "bot"),
       },
     });
     this.trace = d.mediaViaVoice ? new SpeechTrace(d.meta.callId) : null;
@@ -172,9 +181,9 @@ export class CallSession {
     const timeUpMs = cfg.flow.timing.time_up ? maxMs - cfg.flow.timing.time_up.seconds_left * 1000 : 0;
     if (timeUpMs > 0) this.timeUpTimer = setTimeout(() => this.orch.timeUp(), timeUpMs);
     this.maxTimer = setTimeout(() => {
-      void this.hangupAfterGoodbye("max call length reached");
+      void this.hangupAfterGoodbye("max call length reached", "bot");
       // Backstop: the goodbye check only runs while the call is active.
-      this.maxTimer = setTimeout(() => void this.hangup("max call length reached"), cfg.flow.timing.agent_idle.max_hangup_wait_ms + 1000);
+      this.maxTimer = setTimeout(() => void this.hangup("max call length reached", "bot"), cfg.flow.timing.agent_idle.max_hangup_wait_ms + 1000);
     }, maxMs);
 
     // Say hello straight away with the recorded greeting; Live connects meanwhile and carries on from it.
@@ -267,11 +276,13 @@ export class CallSession {
       onClose: (reason) => {
         // While connecting, a failed connect rejects instead (and says why).
         if (this._phase !== "active") return;
-        const why = reason ? `voice session closed (${reason.replaceAll("_", " ")})` : "voice session closed";
+        const known = reason ? LIVE_CLOSED[reason] : undefined;
+        const why = reason ? `voice session closed: ${known?.text ?? reason.replaceAll("_", " ")} (${reason})` : "voice session closed";
+        const by = known?.by ?? "live";
         // OpenAI SIP and WebRTC: the phone leg is Live's own, so once Live has ended the session
         // there is nothing to hang up (asking OpenAI to hang up a closed session stalls for > 5 s).
-        if (reason && this.d.mediaViaVoice) void this.stop(why);
-        else void this.hangup(why);
+        if (reason && this.d.mediaViaVoice) void this.stop(why, by);
+        else void this.hangup(why, by);
       },
     };
   }
@@ -399,7 +410,7 @@ export class CallSession {
   hangUpFromOwner(): OwnerSteerResult {
     if (this.stopped) return { ok: false, reason: "that call has ended" };
     if (this._phase !== "active") return { ok: false, reason: "the call isn't connected yet" };
-    void this.hangupAfterGoodbye("the owner hung up from Telegram");
+    void this.hangupAfterGoodbye("the owner hung up from Telegram", "owner");
     return { ok: true };
   }
 
@@ -500,13 +511,13 @@ export class CallSession {
     const stage = this.orch.stage;
     if (stage !== null && sc.hang_up_in.includes(stage)) {
       // e.g. the goodbyes are done: don't ask "are you still there?", just end the call.
-      void this.hangup(`silence after ${stage.replaceAll("_", " ")}`);
+      void this.hangup(`silence after ${stage.replaceAll("_", " ")}`, "bot");
     } else if (this.silencePrompts < sc.max_prompts) {
       this.silencePrompts++;
       this.tellLive({ message: sc.tell_live, source: "silence" });
       this.note("info", `silence: prompted the caller (${this.silencePrompts}/${sc.max_prompts})`);
     } else if (sc.hang_up) {
-      void this.hangup("silent line");
+      void this.hangup("silent line", "bot");
     }
   }
 
@@ -514,11 +525,11 @@ export class CallSession {
    * Hangup asked for by the call flow (e.g. the caller said to hang up) or Luna: let the agent's
    * goodbye play out first, as it usually replies "Alright, I'll end the call now".
    */
-  private hangupAfterGoodbye(reason: string): Promise<void> {
+  private hangupAfterGoodbye(reason: string, by: EndedBy): Promise<void> {
     if (this.pendingHangup) return this.pendingHangup.done;
     let resolve!: () => void;
     const done = new Promise<void>((r) => (resolve = r));
-    this.pendingHangup = { reason, since: this.d.clock.now(), done, resolve };
+    this.pendingHangup = { reason, by, since: this.d.clock.now(), done, resolve };
     this.checkPendingHangup();
     return done;
   }
@@ -530,25 +541,25 @@ export class CallSession {
     const waited = this.d.clock.now() - p.since;
     if (this.agentBusy() && waited < this.d.config().flow.timing.agent_idle.max_hangup_wait_ms) return;
     this.pendingHangup = null;
-    void this.hangup(p.reason).then(p.resolve);
+    void this.hangup(p.reason, p.by).then(p.resolve);
   }
 
   /** Hangs up at the carrier, then ends the session. Every call returns the same wrap-up. */
-  hangup(reason: string): Promise<void> {
-    return this.end(reason, true);
+  hangup(reason: string, by: EndedBy = "system"): Promise<void> {
+    return this.end(reason, by, true);
   }
 
   /** Ends the session (the phone leg is gone already): hangup webhook, media close, or guards. */
-  stop(reason: string): Promise<void> {
-    return this.end(reason, false);
+  stop(reason: string, by: EndedBy = "system"): Promise<void> {
+    return this.end(reason, by, false);
   }
 
-  private end(reason: string, hangUpPhone: boolean): Promise<void> {
+  private end(reason: string, by: EndedBy, hangUpPhone: boolean): Promise<void> {
     if (this.stopping) return this.stopping;
     let begin!: () => void;
     let phoneDown: Promise<void> | undefined;
     // Assigned before anything below can call back in here (e.g. aborting the connect closes Live).
-    this.stopping = new Promise<void>((r) => (begin = r)).then(() => this.finalize(reason, phoneDown));
+    this.stopping = new Promise<void>((r) => (begin = r)).then(() => this.finalize(reason, by, phoneDown));
     this._phase = "stopping";
     this.endedAt = this.d.clock.now();
     if (this.pollTimer) clearInterval(this.pollTimer);
@@ -569,7 +580,7 @@ export class CallSession {
     return this.stopping;
   }
 
-  private async finalize(reason: string, phoneDown: Promise<void> | undefined) {
+  private async finalize(reason: string, by: EndedBy, phoneDown: Promise<void> | undefined) {
     const cfg = this.d.config();
     // The phone leg goes down before the voice session closes, but a carrier request that hangs
     // mustn't keep the session (and shutdown) from cleaning up.
@@ -592,6 +603,7 @@ export class CallSession {
       at: this.endedAt - this.d.meta.startedAt,
       endedAt: this.endedAt,
       reason,
+      endedBy: by,
       costUsd: Math.round(costs.totalUsd * 10000) / 10000,
       lunaCalls: costs.luna.calls,
       jevTicks: this.orch.jevTicks,

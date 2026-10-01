@@ -387,7 +387,7 @@ export function publicRoutes(d: PublicDeps) {
 
   app.post("/call/:id/hangup", (c) => {
     const id = c.req.param("id");
-    if (d.gate.isActive(id)) void d.manager.hangup(id, "hung up on the page");
+    if (d.gate.isActive(id)) void d.manager.hangup(id, "hung up on the page", "caller");
     return c.body(null, 204);
   });
 

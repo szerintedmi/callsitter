@@ -93,6 +93,7 @@ table.sip{font:12px/1.4 ui-monospace,monospace}table.sip th{white-space:nowrap;c
 .bar{display:inline-block;width:44px;height:6px;background:var(--line);border-radius:3px;vertical-align:middle;overflow:hidden}
 .bar i{display:block;height:100%;background:var(--muted)}.bar.scam i{background:var(--scam)}.bar.spam i{background:var(--spam)}.bar.genuine i{background:var(--genuine)}
 .tag.live{color:var(--genuine);border-color:var(--genuine)}
+.ended{max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tag.by-live,.tag.by-system{color:var(--spam)}
 .ev.has-tip .g{cursor:help}
 .tip{position:fixed;z-index:10;display:none;max-width:min(520px,calc(100vw - 16px));max-height:70vh;overflow:hidden;padding:8px 10px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.3);font-size:12px;line-height:1.45;pointer-events:none;overflow-wrap:anywhere}
 .tip.on{display:block}.tip h4{margin:0 0 4px;font-size:12px}.tip .pre{white-space:pre-wrap}.tip .sec{margin-top:6px;padding-top:6px;border-top:1px solid var(--line)}
@@ -121,6 +122,12 @@ const fmtDur = (r: CallRecord) => {
   const s = Math.round((r.endedAt - r.startedAt) / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
+/** Who ended the call (calls from before it was recorded only have the reason) and why. */
+const Ended: FC<{ r: CallRecord }> = ({ r }) => (
+  <>
+    {r.endedBy && <span class={`tag by-${r.endedBy}`}>{r.endedBy}</span>} {r.endReason ?? ""}
+  </>
+);
 const Verdict: FC<{ v: string | null }> = ({ v }) => (v ? <span class={`tag ${v}`}>{v}</span> : <span class="muted">–</span>);
 
 /** JSON for embedding in <script type="application/json">. */
@@ -217,6 +224,7 @@ export function adminRoutes(d: AdminDeps) {
                 <th>Luna</th>
                 <th>Duration</th>
                 <th>Cost</th>
+                <th>Ended</th>
               </tr>
             </thead>
             <tbody>
@@ -237,6 +245,9 @@ export function adminRoutes(d: AdminDeps) {
                   <td>{r.lunaCalls}</td>
                   <td>{fmtDur(r)}</td>
                   <td title={costTitle(r)}>{r.costUsd != null ? `$${r.costUsd.toFixed(3)}` : "–"}</td>
+                  <td class="ended" title={r.endReason ?? undefined}>
+                    {r.status === "ended" ? <Ended r={r} /> : "–"}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -265,6 +276,11 @@ export function adminRoutes(d: AdminDeps) {
             {fmtTime(call.startedAt)}
             {call.callerIp && ` · IP ${call.callerIp}`}
           </p>
+          {call.status === "ended" && (
+            <p>
+              <span class="muted">Ended:</span> <Ended r={call} />
+            </p>
+          )}
           {call.summary && <p>{call.summary}</p>}
           {call.recordingPath && <audio controls preload="none" src={`/recordings/${call.id}`} />}
           <div id="callinfo" />
