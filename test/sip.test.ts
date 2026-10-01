@@ -173,10 +173,11 @@ async function telnyxWebhook(event_type: string, payload: Record<string, unknown
 const send = (id: string, ev: unknown) => sidebands.get(id)!.ws.send(JSON.stringify(ev));
 
 describe("OpenAI SIP (fake OpenAI)", () => {
+  // National numbers, as Telnyx sends them over SIP.
   const headers = [
-    { name: "From", value: '"Caller" <sip:+447911123456@sip.telnyx.com>;tag=abc' },
+    { name: "From", value: '"07700900321" <sip:07700900321@sip.telnyx.eu>;tag=abc' },
     { name: "To", value: "<sip:proj_test@sip.api.openai.com>" },
-    { name: "Diversion", value: "<sip:+447700900111@x>;reason=no-answer" },
+    { name: "Diversion", value: "<sip:07700900111@x>;reason=no-answer" },
   ];
 
   test("rejects unsigned webhooks", async () => {
@@ -192,13 +193,15 @@ describe("OpenAI SIP (fake OpenAI)", () => {
     expect(accept.body.session).toMatchObject({ type: "live", model: cfg.model, audio: { output: { voice: cfg.voice } }, delegation: { type: "client" } });
     expect(accept.body.session.audio.format).toBeUndefined();
     expect(accept.body.session.instructions).toContain(cfg.instructions.trim().split("\n").at(-1));
-    expect(accept.body.session.instructions).not.toContain("{current_time}"); // filled at call start
+    // Filled at call start; the number as the phone shows it.
+    expect(accept.body.session.instructions).not.toMatch(/\{(current_time|caller_number)\}/);
+    expect(accept.body.session.instructions).toContain("07700 900321");
     expect(sidebands.get("live_1")!.auth).toBe("Bearer sk-test");
     await until(() => sidebands.get("live_1")!.sent.length > 0);
     expect(sidebands.get("live_1")!.sent[0]).toMatchObject({ type: "session.instructions.append", delegation_id: null });
 
     const call = (await repo.findByCallControlId("sip:live_1"))!;
-    expect(call).toMatchObject({ from: "+447911123456", to: "proj_test", divertedFrom: "+447700900111", status: "active" });
+    expect(call).toMatchObject({ from: "+447700900321", to: "proj_test", divertedFrom: "+447700900111", status: "active" });
 
     // Every header is kept for the call page's (collapsed) SIP headers section.
     const stored = (await repo.listEvents(call.id)).map((e) => e.event).find((e) => e.type === "sip.headers");

@@ -247,6 +247,9 @@ describe("call flow engine", () => {
     expect(() => parseConfig("flow", { rules: [{ stage: "x" }], silence: { hang_up_in: ["x"] } })).toThrow(
       /silence\.hang_up_in\.0: x is not a stage with tell_live/,
     );
+    expect(() => flow([{ stage: "x", then: { hang_up: true, when_live_asks_for_help: "a" } }])).toThrow(
+      /rules\[x\]\.then\.when_live_asks_for_help: when_live_asks_for_help needs tell_live/,
+    );
     expect(() => flow([{ stage: "x", when: { stage: "y" } }])).toThrow(/y is not none or a stage with tell_live/);
     expect(() => flow([{ stage: "x" }, { stage: "x" }])).toThrow(/duplicate stage x/);
     expect(() => flow([{ stage: "x", when: { verdict: { min: 0.5 } } }])).toThrow(/rules\[x\]\.when\.verdict/);

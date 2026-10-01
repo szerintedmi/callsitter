@@ -174,10 +174,10 @@ describe("steel thread (fake vendors)", () => {
     const res = await webhook("call.initiated", {
       call_control_id: ccid,
       direction: "incoming",
-      from: "+447911123456",
+      from: "+447700900321",
       to: "+447700900999",
       calling_party_type: "pstn",
-      from_sip_uri: "+447911123456@88.215.60.101:5060",
+      from_sip_uri: "+447700900321@88.215.60.101:5060",
       client_state: null,
       sip_headers: [{ name: "Diversion", value: "<sip:+447700900111@x>;reason=no-answer" }],
     });
@@ -194,7 +194,7 @@ describe("steel thread (fake vendors)", () => {
     const sip = (await repo.listEvents(callId)).find((e) => e.event.type === "sip.headers")!.event;
     expect(sip).toMatchObject({ source: "telnyx", headers: [{ name: "Diversion", value: "<sip:+447700900111@x>;reason=no-answer" }] });
     // The rest of call.initiated, minus what the call row already has.
-    expect((sip as { info?: Record<string, string> }).info).toEqual({ calling_party_type: "pstn", from_sip_uri: "+447911123456@88.215.60.101:5060" });
+    expect((sip as { info?: Record<string, string> }).info).toEqual({ calling_party_type: "pstn", from_sip_uri: "+447700900321@88.215.60.101:5060" });
   });
 
   test("call.answered → noise suppression and dual-channel recording started", async () => {
@@ -242,7 +242,7 @@ describe("steel thread (fake vendors)", () => {
     expect(voice.appended[0]).toContain(wasteTime.trim());
 
     // The owner replies to the call's status message on Telegram → Live.
-    expect(owner.sent[0]!.text).toContain("+447911123456");
+    expect(owner.sent[0]!.text).toContain("+447700900321");
     await desk.onMessage({ messageId: 99, text: "~ask which branch they're calling from", replyTo: owner.sent[0]!.id, date: Date.now() });
     expect(voice.appended).toContain("SUPERVISOR: ask which branch they're calling from");
 
@@ -321,7 +321,7 @@ describe("steel thread (fake vendors)", () => {
 
   test("admin UI shows the call; it is not served on the hooks host", async () => {
     const list = await (await fetch(`${base()}/`)).text();
-    expect(list).toContain("+447911123456");
+    expect(list).toContain("+447700900321");
     const detail = await (await fetch(`${base()}/calls/${callId}`)).text();
     expect(detail).toContain("waste_time");
     expect(detail).toContain("Bank impersonation scam");

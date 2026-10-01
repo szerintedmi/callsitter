@@ -5,6 +5,7 @@ import { logger } from "../core/log";
 import type { Repo } from "../core/ports";
 import { sipHeader, sipUser, type OpenAiSip, type SipHeader } from "../adapters/openai-live/sip";
 import { divertedFrom } from "../adapters/telnyx/webhook";
+import { toE164 } from "../core/phone";
 import { RecentIds } from "./recent-ids";
 
 const log = logger("sip");
@@ -128,12 +129,15 @@ export function openAiSipRoutes(d: SipRoutesDeps) {
     const test = d.browserSip.claim(sipHeader(headers, TEST_HEADER), callId);
     // Logged until the header mapping is confirmed on real calls (From/To/Diversion from Telnyx).
     log.info(`incoming call (${headers.length} SIP headers, media ${mediaSecurity ?? "unknown"})`, { callId, sipSession: sessionId });
+    // Telnyx sends national numbers over SIP; calls are stored with E.164 ones, as over call control.
+    const cc = d.config.get().connection.country_code;
+    const e164 = (n: string | undefined) => n && toE164(n, cc);
     await d.manager.registerIncoming({
       callId,
       callControlId: ccid,
-      from: test ? "browser (SIP)" : (sipUser(sipHeader(headers, "From")) ?? ""),
+      from: test ? "browser (SIP)" : (e164(sipUser(sipHeader(headers, "From"))) ?? ""),
       to: test ? "test call" : (sipUser(sipHeader(headers, "To")) ?? ""),
-      divertedFrom: test ? undefined : divertedFrom(headers),
+      divertedFrom: test ? undefined : e164(divertedFrom(headers)),
     });
     await d.manager.sipHeaders(callId, "openai", headers, { mediaSecurity });
     const record = sc.record;

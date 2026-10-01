@@ -15,7 +15,7 @@ export async function runLunaCase(c: LunaCase, cfg: AppConfig, apiKey: string, j
   const lines = parseLines(c.transcript);
   const transcript: TranscriptEntry[] = lines.map((l, i) => ({ seq: i + 1, speaker: l.speaker, text: l.text, at: i * 3000, final: true }));
   const luna = new LunaAgent({ apiKey, config: () => cfg.luna });
-  const meta = { callId: "eval", from: "+440000000000", to: "+440000000001", startedAt: Date.now() };
+  const meta = { callId: "eval", from: c.from, to: "+440000000001", startedAt: Date.now() };
   const stage = c.stage ?? null;
   if (c.run === "summary") {
     const { text } = await luna.summarize(meta, transcript, { stage });

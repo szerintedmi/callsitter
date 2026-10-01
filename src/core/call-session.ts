@@ -1,5 +1,5 @@
 import { b64decode, b64encode, BYTES_PER_MS, isCodec, levelDbfs, SILENCE_BYTE, type AudioFormat, type Codec } from "./audio";
-import { fillCurrentTime, ownerAppendText, type AppConfig, type LiveAppend } from "./config";
+import { liveInstructions, ownerAppendText, type AppConfig, type LiveAppend } from "./config";
 import { logger } from "./log";
 import { errMsg, Orchestrator, type Steer } from "./orchestrator";
 import { SpeechTrace } from "./speech-trace";
@@ -196,7 +196,7 @@ export class CallSession {
     try {
       voice = await this.d.voice.connect(
         {
-          config: { ...cfg.live, instructions: fillCurrentTime(cfg.live.instructions, this.answeredAt) },
+          config: { ...cfg.live, instructions: liveInstructions(cfg, this.answeredAt, this.d.meta.from) },
           codec: this.codec,
           greeted: greeting ? cfg.live.greeting : undefined,
           signal: this.connecting.signal,
@@ -439,9 +439,9 @@ export class CallSession {
         this.appended(steer, now - since, true);
         continue;
       }
-      const m = current ? steer : { ...steer, message: steer.delegation!.fallback };
+      const m: Steer = current ? steer : { ...steer, message: steer.delegation!.fallback, fallback: true };
       this.voice?.append(m.message.as, m.message.text, m.delegation?.id);
-      this.appended(m, now - since, false, !current);
+      this.appended(m, now - since, false);
       sent = true;
     }
     // Give Live time to act on it: a silence prompt right after one pre-empted a supervisor step.
@@ -449,8 +449,7 @@ export class CallSession {
   }
 
   /** Records a text sent to Live (or dropped) for the timeline. */
-  private appended(s: Steer, heldMs: number, dropped: boolean, fallback = false) {
-    fallback ||= s.delegation !== undefined && s.message === s.delegation.fallback;
+  private appended(s: Steer, heldMs: number, dropped: boolean) {
     this.d.bus.publish({
       type: "live.append",
       callId: this.callId,
@@ -461,7 +460,7 @@ export class CallSession {
       ...(s.stage ? { stage: s.stage } : {}),
       heldMs,
       ...(s.delegation ? { delegationId: s.delegation.id } : {}),
-      ...(fallback ? { fallback } : {}),
+      ...(s.fallback ? { fallback: true } : {}),
       ...(dropped ? { dropped } : {}),
     });
   }

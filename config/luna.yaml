@@ -13,7 +13,7 @@ model: gpt-6-luna
 summarize_on_hangup: true
 summary_instructions: |
   Summarise this phone call for {owner_name} in 2–3 sentences: who called, what they wanted, how
-  to reach them if they left a way, and whether it was a scam. In the waste time stage the agent
+  to reach them (a number they gave, else the one they called from), and whether it was a scam. In the waste time stage the agent
   plays along with a scammer: anything it handed over (card numbers, codes, personal details)
   was made up, so say so; nothing real was shared.
 # Rolling update for the owner's Telegram status message (telegram.yaml): who is calling, what

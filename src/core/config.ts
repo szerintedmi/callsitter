@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CODECS } from "./audio";
+import { spokenNumber } from "./phone";
 
 // Config schemas for the YAML files in config/. Runtime-agnostic: loading is done
 // by an adapter implementing ConfigSource.
@@ -148,6 +149,12 @@ export function ownerAppendText(st: TelegramConfig["steering"], text: string): s
 export const CURRENT_TIME = "{current_time}";
 /** Filled each time they're sent: Live's at call start, Jev's per classification, Luna's per run. */
 const CURRENT_TIME_TEXTS = ["live.instructions", "jev.context", "luna.instructions"];
+/**
+ * The caller's number as Live would read it (spokenNumber), e.g. "07700 900461" or "withheld";
+ * only in live.instructions. Jev and Luna get the number with the call's details.
+ */
+export const CALLER_NUMBER = "{caller_number}";
+const CALLER_NUMBER_TEXTS = ["live.instructions"];
 
 // UK time, like the phone the prompts describe. en-GB names the zone BST or GMT.
 const UK_TIME = new Intl.DateTimeFormat("en-GB", {
@@ -169,6 +176,11 @@ export function fillCurrentTime(text: string, ms: number): string {
   const p = Object.fromEntries(UK_TIME.formatToParts(ms).map((x) => [x.type, x.value]));
   const time = `${p.weekday} ${p.year}-${MONTHS[Number(p.month) - 1]}-${p.day} ${p.hour}:${p.minute} ${p.timeZoneName}`;
   return text.replaceAll(CURRENT_TIME, time);
+}
+
+/** Live's prompt for a call from `from` that started at `ms`: {current_time} and {caller_number} filled. */
+export function liveInstructions(cfg: AppConfig, ms: number, from: string): string {
+  return fillCurrentTime(cfg.live.instructions, ms).replaceAll(CALLER_NUMBER, spokenNumber(from, cfg.connection.country_code));
 }
 
 /** How a text is sent; defaults.tell_live sets them for every tell_live. */
@@ -226,6 +238,9 @@ const Rule = z
         // Appended to the Live session as `as`; the call enters this stage. A fixed text isn't
         // re-sent while the call is in this stage.
         tell_live: TellLiveInput.optional(),
+        // While the call is in this stage, the answer when Live asks for help: in place of the
+        // text of the top-level when_live_asks_for_help.tell_live, sent the same way.
+        when_live_asks_for_help: z.string().min(1).max(MAX_APPEND_CHARS).optional(),
         hang_up: z.literal(true).optional(),
       })
       .superRefine((t, ctx) => {
@@ -235,6 +250,7 @@ const Rule = z
         const hasResponse = t.tell_live?.text.includes(LUNA_RESPONSE);
         if (t.tell_live && t.ask_luna && !hasResponse) issue(`with ask_luna, the text needs ${LUNA_RESPONSE}`, ["tell_live", "text"]);
         if (hasResponse && !t.ask_luna) issue(`${LUNA_RESPONSE} needs ask_luna`, ["tell_live", "text"]);
+        if (t.when_live_asks_for_help && !t.tell_live) issue("when_live_asks_for_help needs tell_live (the call enters the stage only then)", ["when_live_asks_for_help"]);
       })
       .optional(),
   })
@@ -346,7 +362,8 @@ export const CallFlowConfig = z
     // Live asked for help itself (session.delegation.created). With {luna_response} in the text,
     // Luna is asked and her reply fills it; Live is waiting, so it always gets an answer:
     // `fallback` when Luna has none, is over her limits, or the call moved on. Without it, the
-    // text goes out at once and Luna isn't asked.
+    // text goes out at once and Luna isn't asked. A rule's then.when_live_asks_for_help replaces
+    // tell_live while the call is in its stage.
     when_live_asks_for_help: z
       .strictObject({
         tell_live: TellLiveInput.default({ as: "commentary", text: "SUPERVISOR: {luna_response}" }),
@@ -451,6 +468,9 @@ export const ConnectionConfig = z.object({
   // Live (for OpenAI SIP: the accept and the sideband) must be up within this long of answering,
   // or the call is hung up. The call's max_call_seconds also runs from answer.
   connect_timeout_ms: z.number().int().positive().default(10000),
+  // The phone's country calling code: national caller numbers are stored as E.164 with it, and
+  // Live reads numbers from this country in national form (src/core/phone.ts).
+  country_code: z.number().int().min(1).max(999).default(44),
   // How long ending a call waits for the carrier's hangup request before closing the session
   // anyway (the request carries on in the background).
   hangup_timeout_ms: z.number().int().positive().default(5000),
@@ -730,9 +750,17 @@ export function checkGames(games: GamesConfig, flow: CallFlowConfig): void {
   }
 }
 
+/** What answers Live's request for help in this call-flow stage (null: none yet). */
+export function helpText(flow: CallFlowConfig, stage: string | null): TellLive {
+  const help = flow.when_live_asks_for_help.tell_live;
+  const own = stage === null ? undefined : flow.rules.find((r) => r.stage === stage)?.then?.when_live_asks_for_help;
+  return own ? { ...help, text: own } : help;
+}
+
 /** Luna's mid-call instructions are needed once call-flow.yaml asks her mid-call. */
 export function checkLunaGuidance(luna: LunaConfig, flow: CallFlowConfig): void {
-  const asks = flow.rules.some((r) => r.then?.ask_luna) || flow.when_live_asks_for_help.tell_live.text.includes(LUNA_RESPONSE);
+  const help = [flow.when_live_asks_for_help.tell_live.text, ...flow.rules.map((r) => r.then?.when_live_asks_for_help)];
+  const asks = flow.rules.some((r) => r.then?.ask_luna) || help.some((t) => t?.includes(LUNA_RESPONSE));
   if (asks && !luna.instructions) {
     throw new ConfigError(
       `Invalid config:\n  luna.yaml: instructions: needed, call-flow.yaml asks Luna mid-call (ask_luna or ${LUNA_RESPONSE} in when_live_asks_for_help)`,
@@ -776,7 +804,8 @@ export interface ConfigVars {
  * every config text. Other placeholders are rejected, except
  * {luna_response} in call-flow.yaml (the schema checks where), which is filled with each Luna reply,
  * {owner_message} in telegram.yaml steering.text, filled with each of the owner's messages, and
- * {current_time} in CURRENT_TIME_TEXTS, filled as they're sent (fillCurrentTime).
+ * {current_time} in CURRENT_TIME_TEXTS, filled as they're sent (fillCurrentTime), and
+ * {caller_number} in CALLER_NUMBER_TEXTS, filled at call start.
  */
 export function fillPlaceholders(cfg: AppConfig, vars: ConfigVars = {}): AppConfig {
   const values: Record<string, string> = {
@@ -799,7 +828,8 @@ export function fillPlaceholders(cfg: AppConfig, vars: ConfigVars = {}): AppConf
         const later =
           (m === LUNA_RESPONSE && path[0] === "flow") ||
           (m === OWNER_MESSAGE && at === "telegram.steering.text") ||
-          (m === CURRENT_TIME && CURRENT_TIME_TEXTS.includes(at));
+          (m === CURRENT_TIME && CURRENT_TIME_TEXTS.includes(at)) ||
+          (m === CALLER_NUMBER && CALLER_NUMBER_TEXTS.includes(at));
         if (!later) {
           issues.push(`  ${where(path)}: unknown placeholder ${m} (known: ${Object.keys(values).map((k) => `{${k}}`).join(", ")})`);
         }

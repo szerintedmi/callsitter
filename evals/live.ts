@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import type { ClientEvent, ServerEvent } from "openai/resources/live/live";
 import { LIVE_URL } from "../src/adapters/openai-live/session";
 import { b64decode, b64encode, BYTES_PER_MS, levelDbfs } from "../src/core/audio";
-import { fillCurrentTime, LUNA_RESPONSE, ownerAppendText, type AppConfig, type LiveAppend } from "../src/core/config";
+import { helpText, liveInstructions, LUNA_RESPONSE, ownerAppendText, type AppConfig, type LiveAppend, type TellLive } from "../src/core/config";
 import { parseOwnerMessage } from "../src/core/owner-desk";
 import { StereoRecorder } from "../src/core/wav";
 import { parseHistory, type Line, type LiveCase, type Settings } from "./cases";
@@ -31,12 +31,17 @@ export async function runLiveCase(c: LiveCase, cfg: AppConfig, s: Settings, apiK
   const callerAudio = await tts(c.caller, s, apiKey);
   const items = parseHistory(c.history);
   const history = items.filter((i): i is Line => "speaker" in i);
+  // The stage the call is in once the texts so far are sent: the last that enters one.
+  const told = [...items.flatMap((i) => ("told" in i ? [i.told] : [])), ...c.told, ...c.after_caller];
+  const stage = told.map((t) => flowStage(cfg, t)).filter((t) => t !== undefined).at(-1) ?? null;
   const reply = await converse({
     cfg,
     apiKey,
+    from: c.from,
     history: items.map((i) => ("told" in i ? { told: stageText(cfg, i.told).text } : i)),
     told: c.told.map((stage) => stageText(cfg, stage)),
-    afterCaller: c.after_caller.map((stage) => stageText(cfg, stage)),
+    afterCaller: c.after_caller.map((t) => (t === "help" ? helpText(cfg.flow, stage) : stageText(cfg, t))),
+    help: helpText(cfg.flow, stage),
     callerAudio,
     quietMs: s.live_quiet_ms,
     timeoutMs: s.live_timeout_ms,
@@ -52,6 +57,15 @@ export async function runLiveCase(c: LiveCase, cfg: AppConfig, s: Settings, apiK
     `    replied after ${secs(timing.replyAfterMs)}, longest pause ${secs(timing.longestPauseMs)} · recording: ${recordTo}`,
   ].join("\n");
   return { pass: g.pass, detail: g.reason, log, recording: recordTo, timing };
+}
+
+/** The call-flow stage a `told` text puts the call in, if any. */
+function flowStage(cfg: AppConfig, told: string): string | undefined {
+  if (told.startsWith("button:")) {
+    const b = cfg.telegram.steering.buttons.find((x) => x.label === told.slice("button:".length));
+    return b && "stage" in b ? b.stage : undefined;
+  }
+  return cfg.flow.rules.some((r) => r.stage === told && r.then?.tell_live) ? told : undefined;
 }
 
 /**
@@ -123,10 +137,14 @@ async function tts(text: string, s: Settings, apiKey: string): Promise<Uint8Arra
 interface Conversation {
   cfg: AppConfig;
   apiKey: string;
+  /** the caller's number, as the call has it */
+  from: string;
   /** `told` lines go in as developer messages: Live takes appends only once the session has started */
   history: (Line | { told: string })[];
   told: { as: LiveAppend; text: string }[];
   afterCaller: { as: LiveAppend; text: string }[];
+  /** what answers Live's request for help, in the stage the texts put the call in */
+  help: TellLive;
   callerAudio: Uint8Array;
   quietMs: number;
   timeoutMs: number;
@@ -182,7 +200,7 @@ function converse(o: Conversation): Promise<{ text: string; delegated: boolean; 
         type: "session.start",
         session: {
           model: o.cfg.live.model,
-          instructions: fillCurrentTime(o.cfg.live.instructions, Date.now()),
+          instructions: liveInstructions(o.cfg, Date.now(), o.from),
           audio: { format: { type: "audio/pcm", rate: 24000 }, output: { voice: o.cfg.live.voice } },
           delegation: { type: "client" },
           // "Developer and user messages use input_text; assistant messages use text or output_text."
@@ -219,10 +237,9 @@ function converse(o: Conversation): Promise<{ text: string; delegated: boolean; 
           agentSpeechUntil = Math.max(agentSpeechUntil, Date.now());
           break;
         case "session.delegation.created": {
-          // As the app answers: the fixed text, or where the app would ask Luna, the fallback.
+          // As the app answers: the stage's fixed text, or where the app would ask Luna, the fallback.
           delegated = true;
-          const help = o.cfg.flow.when_live_asks_for_help;
-          const f = help.tell_live.text.includes(LUNA_RESPONSE) ? help.fallback : help.tell_live;
+          const f = o.help.text.includes(LUNA_RESPONSE) ? o.cfg.flow.when_live_asks_for_help.fallback : o.help;
           send({ type: APPEND_EVENT[f.as], delegation_id: ev.delegation.id, content: f.text });
           break;
         }
