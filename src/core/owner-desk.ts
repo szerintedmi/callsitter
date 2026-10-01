@@ -47,6 +47,12 @@ const BUTTON = "steer:";
 const SUGGESTION = "sug:";
 /** suggestion generations kept, so a tap on buttons just replaced still sends what it showed */
 const KEEP_SUGGESTION_GENERATIONS = 3;
+/** what each kind does to the agent (call-flow.yaml tell_live), for the owner */
+const AS_EFFECT: Record<LiveAppend, string> = {
+  commentary: "the agent acts on it now, in its own words",
+  thinking: "silent, it shapes later replies but isn't spoken now",
+  instructions: "it cuts the agent off and redirects it",
+};
 
 interface CallView {
   callId: string;
@@ -291,6 +297,10 @@ export class OwnerDesk {
     const res = this.steerCall(v, steer.text, steer.as);
     if (!res.ok) return void (await reply(`Not sent: ${res.reason}.`));
     this.track(m.messageId, callId);
+    // Says how it went out, so a prefix that made it silent (thinking) isn't a surprise.
+    await this.sendFor(callId, `Sent as ${steer.as}: ${AS_EFFECT[steer.as]}.`, { replyTo: m.messageId }).catch((err) =>
+      log.warn("reply not sent", { callId, err }),
+    );
   }
 
   /**
@@ -369,6 +379,18 @@ export class OwnerDesk {
   }
 
   /**
+   * Jev's verdict is below what the call flow needs to act on it (the first rule with
+   * `verdict: { is, min }` for it), e.g. scam at 62% when waste_time needs 80%.
+   */
+  private leaning(c: { verdict: Verdict; confidence: number }): boolean {
+    for (const r of this.d.config().flow.rules) {
+      const w = r.when.verdict;
+      if (w && typeof w === "object" && "is" in w && w.min !== undefined && [w.is].flat().includes(c.verdict)) return c.confidence < w.min;
+    }
+    return false;
+  }
+
+  /**
    * The status message: plain text, with the transcript newest first in a collapsed quote (it
    * shows its first lines until tapped), and the steering buttons while the call is live.
    */
@@ -379,7 +401,7 @@ export class OwnerDesk {
       : `📞 Incoming call · ${v.from || "unknown caller"} · ${clock(now - v.startedAt)}`;
     const c = v.verdict;
     const state = [
-      c ? `${c.verdict} ${Math.round(c.confidence * 100)}% · urgency ${c.urgency.toFixed(2)}` : v.ended ? "" : "listening…",
+      c ? `${this.leaning(c) ? "leaning " : ""}${c.verdict} ${Math.round(c.confidence * 100)}% · urgency ${c.urgency.toFixed(2)}` : v.ended ? "" : "listening…",
       v.stage ? `stage: ${v.stage.replaceAll("_", " ")}` : "",
     ].filter(Boolean).join(" · ");
     const before = [state ? `${head}\n${state}` : head];

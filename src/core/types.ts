@@ -179,6 +179,7 @@ export type CallEvent =
       endedAt: number;
       reason: string;
       costUsd: number;
+      /** Luna requests of every kind so far (guidance, rolling summaries), as costs.luna.calls */
       lunaCalls: number;
       jevTicks: number;
       /** by vendor, from the usage they reported (calls ended before this was recorded have none) */

@@ -195,8 +195,8 @@ rules:
       tell_live:
         as: commentary
         text: |
-          You have everything you need. Stop asking questions: say in one short sentence what
-          you'll pass on and ask if there's anything else. Once they say that's all, thank them,
+          You have everything you need. Stop asking questions: sum up in one short sentence what
+          you've noted and ask if there's anything else. Once they say that's all, thank them,
           say goodbye and stay quiet.
 
   # Confidently genuine: how to handle one is only in this text, not the Live prompt. Live judges
@@ -216,13 +216,13 @@ rules:
           need. Get what {owner_name} needs to know, plus a way to reach them only if it matters:
           take whatever they offer (number, email, website), don't insist on a phone number. You
           can't see the diary: when they offer a time or change, don't say whether it works; say
-          you'll check and get back to them. Once nothing important is missing, say in one
-          sentence what you'll pass on and ask if there's anything else. If they sincerely ask
+          you'll check and get back to them. Once nothing important is missing, sum up in one
+          sentence what you've noted and ask if there's anything else. If they sincerely ask
           whether you're a real person, or need {owner_name} personally, you may say you're
           {owner_name}'s AI assistant taking messages. Carry on naturally.
 
   # Too early to tell, or Jev is unsure: do nothing. The Live prompt is the unclear handling:
-  # ask who is calling and why, then pass it on (measured: a clarify text changed nothing).
+  # ask who is calling and why, then sum up (measured: a clarify text changed nothing).
   # Luna isn't asked mid-call: she judged calls on her own and her steps contradicted the stage
   # texts (a goodbye before "anything else?", the owner in the third person), and Live handles
   # unclear calls itself. She still writes the owner's updates and summary (luna.yaml).
@@ -232,11 +232,13 @@ rules:
 
 # Live asked for help itself (session.delegation.created). Live is waiting, so it always gets an
 # answer. This one is fixed, without Luna: the Live prompt says to delegate only for what its
-# instructions don't cover (since then, no eval case has asked). The event has no task text, so the
-# answer can only give the status and the next step, as the live-delegation guide asks of a backend
-# result. As commentary the agent replies at once; as thinking, in 5 runs it paused up to 1.7 s
-# mid-reply. ({luna_response} in the text would ask Luna, with `fallback` when she has none.)
+# instructions don't cover (no eval case asks, but a prod scam call asked 8 times). The event has
+# no task text, so the answer can only give the status and the next step, as the live-delegation
+# guide asks of a backend result. Not "as your instructions say": Live took that as its prompt and
+# went back to "I'll pass that on" mid waste_time. As commentary the agent replies at once; as
+# thinking, in 5 runs it paused up to 1.7 s mid-reply. ({luna_response} in the text would ask
+# Luna, with `fallback` when she has none.)
 when_live_asks_for_help:
   tell_live:
     as: commentary
-    text: "SUPERVISOR: Nothing more to add. Reply to the caller now, as your instructions say; don't promise or do anything new."
+    text: "SUPERVISOR: Nothing to add. Reply to the caller and carry on as you were; don't promise anything new."

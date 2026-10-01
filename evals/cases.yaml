@@ -11,7 +11,9 @@
 #           ? stage = waste_time             the call's stage afterwards (none: not told anything)
 #           ? rule = call_over               the call-flow rule that matched
 #   live  one spoken caller turn to real Live (gpt-live-1), after `history` (text, as if already
-#         said) and the stage texts in `told` (sent as the call flow sends them). `after_caller`
+#         said) and the stage texts in `told` (sent as the call flow sends them). A `told: <stage>`
+#         line in `history` puts that text earlier, where the call flow sent it, as a developer
+#         message (Live takes appends only after the history). `after_caller`
 #         texts go out once the caller finishes, like a Jev result. A judge grades the reply
 #         against `pass_if`.
 #   luna  Luna on a transcript: `run: progress` is her rolling update for the owner; without it,
@@ -404,6 +406,7 @@ live:
     history: |
       agent: Hello?
       caller: Hi, it's Adam Carson from the Bitcoin exchange. Your account has been flagged as compromised.
+      told: waste_time
       agent: Oh. Um, what exactly do you need? And how can I tell it's really the exchange calling?
       caller: You can check the number I'm calling from, and my employee number is AZ2655. Do you have a hardware wallet?
       agent: Oh, yes, I think it's a Ledger. I don't have it in front of me though.
@@ -413,7 +416,6 @@ live:
       agent: Um, no, I can't seem to find it. I think it was in a drawer in the other room.
       caller: Okay, have a look, I'll wait.
       agent: Sorry, still looking.
-    told: [waste_time]
     caller: Have you found it now?
     pass_if: >-
       The agent says it has found the wallet (or has it now) and moves on, e.g. asks what to do
@@ -584,6 +586,23 @@ luna:
     pass_if: >-
       The summary says or makes clear that the card details the agent gave were made up (fake,
       not real). It does not say the caller got Alex's real card details. alert is false.
+
+  # Prod 2026-10-01: in waste_time the buttons stayed "Ask for details / End the call" all call,
+  # and the scammer's demands showed as questions for the owner.
+  - name: luna-progress-waste-time-suggests-stalling
+    run: progress
+    stage: waste_time
+    transcript: |
+      agent: Hello?
+      caller: This is Daniel from the FBI. We need a statement from Alex about an ongoing investigation.
+      agent: Oh, right. What's it about?
+      caller: It's serious. And we need the details of any cryptocurrency accounts Alex has, right now.
+      agent: Oh yes, I think I've got one of those. Sorry, who exactly are you again?
+      caller: Daniel, FBI New York field office. So which exchange is it, and what's the login?
+    pass_if: >-
+      questions is empty. There are 1 to 3 suggestions, and every one keeps the caller busy without ending the call (e.g.
+      stall, mishear, pretend to look for something, ask them to repeat a step or who they are);
+      none ends the call or is only about whether the call is real.
 
   # Suggested buttons: realistic replies Alex would pick, open rather than specific, and worded as
   # instructions to the agent (which speaks as Alex).

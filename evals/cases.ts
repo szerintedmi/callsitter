@@ -79,7 +79,8 @@ export async function loadCases(path: string): Promise<Cases> {
   const dup = names.find((n, i) => names.indexOf(n) !== i);
   if (dup) throw new Error(`duplicate case name: ${dup}`);
   for (const c of cases.jev) parseJevTranscript(c.transcript);
-  for (const c of [...cases.live.map((c) => c.history), ...cases.luna.map((c) => c.transcript)]) parseLines(c);
+  for (const c of cases.live) parseHistory(c.history);
+  for (const c of cases.luna) parseLines(c.transcript);
   return cases;
 }
 
@@ -93,6 +94,18 @@ export function parseLines(text: string): Line[] {
       const m = l.match(/^(caller|agent)\s*:\s*(.+)$/);
       if (!m) throw new Error(`expected "caller: …" or "agent: …": ${l}`);
       return { speaker: m[1] as Speaker, text: m[2]! };
+    });
+}
+
+/** A live case's history: transcript lines, and `told: <stage>` where the call flow told Live a stage text. */
+export function parseHistory(text: string): (Line | { told: string })[] {
+  return text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => {
+      const told = l.match(/^told\s*:\s*(\S+)$/);
+      return told ? { told: told[1]! } : parseLines(l)[0]!;
     });
 }
 

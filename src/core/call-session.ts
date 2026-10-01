@@ -594,13 +594,13 @@ export class CallSession {
       endedAt: this.endedAt,
       reason,
       costUsd: Math.round(costs.totalUsd * 10000) / 10000,
-      lunaCalls: this.orch.lunaCalls,
+      lunaCalls: costs.luna.calls,
       jevTicks: this.orch.jevTicks,
       costs,
     });
     log.info(
       `ended (${reason}): ${(liveSeconds / 60).toFixed(1)} min, ${this.orch.jevTicks} Jev ticks, ` +
-        `${this.orch.lunaCalls} Luna calls, $${costs.totalUsd.toFixed(3)}`,
+        `${costs.luna.calls} Luna calls, $${costs.totalUsd.toFixed(3)}`,
       { callId: this.callId },
     );
     if (this.replyLatencies.length) {
