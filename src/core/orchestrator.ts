@@ -1,4 +1,4 @@
-import { fillCurrentTime, LUNA_RESPONSE, MAX_APPEND_CHARS, TIME_UP, type AppConfig, type TellLive } from "./config";
+import { fillCurrentTime, helpText, LUNA_RESPONSE, MAX_APPEND_CHARS, TIME_UP, type AppConfig, type TellLive } from "./config";
 import { CostMeter } from "./cost";
 import { decide, matchRule, type FlowAction } from "./flow";
 import type { Agent, Classifier, Clock, DelegationRequest, EventBus, ToolContext } from "./ports";
@@ -27,6 +27,8 @@ export interface Steer {
   stage?: string;
   /** answers this Live delegation; a delegation is always answered, with `fallback` if superseded */
   delegation?: { id: string; fallback: TellLive };
+  /** the message is the delegation's fallback, sent instead of guidance that went stale or never came */
+  fallback?: true;
 }
 
 /** Where Luna's reply goes. */
@@ -442,7 +444,7 @@ export class Orchestrator {
   private async callLuna(reason: string, c: Classification | null, target: LunaTarget): Promise<string> {
     const cfg = this.d.config();
     const help = cfg.flow.when_live_asks_for_help;
-    const template = target.delegationId ? help.tell_live : target.rule?.message;
+    const template = target.delegationId ? helpText(cfg.flow, this.stage) : target.rule?.message;
     const trigger: LunaTrigger = target.delegationId ? "delegation" : "rule";
     if (this.lunaCalls >= cfg.luna.limits.max_calls) {
       this.note("info", `Luna not called (${reason}): limit of ${cfg.luna.limits.max_calls} calls reached`);
@@ -538,20 +540,20 @@ export class Orchestrator {
 
   /**
    * The voice model delegated a request to the client; Luna's reply answers it, or the
-   * fallback if Luna had none (or it went stale). Without {luna_response} in
-   * when_live_asks_for_help, its text answers at once and Luna isn't asked. Returns the text sent.
+   * fallback if Luna had none (or it went stale). Without {luna_response} in the stage's
+   * when_live_asks_for_help text, that text answers at once and Luna isn't asked. Returns the text sent.
    */
   async delegate(req: DelegationRequest): Promise<string> {
-    const help = this.d.config().flow.when_live_asks_for_help;
-    if (!help.tell_live.text.includes(LUNA_RESPONSE)) {
+    const help = helpText(this.d.config().flow, this.stage);
+    if (!help.text.includes(LUNA_RESPONSE)) {
       if (this.ended) return "";
-      this.d.steer.tellLive({ message: help.tell_live, source: "delegation", delegation: { id: req.id, fallback: help.tell_live } });
-      return help.tell_live.text;
+      this.d.steer.tellLive({ message: help, source: "delegation", delegation: { id: req.id, fallback: help } });
+      return help.text;
     }
     const out = await this.runLuna(`voice agent asked for help (delegation ${req.id})`, { delegationId: req.id });
     if (out || this.ended) return out;
     const { fallback } = this.d.config().flow.when_live_asks_for_help;
-    this.d.steer.tellLive({ message: fallback, source: "delegation", delegation: { id: req.id, fallback } });
+    this.d.steer.tellLive({ message: fallback, source: "delegation", delegation: { id: req.id, fallback }, fallback: true });
     return fallback.text;
   }
 

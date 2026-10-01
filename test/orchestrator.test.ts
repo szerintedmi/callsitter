@@ -26,6 +26,24 @@ describe("orchestrator", () => {
     expect(orch.lunaCalls).toBe(0);
   });
 
+  test("in a stage with its own help text, that text answers Live's request for help", async () => {
+    const config = await loadRepoConfig();
+    const help = { ...config.flow.when_live_asks_for_help.tell_live, text: config.flow.rules.find((r) => r.stage === "waste_time")!.then!.when_live_asks_for_help! };
+    const sent: Steer[] = [];
+    const orch = new Orchestrator({
+      meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+      config: () => config,
+      classifier: scripted({}),
+      agent: { run: async () => ({ toolCalls: [] }), summarize: async () => ({ text: "" }) },
+      bus: new MemoryEventBus(),
+      steer: { tellLive: (s) => void sent.push(s), hangup: async () => {} },
+      clock: { now: () => 0 },
+    });
+    expect(orch.enterStage("waste_time", "Waste time")).toBe(true);
+    expect(await orch.delegate({ id: "d1" })).toBe(help.text);
+    expect(sent.at(-1)).toEqual({ message: help, source: "delegation", delegation: { id: "d1", fallback: help } });
+  });
+
   test("Luna's reply is sent through her rule's tell_live, and the call enters its stage", async () => {
     const config = await loadConfigWithLuna();
     const appended: unknown[] = [];
@@ -381,7 +399,7 @@ describe("orchestrator", () => {
       await r.turnsScam();
       r.releases.shift()!();
       expect(await out).toBe("No specific guidance; carry on naturally.");
-      expect(r.sent.at(-1)).toEqual({ message: r.fallback, source: "delegation", delegation: { id: "d1", fallback: r.fallback } });
+      expect(r.sent.at(-1)).toEqual({ message: r.fallback, source: "delegation", delegation: { id: "d1", fallback: r.fallback }, fallback: true });
     });
 
     test("guidance for a delegation goes out once, carrying its id", async () => {

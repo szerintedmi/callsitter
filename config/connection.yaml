@@ -25,6 +25,10 @@ media_stream:
 # Live (for OpenAI SIP: the accept plus the sideband) must connect within this long of the call
 # being answered, or the call is hung up.
 connect_timeout_ms: 10000
+# The phone's country calling code. Over SIP, Telnyx sends national numbers (07…) and
+# international ones without the +: calls are stored with E.164 numbers using this code, and
+# Live sees numbers from this country in national form ({caller_number} in live.yaml).
+country_code: 44
 # Ending a call waits this long for the carrier's hangup request before closing the session anyway.
 hangup_timeout_ms: 5000
 

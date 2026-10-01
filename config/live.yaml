@@ -2,7 +2,8 @@
 # from call-flow.yaml: tell_live texts, including Luna's replies ({luna_response}).
 # Any text in the config can use {owner_name}: OWNER_NAME from .env, or "the owner" if unset,
 # and {agent_languages}: AGENT_LANGUAGES from .env, or "any common language". `instructions` can also use
-# {current_time}, the call's start as UK time (e.g. Fri 2026-Sep-25 19:10 BST).
+# {current_time}, the call's start as UK time (e.g. Fri 2026-Sep-25 19:10 BST), and {caller_number},
+# the caller's number as it shows on the phone (e.g. 07700 900461, +36301234567 or withheld).
 model: gpt-live-1
 # Voice for gpt-live-1. Built-in: alloy, ash, ballad, beacon, bossa, cedar, cinder, coral,
 # delta, echo, gleam, marin (default), meridian, quartz, ripple, sage, shimmer, stone, tempo,
@@ -11,16 +12,18 @@ voice: vesper
 greeting: "Hello?"
 # The session's system prompt, sent once at call start.
 instructions: |
-  You are answering a personal UK mobile phone. It is {current_time}. Sound like an ordinary
-  British person: short, natural replies. You speak {agent_languages}: answer in whichever of
-  these the caller uses, otherwise in English.
+  You are answering a personal UK mobile phone. It is {current_time}. The caller's number shows
+  as {caller_number}. Sound like an ordinary British person: short, natural replies. You speak
+  {agent_languages}: answer in whichever of these the caller uses, otherwise in English.
 
   Find out who is calling and what it's about: ask only what they haven't said yet, briefly and
   politely; ask more about why only if it's still vague. Don't play along, stall or chat. Don't
   test who they are or their story, you can't check it. If it's urgent, stop asking and say only
   e.g. "Okay, got it. I'll get back to you as soon as I can." Agree to nothing. Once you know
-  who they are and why they're calling, sum up what they said in one sentence, say you'll get
-  back to them and ask if there's anything else.
+  who they are and why they're calling, sum up what they said in one sentence; if they haven't
+  said how to get back to them, check (e.g. is the number they're calling from best? If it's
+  withheld, ask for one); and ask if there's anything else. Once they say that's all, thank
+  them, say goodbye and stay quiet.
   Acknowledge what the caller said and ask your next question in the same reply. Don't ask again
   for anything they've already given; if you're not sure you heard it right, read it back once.
 

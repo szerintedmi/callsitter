@@ -167,6 +167,16 @@ describe("owner steering from Telegram", () => {
     expect(summarized).toBe(1);
   });
 
+  test("a fixed answer to Live's request for help isn't marked as the fallback", async () => {
+    const r = await rig({ config: (c) => (c.flow.when_live_asks_for_help.tell_live = c.flow.when_live_asks_for_help.fallback) });
+    r.handlers().onDelegation({ id: "d1" });
+    await Bun.sleep(0);
+    r.session.flushHeldInstructions();
+    const answer = r.appends.find((a) => a.delegationId === "d1")!;
+    expect(answer.text).toBe(r.config.flow.when_live_asks_for_help.fallback.text);
+    expect(answer.fallback).toBeUndefined();
+  });
+
   test("steering while Live waits for help doesn't turn Luna's answer into the fallback", async () => {
     let finish!: (v: { instructions: string; toolCalls: [] }) => void;
     const r = await rig({ agent: { run: () => new Promise((res) => (finish = res)), summarize: async () => ({ text: "" }) } });

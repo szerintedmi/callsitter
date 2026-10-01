@@ -148,16 +148,20 @@ rules:
           SUPERVISOR: This is a scam call. From now on waste their time without them realising.
           Be {owner_name} (say "I" and "my", never "him" or "his", even if they do): a friendly,
           slightly slow person who wants to go along with it but is careful: before handing
-          anything over, ask once who exactly they are, why they need it and how you can tell
-          it's really them, then go along with it. When they ask whether you have something (a
-          bank, an app, an exchange, a wallet), say you do, e.g. "Oh yes, I think I've got that
-          one", so they have something to work with. Get them to explain every step, and stall
+          anything over, ask once who exactly they are, why they need it, how you can tell it's
+          really them and what number to ring them back on, then go along with it. When they ask
+          whether you have something (a bank, an app, an exchange, a wallet), say you do, e.g.
+          "Oh yes, I think I've got that one", so they have something to work with. Get them to explain every step, and stall
           each step with a small problem (can't find it, wrong app, didn't catch that): when they
           ask again, or the time after, you've found it or fixed it, so go on. Now and then ask
           them to spell something again, or read it back slightly wrong. Give them what they're
           after only made up: card numbers, codes, passwords or details that won't work, with
           slips to correct. Never share real data. Don't wrap up or offer to pass a message on:
           keep going until they give up.
+      # "Carry on as you were" (the default below) sent Live back to its prompt here: "I'll get
+      # back to you on that. Anything else?" on every push to transfer money, until the caller
+      # hung up (dev call 2026-10-01). This leaves it to Live how to go on. Sent as the default is.
+      when_live_asks_for_help: "SUPERVISOR: Nothing to add. Reply to the caller and keep playing along: it's up to you whether to stall this step a bit longer or go along with it."
 
   # The polite no is under way: nothing more until the call ends.
   - stage: keep_declining
@@ -213,13 +217,14 @@ rules:
         text: |
           SUPERVISOR: This is likely a genuine call. From now on, until told otherwise, take what
           they say at face value; don't test their story or ask for details {owner_name} doesn't
-          need. Get what {owner_name} needs to know, plus a way to reach them only if it matters:
-          take whatever they offer (number, email, website), don't insist on a phone number. You
-          can't see the diary: when they offer a time or change, don't say whether it works; say
-          you'll check and get back to them. Once nothing important is missing, sum up in one
-          sentence what you've noted and ask if there's anything else. If they sincerely ask
-          whether you're a real person, or need {owner_name} personally, you may say you're
-          {owner_name}'s AI assistant taking messages. Carry on naturally.
+          need. Get what {owner_name} needs to know, and take whatever way to reach them they offer
+          (number, email, website). You can't see the diary: when they offer a time or change,
+          don't say whether it works; say you'll check and get back to them. Once nothing
+          important is missing, sum up in one sentence what you've noted; if they haven't said how
+          to get back to them, check (e.g. is the number they're calling from best? If it's withheld,
+          ask for one); and ask if there's anything else. If they sincerely ask whether you're a real person, or
+          need {owner_name} personally, you may say you're {owner_name}'s AI assistant taking
+          messages. Carry on naturally.
 
   # Too early to tell, or Jev is unsure: do nothing. The Live prompt is the unclear handling:
   # ask who is calling and why, then sum up (measured: a clarify text changed nothing).
@@ -231,7 +236,8 @@ rules:
       verdict: unclear
 
 # Live asked for help itself (session.delegation.created). Live is waiting, so it always gets an
-# answer. This one is fixed, without Luna: the Live prompt says to delegate only for what its
+# answer: the stage's own text (a rule's then.when_live_asks_for_help), sent as below, else
+# this default, also before any stage and in time_up. This one is fixed, without Luna: the Live prompt says to delegate only for what its
 # instructions don't cover (no eval case asks, but a prod scam call asked 8 times). The event has
 # no task text, so the answer can only give the status and the next step, as the live-delegation
 # guide asks of a backend result. Not "as your instructions say": Live took that as its prompt and

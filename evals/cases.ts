@@ -15,8 +15,12 @@ const Settings = z.strictObject({
 });
 
 const JevCase = z.strictObject({ name: z.string(), transcript: z.string() });
+// The caller's number as the call has it (E.164); empty: withheld.
+const From = z.string().default("+447700900123");
+
 const LiveCase = z.strictObject({
   name: z.string(),
+  from: From,
   history: z.string(),
   told: z.array(z.string()).default([]),
   caller: z.string(),
@@ -25,6 +29,7 @@ const LiveCase = z.strictObject({
 });
 const LunaCase = z.strictObject({
   name: z.string(),
+  from: From,
   // guidance: a Luna run (her guidance and tool calls); progress: her rolling update for the
   // owner; summary: her end-of-call summary
   run: z.enum(["guidance", "progress", "summary"]).default("guidance"),

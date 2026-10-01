@@ -101,6 +101,14 @@ describe("config", () => {
     expect(() => fillPlaceholders(raw)).toThrow(/live\.yaml: greeting: unknown placeholder \{current_time\}/);
   });
 
+  test("{caller_number} is left for call start, in Live's prompt only", async () => {
+    const cfg = await loadConfigWithLuna();
+    expect(cfg.live.instructions).toContain("{caller_number}");
+    const raw = await loadRepoConfig();
+    raw.live.greeting = "Hello, {caller_number}";
+    expect(() => fillPlaceholders(raw)).toThrow(/live\.yaml: greeting: unknown placeholder \{caller_number\}/);
+  });
+
   test("rejects unknown placeholders, naming where they are", async () => {
     const cfg = await loadRepoConfig();
     cfg.live.greeting = "Hello, {owner}'s phone";
