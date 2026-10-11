@@ -1,15 +1,35 @@
 # ScamSitter
 
-An AI call screener for a personal phone number. Divert your calls to a Telnyx number, and an OpenAI **gpt-live-1** agent answers them. **TypeSafe Jev** classifies the growing transcript, and a deterministic call flow (`config/call-flow.yaml`) steers the agent:
+An AI that answers my phone. Scammers get their time wasted, sales calls get a polite no, and real callers get their message taken.
 
-- **Scam** (Jev ≥ 0.85): it tells the voice agent to waste their time, mixing a few tactics.
-- **Sales call (spam, Jev ≥ 0.85):** the agent politely declines, asks to be taken off their list and says goodbye.
-- **Genuine caller:** the agent takes a message itself; it reaches the owner in the call summary.
-- **GPT-6 Luna writes for the owner:** the rolling summary, open questions, suggested replies and urgent alert on the Telegram status message, and the end-of-call summary. She doesn't steer the agent mid-call (below: Luna is off the call).
-- **Urgent** (Jev's urgency ≥ 0.85 while its scam + spam probability is under 0.5, or Luna's rolling summary says the owner may want to act while the caller is on the line): the owner's Telegram status message gets a notifying 🚨 reply, once per call (`telegram.yaml → status.urgent_alert`). It doesn't steer the call.
-- **On Telegram** (`telegram.yaml`), every call gets one status message: sent as the call comes in, then edited as it goes on with the verdict, the stage, a rolling summary and the caller's open questions from Luna, and the transcript (newest first, collapsed to its latest lines; tap to expand). Jev decides when the summary is out of date (`jev.yaml → owner_update`, at ≥ 0.8 by default), with a refresh anyway every 30 s while the caller keeps talking (`luna.yaml → progress`). The call page shows Jev's answer on every Jev row (📝) and in the status strip. When the call ends, Luna's summary replaces the rolling one (or the last rolling summary is kept if the caller said nothing after it), the call's cost is added, and there's a link to the call page.
-- **Costs** are priced from what the vendors report (the Responses API returns token counts, not dollars): Live per second, Luna's tokens (uncached, cached, cache writes, output; times the service tier) and Jev's input tokens (`cost.yaml`). Each call stores the breakdown; the call list, the call page and the final Telegram update show it.
-- **Steering from Telegram:** reply to a call's status message, or send a message while a call is live, and it reaches the voice agent as a `SUPERVISOR:` line. Plain text goes as commentary; start with `!` for instructions (cuts the agent off) or `~` for thinking (kept in mind). The **Genuine**, **Scam** and **Spam** buttons under the status message move the call into that call-flow stage (`genuine`, `waste_time`, `decline_spam`) as if Jev had decided it, so the agent gets that stage's text; **Hang up** (or sending `/hangup`) has the agent say goodbye and ends the call once it has played (`telegram.yaml → steering.buttons`). A steering message alone can't end a call: the agent says goodbye, but only the call flow, Luna or this button hang up. Below them, up to 3 replies Luna suggests with each rolling summary (e.g. **Call back soon** → "Tell them you'll call back as soon as you can."), sent as commentary (`telegram.yaml → steering.suggestions`, prompt in `luna.yaml → progress`); a button replaced while you tapped it still sends what it showed. The automatic flow keeps running, Luna sees your messages, and each one shows in the status message and on the call page as "owner → Live".
+## Hear it on real calls
+
+| [![The police](demos/posters/police-scam.jpg)](https://scamsitter.geekmango.com/listen/police-scam) | [![Bot vs bot](demos/posters/crypto-bot.jpg)](https://scamsitter.geekmango.com/listen/crypto-bot) | [![The electrician](demos/posters/electrician.jpg)](https://scamsitter.geekmango.com/listen/electrician) |
+| :-: | :-: | :-: |
+| **The police** (13 min) | **Bot vs bot** (4 min) | **The electrician** (1½ min) |
+
+## Try it
+
+<a href="https://scamsitter.geekmango.com/play"><img src="demos/posters/play.gif" alt="Scam me: tap to play" width="280"></a>
+
+Try to scam the bot, or get a message through to me, from your browser: [scamsitter.geekmango.com/play](https://scamsitter.geekmango.com/play).
+
+## How it works
+
+Calls to my number divert to a Telnyx number, where an OpenAI **gpt-live-1** agent answers. **TypeSafe Jev** classifies the growing transcript, and a deterministic call flow (`config/call-flow.yaml`) steers the agent:
+
+- **Scam** (Jev ≥ 0.85): waste their time, mixing a few tactics.
+- **Sales call** (spam, Jev ≥ 0.85): decline politely, ask to be taken off the list, say goodbye.
+- **Genuine caller:** take a message; it reaches me in the call summary.
+- **Urgent** (urgency ≥ 0.85 while scam + spam is under 0.5, or Luna says I may want to act while the caller is on the line): a notifying 🚨 reply on Telegram, once per call (`telegram.yaml → status.urgent_alert`). It doesn't steer the call.
+
+**GPT-6 Luna** writes for me, not the caller: the rolling summary, open questions and suggested replies, and the end-of-call summary. She doesn't steer the agent mid-call.
+
+**Telegram** (`telegram.yaml`): one status message per call, edited as it goes with the verdict, the stage, Luna's summary and open questions, and the transcript (newest first, collapsed). Jev decides when the summary is out of date (`jev.yaml → owner_update`, ≥ 0.8), with a refresh every 30 s anyway while the caller talks (`luna.yaml → progress`). When the call ends, Luna's summary, the cost and a link to the call page replace it.
+
+**Steering from Telegram:** reply to a status message, or send one while a call is live, and it reaches the agent as a `SUPERVISOR:` line: plain text as commentary, `!` for instructions (cuts the agent off), `~` for thinking. The **Genuine**, **Scam** and **Spam** buttons move the call into that stage (`genuine`, `waste_time`, `decline_spam`) as if Jev had decided; **Hang up** (or `/hangup`) has the agent say goodbye, then ends the call. A message alone can't end a call. Up to 3 replies Luna suggests go as commentary (`telegram.yaml → steering.suggestions`). The automatic flow keeps running, and your messages show on the call page as "owner → Live".
+
+**Costs** come from what the vendors report: Live per second, Luna's tokens (uncached, cached, cache writes, output, times the service tier) and Jev's input tokens (`cost.yaml`). Each call stores the breakdown; the call list, the call page and the final Telegram update show it.
 
 ## Run
 
@@ -57,13 +77,13 @@ Replay examples:
 - It needs the setup in [OpenAI SIP](#openai-sip). Test calls show up as `browser (SIP)`.
 - The page's **Debug log** shows the Telnyx call states (with SIP codes) and the server's log lines.
 
-**Public page** (`https://<public host>/`, the one Telnyx calls; preview at `/public` on the admin host): an arcade game-select screen with two games for anyone with the link (`config/games.yaml`, scoring in `src/core/game.ts`).
+**Public site** (`https://<public host>/`, the host Telnyx calls; preview at `/public` on the admin host): the real call recordings at `/` (`src/web/listen.ts`; `/listen/<slug>` opens one, playing), and at `/play` an arcade game-select screen with two games for anyone with the link (`config/games.yaml`, scoring in `src/core/game.ts`).
 
 - **Scam me**: the visitor plays a scammer with a goal (safe account, police, crypto wallet…). The scam starts when they say they're who the goal says (e.g. "Peter from HMRC"); from then until they hang up they score 10 points a second, double before the call flow catches them (`waste_time` stage; `scam.undetected_multiplier`). Most points wins. Chatting before the start doesn't count, and points keep coming once caught, so it pays to stay while the agent wastes *their* time.
 - **Get through**: the visitor plays a real caller with a reason to call. Score: time until they've passed on the message, unless caught first; fastest wins.
 - **The referee** (`src/core/referee.ts`, `games.yaml → referee`) decides "started the scam" and "passed on the message": a separate Jev call with the goal's `start` or `message`, run as each caller line's final transcript arrives until it's met, and once more at hang-up. Only the referee knows the goal: the call's own Jev, Live and Luna judge the call like any other.
 - Scores are settled on the server and stored with the call (`plays` table) under the visitor's 3-letter name (kept in the browser). Each goal has its own leaderboard of its top scores; a player can hold several places.
-- **Scammer time wasted** on the home screen adds up calls judged scam or spam (public ones too), full length, and ticks up while one is live.
+- **Scammer time wasted** (on both pages) adds up calls judged scam or spam (public ones too), full length; on the game page it ticks up while one is live.
 
 - The browser talks to gpt-live-1 over **WebRTC**. The server exchanges the SDP offer with `POST /v1/live/sessions` ([voice-webrtc](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live): "we recommend using WebRTC rather than WebSockets for more consistent performance") and attaches a sideband, as for a SIP call. The API key and the prompt stay on the server.
 - The page's data channel is locked down (`client.data_channel`): it can't send any client event, so a visitor can't append instructions. It only receives `session.closed`.

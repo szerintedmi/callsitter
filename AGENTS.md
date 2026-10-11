@@ -20,3 +20,4 @@ AI call screener: Telnyx media stream ↔ OpenAI Live (gpt-live-1), TypeSafe Jev
 - Every tunable goes in `config/*.yaml` with a Zod schema in `src/core/config.ts`.
 - DB schema: edit `src/adapters/storage/schema.ts`, then run `bun run db:generate`. Migrations run on startup.
 - Use Bun, not Node tooling (`bun test`, `bunx`, `bun:sqlite`; Bun loads `.env` automatically).
+- Real-call demos at `/listen`: `demos/README.md`. Their inputs stay in `data/demos/` (they name the people redacted); only redacted files go in `demos/calls/`.

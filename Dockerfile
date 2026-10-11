@@ -21,6 +21,8 @@ COPY package.json bun.lock tsconfig.json ./
 COPY src src
 COPY config config
 COPY drizzle drizzle
+# The real calls played at /listen (src/web/listen.ts): redacted audio and transcripts.
+COPY demos/calls demos/calls
 COPY scripts/control.ts scripts/backup-db.ts scripts/
 # The VPS deploy script reads the Compose file from the image it deploys.
 COPY deploy/compose.yaml deploy/compose.yaml

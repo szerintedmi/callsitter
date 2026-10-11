@@ -10,3 +10,4 @@
 !scripts/control.ts
 !scripts/backup-db.ts
 !deploy/compose.yaml
+!demos/calls/
