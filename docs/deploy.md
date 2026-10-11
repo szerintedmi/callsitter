@@ -4,7 +4,7 @@ ScamSitter runs on an OVHcloud VPS (Debian 13) as one Docker container. GitHub A
 
 - **App**: `deploy/compose.yaml`, image `ghcr.io/szerintedmi/scamsitter` (private) pinned by digest. It listens on `127.0.0.1:8787`, with no public ports. SQLite, recordings, greetings and log files live in `/var/lib/scamsitter` (`/data` in the container).
 - **Tunnel**: `cloudflared` runs on the host as a systemd service (`deploy/vps/cloudflared.yml`):
-  - `scamsitter.geekmango.com` (public): the Telnyx/OpenAI webhooks, media streams, `/healthz` and the public page (`/`, `/call…`, `/assets/public.js`).
+  - `scamsitter.geekmango.com` (public): the Telnyx/OpenAI webhooks, media streams, `/healthz`, the real call recordings (`/`, `/listen…`, `/assets/listen.js`) and the game (`/play`, `/call…`, `/assets/public.js`).
   - `scamsitter-admin.geekmango.com`: the admin UI behind Cloudflare Access. The app also verifies the Access JWT.
   - `scamsitter-ssh.geekmango.com`: SSH behind Cloudflare Access. Once `lock-ssh` has run, sshd listens on loopback only, so SSH works only through the tunnel.
 - **Deploys**: `.github/workflows/deploy.yml` runs CI, builds the image (tagged `sha-<commit>`), then SSHes in with a deploy key. The key can only run `scamsitter-deploy`, with a GitHub Access service token.

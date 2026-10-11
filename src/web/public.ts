@@ -11,9 +11,10 @@ import { GoalWatch } from "../core/referee";
 import type { OpenAiWebRtc, WebRtcAnswer } from "../adapters/openai-live/webrtc";
 import { hostOf } from "./admin-guard";
 import type { ClientAssets } from "./admin";
+import { DEMOS, findDemo, github, realCallsPage } from "./listen";
 
-// The public page, at the root of the public host (and at /public on the admin host, as a
-// preview): two games (config/games.yaml, src/core/game.ts). "Scam me": the visitor plays a
+// The public game page, at the root of the public host (and at /public on the admin host, as a
+// preview), or at /play when the real call recordings (listen.ts) take the root: two games (config/games.yaml, src/core/game.ts). "Scam me": the visitor plays a
 // scammer who starts the scam and keeps it going, best without getting caught; "Get through":
 // they play a real caller and try to get their message through fast. A referee (src/core/referee.ts) judges
 // the goal; the call itself is handled like any other. The browser talks to Live over WebRTC (adapters/openai-live/webrtc.ts);
@@ -21,6 +22,8 @@ import type { ClientAssets } from "./admin";
 // the link can call, so PublicGate caps calls per IP, calls at once and the estimated daily spend
 // (config/public.yaml).
 //
+//   GET  play                 the games, when realCalls (/ is then the recordings, and
+//                             listen/:slug opens them on one)
 //   GET  call/lobby           the lobby: goals, leaderboards and scammer time wasted (under
 //                             call/ because the tunnel routes that on the public host)
 //   POST call                 {sdp, game, goal, player} → {callId, sdp, elapsedMs} | {error, message}
@@ -142,6 +145,8 @@ export interface PublicDeps {
   gate: PublicGate;
   webrtc: OpenAiWebRtc;
   clientAssets: ClientAssets;
+  /** the real call recordings as the home page (listen.ts), /listen/<slug>, and the games at /play */
+  realCalls?: boolean;
 }
 
 const JUNK = ["scam", "spam"];
@@ -228,7 +233,24 @@ export function publicRoutes(d: PublicDeps) {
   }
 
   // Mounted at / (public host) and /public (admin preview): the page's URLs are under its own path.
-  app.get("/", async (c) => c.html(page(c.req.path.replace(/\/?$/, "/"), await lobby(), d.config().public.phone_number)));
+  const game = async (base: string) => page(base, await lobby(), d.config().public.phone_number, d.realCalls);
+  if (d.realCalls) {
+    const home = async (base: string, slug?: string) =>
+      realCallsPage(base, {
+        selected: slug ?? DEMOS[0]!.slug,
+        autoplay: slug !== undefined,
+        wastedSeconds: (await lobby()).wasted.seconds,
+        phone: d.config().public.phone_number,
+      });
+    app.get("/", async (c) => c.html(await home(c.req.path.replace(/\/?$/, "/"))));
+    app.get("/play", async (c) => c.html(await game(c.req.path.slice(0, c.req.path.lastIndexOf("play")))));
+    // a recording's link (the README's): the page, on that call, playing
+    app.get("/listen", (c) => c.redirect(c.req.path.slice(0, c.req.path.indexOf("listen"))));
+    app.get("/listen/:slug", async (c) => {
+      const slug = c.req.param("slug");
+      return findDemo(slug) ? c.html(await home(c.req.path.slice(0, c.req.path.indexOf("listen/")), slug)) : c.notFound();
+    });
+  } else app.get("/", async (c) => c.html(await game(c.req.path.replace(/\/?$/, "/"))));
   app.get("/call/lobby", async (c) => c.json(await lobby(), 200, { "Cache-Control": "no-store" }));
 
   app.get("/assets/public.js", async (c) => {
@@ -397,6 +419,7 @@ export function publicRoutes(d: PublicDeps) {
 /** Changes on every server start, so the page never runs a stale cached script. */
 const BUILD = Date.now().toString(36);
 
+
 // An arcade game-select screen: the scammer-time-wasted scoreboard on top, then a red half (Scam
 // me) and a green half (Get through). Fonts: Jersey 10 (display), Pixelify Sans (text).
 const css = `
@@ -436,6 +459,15 @@ canvas.sprite{image-rendering:pixelated;display:block;flex:none;height:auto}
 .wasted span{font-family:var(--disp);font-size:clamp(16px,2.4vh,20px);letter-spacing:.06em;line-height:1;color:var(--dim)}
 #s-home:not(:has(.split[data-active])) .hero{padding-bottom:calc(clamp(22px,3.4vh,28px) + 28px)}
 #s-home:has(.split[data-active]) .hero :is(.tagline,.wasted){display:none}
+/* the header when the recordings are the home page: the same as theirs (listen.ts) */
+.ptop{justify-content:space-between;align-items:flex-start;padding:12px max(16px,calc((100% - 1100px) / 2)) calc(clamp(22px,3.4vh,28px) + 22px)}
+#s-home:has(.split[data-active]) .ptop{padding-bottom:10px}
+.pbrand{font-family:var(--disp);font-size:clamp(28px,4vw,40px);line-height:1;letter-spacing:.03em;color:var(--paper);text-decoration:none}
+.pwasted{margin:4px 0 0;font-size:14px;color:var(--dim)}
+.pwasted b{font-family:var(--disp);font-weight:400;font-size:20px;color:var(--amb);font-variant-numeric:tabular-nums}
+.pright{display:flex;align-items:center;gap:14px}
+.ptop .chip{position:static}
+.gh{color:var(--dim);display:flex}.gh:hover{color:var(--paper)}
 .dial{flex-wrap:wrap;column-gap:14px;row-gap:2px;line-height:1}
 .dial span{color:var(--dim);letter-spacing:.06em}
 .dial a{color:var(--amb);text-decoration:none;white-space:nowrap;font-variant-numeric:tabular-nums;-webkit-user-select:text;user-select:text}
@@ -592,7 +624,7 @@ const half = (game: Game, title: string, goal: string, sprite: string) => `
         <div class="detail" data-detail="${game}"></div>
       </div>`;
 
-const page = (base: string, lobby: Lobby, phone: string) => `<!doctype html>
+const page = (base: string, lobby: Lobby, phone: string, realCalls?: boolean) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -609,11 +641,18 @@ const page = (base: string, lobby: Lobby, phone: string) => `<!doctype html>
 <body data-base="${base}" data-mode="scam" class="idle">
 <div id="app">
   <section class="scr" id="s-home">
-    <header class="band hero">
+${
+  realCalls
+    ? `    <header class="band ptop">
+      <div><a class="pbrand" href="${base}" title="Real call recordings">SCAMSITTER</a><p class="pwasted">scammers' time wasted: <b id="wasted">0:00:00</b></p></div>
+      <div class="pright"><button class="chip" type="button" data-chip hidden></button><a class="gh" href="https://github.com/szerintedmi/scamsitter" aria-label="ScamSitter on GitHub">${github}</a></div>
+    </header>`
+    : `    <header class="band hero">
       <h1><button type="button" data-home>SCAMSITTER</button></h1><button class="chip" type="button" data-chip hidden></button>
       <p class="tagline">WASTE THE TIME OF SCAMMERS WHO CALL YOU</p>
       <p class="wasted"><b id="wasted">0:00:00</b><span>SCAMMER TIME WASTED SO FAR</span></p>
-    </header>
+    </header>`
+}
     <div class="split" id="split">
       <p class="ask">CAN YOU FOOL THE BOT<br>THAT ANSWERS MY PHONE?</p>${half("scam", "SCAM ME", "Be the scammer. Don't get caught.", "bandit")}${half("get_through", "GET THROUGH", "Be a real caller. Reach me fast.", "caller")}
     </div>${phone ? `

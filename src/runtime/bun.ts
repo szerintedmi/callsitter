@@ -26,6 +26,7 @@ import { BrowserSipCalls } from "../web/openai-sip";
 import { PublicGate } from "../web/public";
 import { BrowserCalls, routeTelephony, type BrowserSipDeps } from "../web/test-call";
 import { clientAssets } from "./client-assets";
+import { demoMedia } from "./demo-media";
 import { readEnv, adminAuthFrom, publicHostOf } from "./env";
 import { LogFiles, startLogging } from "./logging";
 
@@ -156,6 +157,7 @@ const app = createApp({
     gate: new PublicGate({ repo, config: () => config.get(), clock: { now: () => Date.now() } }),
     webrtc: new OpenAiWebRtc({ apiKey: env.OPENAI_API_KEY }),
     referee: new JevReferee({ apiKey: env.TYPESAFE_API_KEY }),
+    demoMedia,
   },
   clientAssets: await clientAssets({ rebuild: process.env.NODE_ENV !== "production" }),
 });

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { adminGuard, adminHosts, hostOf, type AdminAuth, type AdminGuardDeps } from "./admin-guard";
 import { adminRoutes, type AdminDeps } from "./admin";
 import { BrowserSipCalls, openAiSipRoutes, type SipRoutesDeps } from "./openai-sip";
+import { listenRoutes, type DemoMedia } from "./listen";
 import { publicRoutes, type PublicDeps } from "./public";
 import { telnyxRoutes, type TelnyxRoutesDeps } from "./telnyx";
 import { testCallRoutes, type BrowserCalls, type BrowserSipDeps } from "./test-call";
@@ -15,8 +16,9 @@ export interface AppDeps extends TelnyxRoutesDeps, AdminDeps {
   /** OpenAI SIP webhook; absent when OPENAI_PROJECT_ID/OPENAI_WEBHOOK_SECRET aren't set */
   openAiSip?: Omit<SipRoutesDeps, "manager" | "repo" | "config" | "browserSip">;
   browserSip?: BrowserSipDeps;
-  /** the public "Scam me" page at the root of `host` (and at /public on the admin host) */
-  publicPage?: Omit<PublicDeps, "manager" | "repo" | "clientAssets"> & { host: string };
+  /** the public "Scam me" page at the root of `host` (and at /public on the admin host); with
+   * `demoMedia`, also the real-call players at /listen */
+  publicPage?: Omit<PublicDeps, "manager" | "repo" | "clientAssets"> & { host: string; demoMedia?: DemoMedia };
 }
 
 export function createApp(d: AppDeps) {
@@ -36,7 +38,8 @@ export function createApp(d: AppDeps) {
   admin.route("/", adminRoutes(d));
   admin.route("/", testCallRoutes(d));
 
-  const pub = d.publicPage ? publicRoutes({ ...d.publicPage, manager: d.manager, repo: d.repo, clientAssets: d.clientAssets }) : null;
+  const pub = d.publicPage ? publicRoutes({ ...d.publicPage, manager: d.manager, repo: d.repo, clientAssets: d.clientAssets, realCalls: !!d.publicPage.demoMedia }) : null;
+  if (pub && d.publicPage?.demoMedia) pub.route("/", listenRoutes({ clientAssets: d.clientAssets, media: d.publicPage.demoMedia }));
   if (pub) {
     admin.get("/public/", (c) => c.redirect("/public"));
     admin.route("/public", pub);

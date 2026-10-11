@@ -1,6 +1,6 @@
 # Production tunnel, rendered to /etc/cloudflared/config.yml by bootstrap.sh (placeholders from
 # /etc/scamsitter/deploy.conf). cloudflared runs on the host as a systemd service.
-#   HOOKS_HOST  public: the Telnyx/OpenAI webhooks, media streams, /healthz and the public page (/, /call…)
+#   HOOKS_HOST  public: the Telnyx/OpenAI webhooks, media streams, /healthz, the public page (/, /call…) and /listen…
 #   ADMIN_HOST  admin UI, behind a Cloudflare Access application (the app verifies the Access JWT)
 #   SSH_HOST    SSH, behind a Cloudflare Access application (your login + the deploy service token)
 tunnel: __TUNNEL_ID__
@@ -8,7 +8,7 @@ credentials-file: /etc/cloudflared/__TUNNEL_ID__.json
 
 ingress:
   - hostname: __HOOKS_HOST__
-    path: ^/(telnyx/webhook|openai/webhook|media/.*|healthz|call(/.*)?|assets/public\.js)?$
+    path: ^/(telnyx/webhook|openai/webhook|media/.*|healthz|call(/.*)?|play|listen(/.*)?|assets/(public|listen)\.js)?$
     service: http://127.0.0.1:8787
   - hostname: __HOOKS_HOST__
     service: http_status:404
