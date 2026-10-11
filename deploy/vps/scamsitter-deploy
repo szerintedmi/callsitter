@@ -29,6 +29,7 @@ RELEASES=$DIR/releases        # image refs, oldest first; the last line is the c
 COMPOSES=$DIR/compose.d       # each release's compose.yaml, by digest
 DRAINED=""                            # set while the old container is draining
 BACKUPS=/var/lib/scamsitter/backups   # /data/backups in the container
+FAILED_LOGS=$DIR/failed               # logs of releases that never became healthy (root-only)
 APP_UID=1000                          # the image's `bun` user, which writes /data
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
@@ -127,8 +128,13 @@ cmd_deploy() {
     return
   fi
 
-  log "the new release didn't become healthy; last log lines:"
-  compose logs --no-log-prefix --tail 40 scamsitter || true
+  # Saved on the VPS rather than printed: GitHub Actions logs are public. The rollback replaces the
+  # container, so `docker logs` won't have them afterwards.
+  local failed
+  failed="$FAILED_LOGS/$(date -u +%Y%m%dT%H%M%SZ)-$(digest_of "$ref").log"
+  mkdir -p "$FAILED_LOGS"
+  compose logs --no-log-prefix --tail 200 scamsitter >"$failed" 2>&1 || true
+  log "the new release didn't become healthy; its logs: sudo cat $failed"
   if [[ -n $prev ]]; then
     log "rolling back to $prev"
     activate "$prev"
