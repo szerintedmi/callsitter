@@ -10,9 +10,9 @@ DEPLOY_PUBKEY=""
 # Production tunnel (cloudflared tunnel create …); its credentials JSON goes to
 # /etc/cloudflared/<TUNNEL_ID>.json.
 TUNNEL_ID=""
-HOOKS_HOST=scamsitter.geekmango.com
-ADMIN_HOST=scamsitter-admin.geekmango.com
-SSH_HOST=scamsitter-ssh.geekmango.com
+HOOKS_HOST=hooks.example.com
+ADMIN_HOST=admin.example.com
+SSH_HOST=ssh.example.com
 
 # How long a deploy waits for calls to end before giving up (exit 75, nothing changed).
 DRAIN_WAIT=900

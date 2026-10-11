@@ -22,7 +22,7 @@ The repo is private on GitHub Free, so `main` can't be protected, and environmen
    - The drain expires by itself, so a deploy that dies can't leave calls blocked.
 3. **Backs up** SQLite (`VACUUM INTO`) to `/var/lib/scamsitter/backups/pre-deploy-<time>-<old digest>.db`. The last 10 are kept.
 4. **Replaces** the container with the release's own `compose.yaml`, then waits for `/healthz`.
-   - If the new release isn't healthy, it rolls back to the previous release and the job fails.
+   - If the new release isn't healthy, it rolls back to the previous release and the job fails. The failed container's logs go to `/opt/scamsitter/failed/` on the VPS (root-only), not to the job's log, which is public.
 5. Records the release in `/opt/scamsitter/releases` and keeps the last 5 images for offline rollback.
 
 Calls get busy from the start of the drain until the new container is healthy, usually a few seconds after the last call ends. This isn't zero-downtime: SQLite has one writer, so two containers can't overlap.
