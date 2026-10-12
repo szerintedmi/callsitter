@@ -29,6 +29,8 @@ export interface Steer {
   delegation?: { id: string; fallback: TellLive };
   /** the message is the delegation's fallback, sent instead of guidance that went stale or never came */
   fallback?: true;
+  /** a stage text from the owner's stage button */
+  byOwner?: true;
 }
 
 /** Where Luna's reply goes. */
@@ -299,7 +301,7 @@ export class Orchestrator {
     if (this.deferredLuna) this.note("info", `queued Luna call (${this.deferredLuna.reason}) cancelled: the owner moved the call on`);
     this.deferredLuna = null;
     this.bump(`the owner moved the call to ${stage}`);
-    void this.apply({ kind: "tell_live", stage, message });
+    void this.apply({ kind: "tell_live", stage, message }, true);
     return true;
   }
 
@@ -396,14 +398,14 @@ export class Orchestrator {
     return { rule, action: action.kind, reason: action.kind === "tell_live" ? action.stage.replaceAll("_", " ") : action.reason };
   }
 
-  private async apply(action: FlowAction) {
+  private async apply(action: FlowAction, byOwner = false) {
     if (action.kind !== "none") this.actions.push(action);
     switch (action.kind) {
       case "none":
         return;
       case "tell_live":
         this.stage = action.stage;
-        this.d.steer.tellLive({ message: action.message, key: "stage", source: "stage", stage: action.stage });
+        this.d.steer.tellLive({ message: action.message, key: "stage", source: "stage", stage: action.stage, ...(byOwner ? { byOwner } : {}) });
         this.emit({ type: "stage", callId: this.d.meta.callId, at: this.elapsed(), stage: action.stage, as: action.message.as });
         return;
       case "luna": {

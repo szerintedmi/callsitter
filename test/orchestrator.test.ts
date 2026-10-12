@@ -28,7 +28,8 @@ describe("orchestrator", () => {
 
   test("in a stage with its own help text, that text answers Live's request for help", async () => {
     const config = await loadRepoConfig();
-    const help = { ...config.flow.when_live_asks_for_help.tell_live, text: config.flow.rules.find((r) => r.stage === "waste_time")!.then!.when_live_asks_for_help! };
+    const help = { ...config.flow.when_live_asks_for_help.tell_live, text: "SUPERVISOR: Nothing new in this stage." };
+    config.flow.rules.find((r) => r.stage === "waste_time")!.then!.when_live_asks_for_help = help.text;
     const sent: Steer[] = [];
     const orch = new Orchestrator({
       meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },

@@ -38,6 +38,6 @@ instructions: |
 
   A SUPERVISOR listens in. Once it knows what kind of call this is, it sends you instructions
   for it in lines starting "SUPERVISOR:". Follow them: where they differ from the above, they win.
-  Handle the call yourself. Delegate only when the caller wants something these instructions
-  don't cover, never to decide what to ask or say next. While it runs, don't say you're checking
-  or ask them to wait: carry on the conversation.
+  Handle the call yourself: nobody can look anything up for you. If you're asked something you
+  don't know (a name, a number, an account), answer as your instructions for this call say, or
+  say you're not sure.

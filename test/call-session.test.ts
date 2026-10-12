@@ -142,6 +142,57 @@ describe("owner steering from Telegram", () => {
     expect(r.appended).not.toContain("SUPERVISOR: Wrap up now.");
   });
 
+  test("a call-flow stage text soon after the owner's message waits, so it doesn't replace it", async () => {
+    const r = await rig();
+    // what reached Live, without silence prompts over the long waits
+    const said = () => r.appended.filter((t) => t !== r.prompt);
+    const hold = r.config.telegram.steering.hold_stage_ms;
+    const rule = r.config.flow.rules.find((x) => x.stage === "waste_time")!.then!.tell_live!;
+    expect(rule.send).toBe("now");
+    r.session.steerFromOwner("ask for his badge number", "commentary");
+    (r.session.orch as any).d.classifier = scripted({});
+    r.handlers().onTranscriptDelta("caller", "c1", "Hi, it's your bank's fraud team about your account.");
+    await r.session.orch.classify();
+    expect(r.session.orch.stage).toBe("waste_time");
+    expect(said()).toEqual(["SUPERVISOR: ask for his badge number"]);
+    r.advance(hold - 1);
+    r.session.flushHeldInstructions();
+    expect(said()).toHaveLength(1);
+    // Another message restarts the wait.
+    r.session.steerFromOwner("and his station", "commentary");
+    r.advance(hold - 1);
+    r.session.flushHeldInstructions();
+    expect(said()).toHaveLength(2);
+    r.advance(1);
+    r.session.flushHeldInstructions();
+    expect(said().at(-1)).toBe(rule.text);
+    expect(r.appends.filter((a) => a.text !== r.prompt).at(-1)).toMatchObject({ source: "stage", stage: "waste_time", heldMs: 2 * hold - 1 });
+    await r.session.stop("test");
+  });
+
+  test("the owner's stage button isn't held, nor replaced by a call-flow stage while that waits", async () => {
+    const r = await rig();
+    // what reached Live, without silence prompts over the long waits
+    const said = () => r.appended.filter((t) => t !== r.prompt);
+    const genuine = r.config.flow.rules.find((x) => x.stage === "genuine")!.then!.tell_live!;
+    const scam = r.config.flow.rules.find((x) => x.stage === "waste_time")!.then!.tell_live!;
+    genuine.send = "when_agent_idle";
+    r.session.steerFromOwner("it's my brother", "commentary");
+    r.handlers().onAudio(b64encode(new Uint8Array(8000).fill(0x12))); // the agent speaks: the button text waits for it
+    expect(r.session.stageFromOwner("genuine", "Genuine")).toEqual({ ok: true });
+    // Jev disagrees: its stage waits for the owner's hold, the button text only for the agent.
+    (r.session.orch as any).d.classifier = scripted({});
+    r.handlers().onTranscriptDelta("caller", "c1", "Hi, it's your bank's fraud team about your account.");
+    await r.session.orch.classify();
+    r.advance(3000);
+    r.session.flushHeldInstructions();
+    expect(said()).toEqual(["SUPERVISOR: it's my brother", genuine.text]);
+    r.advance(r.config.telegram.steering.hold_stage_ms);
+    r.session.flushHeldInstructions();
+    expect(said().at(-1)).toBe(scam.text);
+    await r.session.stop("test");
+  });
+
   test("at hangup, the last rolling summary is reused if the caller said nothing new after it", async () => {
     let summarized = 0;
     const r = await rig({ agent: { run: async () => ({ toolCalls: [] }), summarize: async () => (summarized++, { text: "Luna's final." }) } });

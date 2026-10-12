@@ -26,6 +26,8 @@ const LiveCase = z.strictObject({
   caller: z.string(),
   after_caller: z.array(z.string()).default([]),
   pass_if: z.string(),
+  // fails if Live asks for help (session.delegation.created)
+  no_help: z.boolean().default(false),
 });
 const LunaCase = z.strictObject({
   name: z.string(),
@@ -102,14 +104,14 @@ export function parseLines(text: string): Line[] {
     });
 }
 
-/** A live case's history: transcript lines, and `told: <stage>` where the call flow told Live a stage text. */
+/** A live case's history: transcript lines, and `told: <stage>` where the call flow told Live a stage text (or `told: owner:<message>`). */
 export function parseHistory(text: string): (Line | { told: string })[] {
   return text
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean)
     .map((l) => {
-      const told = l.match(/^told\s*:\s*(\S+)$/);
+      const told = l.match(/^told\s*:\s*(\S.*)$/);
       return told ? { told: told[1]! } : parseLines(l)[0]!;
     });
 }

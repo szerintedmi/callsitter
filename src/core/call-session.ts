@@ -1,5 +1,5 @@
 import { b64decode, b64encode, BYTES_PER_MS, isCodec, levelDbfs, SILENCE_BYTE, type AudioFormat, type Codec } from "./audio";
-import { liveInstructions, ownerAppendText, type AppConfig, type LiveAppend } from "./config";
+import { liveInstructions, ownerAppendText, TIME_UP, type AppConfig, type LiveAppend } from "./config";
 import { logger } from "./log";
 import { errMsg, Orchestrator, type Steer } from "./orchestrator";
 import { SpeechTrace } from "./speech-trace";
@@ -91,6 +91,8 @@ export class CallSession {
   private agentSpeechUntil = 0;
   /** send: when_agent_idle messages held back so they don't cut the agent off (see flushHeldInstructions) */
   private held: { steer: Steer; since: number }[] = [];
+  /** the owner's last message or stage button from Telegram (wall clock) */
+  private ownerSteerAt = -Infinity;
   /** a hangup the call flow or Luna asked for, waiting for the agent's goodbye to play out */
   private pendingHangup: { reason: string; by: EndedBy; since: number; done: Promise<void>; resolve: () => void } | null = null;
   /** last caller audio loud enough to be speech (wall clock) */
@@ -362,11 +364,13 @@ export class CallSession {
   private tellLive(m: Steer) {
     const now = this.d.clock.now();
     if (m.key) {
-      // e.g. an older stage text still waiting: the newer one replaces it
-      for (const h of this.held.filter((h) => h.steer.key === m.key)) this.appended(h.steer, now - h.since, true);
-      this.held = this.held.filter((h) => h.steer.key !== m.key);
+      // e.g. an older stage text still waiting: the newer one replaces it, unless it's the owner's
+      // stage button and this one is held for the owner
+      const replaced = this.held.filter((h) => h.steer.key === m.key && !(h.steer.byOwner && this.heldForOwner(m)));
+      for (const h of replaced) this.appended(h.steer, now - h.since, true);
+      this.held = this.held.filter((h) => !replaced.includes(h));
     }
-    if (m.message.send === "now") return this.sendToLive([{ steer: m, since: now }]);
+    if (m.message.send === "now" && !this.heldForOwner(m)) return this.sendToLive([{ steer: m, since: now }]);
     this.held.push({ steer: m, since: now });
     this.flushHeldInstructions();
   }
@@ -384,6 +388,7 @@ export class CallSession {
     const text = message.trim();
     if (!text) return { ok: false, reason: "the message is empty" };
     this.orch.ownerSteered(text);
+    this.ownerSteerAt = this.d.clock.now();
     this.tellLive({ message: { as, text: ownerAppendText(st, text), send: "now", max_hold_ms: null }, source: "owner" });
     return { ok: true };
   }
@@ -397,6 +402,7 @@ export class CallSession {
     if (this.stopped) return { ok: false, reason: "that call has ended" };
     if (this._phase !== "active") return { ok: false, reason: "the call isn't connected yet" };
     if (!this.orch.enterStage(stage, label)) return { ok: false, reason: `there's no ${stage} stage in call-flow.yaml` };
+    this.ownerSteerAt = this.d.clock.now();
     return { ok: true };
   }
 
@@ -466,14 +472,28 @@ export class CallSession {
     return awaitingReply && now - this.callerSpeechAt < st.reply_window_ms;
   }
 
-  /** Sends held messages once the agent is idle, or each once its max_hold_ms is up. Public for tests. */
+  /**
+   * A call-flow stage text soon after the owner's message or stage button (telegram.yaml
+   * steering.hold_stage_ms) waits, so it doesn't replace what the owner said; a newer stage
+   * replaces it by key meanwhile. Not the owner's own stage button, nor time-up.
+   */
+  private heldForOwner(s: Steer): boolean {
+    if (s.key !== "stage" || s.byOwner || s.stage === TIME_UP) return false;
+    return this.d.clock.now() < this.ownerSteerAt + this.d.config().telegram.steering.hold_stage_ms;
+  }
+
+  /**
+   * Sends held messages once the agent is idle, or each once its max_hold_ms is up; stage texts
+   * held for the owner (send: now ones too) not before that's over. Public for tests.
+   */
   flushHeldInstructions() {
     if (!this.held.length) return;
     const now = this.d.clock.now();
     const busy = this.agentBusy();
     const due = this.held.filter(({ steer, since }) => {
+      if (this.heldForOwner(steer)) return false;
       const cap = steer.message.max_hold_ms;
-      return !busy || (cap !== null && now - since >= cap);
+      return steer.message.send === "now" || !busy || (cap !== null && now - since >= cap);
     });
     if (!due.length) return;
     this.held = this.held.filter((h) => !due.includes(h));
