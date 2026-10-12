@@ -84,6 +84,7 @@ function stageText(cfg: AppConfig, stage: string): { as: LiveAppend; text: strin
     const b = st.buttons.find((x) => x.label === label);
     if (!b) throw new Error(`no telegram.yaml steering button "${label}"`);
     if ("stage" in b) return stageText(cfg, b.stage);
+    if ("extend_minutes" in b) throw new Error(`telegram.yaml steering button "${label}" sends nothing to Live`);
     return { as: b.as, text: ownerAppendText(st, b.text) };
   }
   if (stage === "silence") return { as: cfg.flow.silence.tell_live.as, text: cfg.flow.silence.tell_live.text };

@@ -1,7 +1,7 @@
 # The public "Scam me" page on the public host (src/web/public.ts). Anyone with the link can
 # call, so these cap the cost.
 enabled: true            # false: the page says it's closed
-max_call_seconds: 900    # public calls end after 15 min
+max_call_seconds: 600    # public calls end after 10 min
 max_concurrent: 3        # public calls at once
 daily_usd: 10            # estimated spend (cost.yaml) over a rolling 24 h, reserving max_call_seconds per live call
 per_ip_per_day: 20       # calls per client IP over a rolling 24 h (in memory: a restart resets it)

@@ -15,7 +15,7 @@ ADMIN_HOST=admin.example.com
 SSH_HOST=ssh.example.com
 
 # How long a deploy waits for calls to end before giving up (exit 75, nothing changed).
-DRAIN_WAIT=900
+DRAIN_WAIT=1260
 # Releases whose images stay on disk for rollback, and pre-deploy DB backups kept.
 KEEP_RELEASES=5
 KEEP_BACKUPS=10

@@ -104,6 +104,7 @@ beforeAll(async () => {
     steer: (id, text, as) => manager.get(id)?.steerFromOwner(text, as) ?? { ok: false, reason: "not connected" },
     enterStage: (id, stage, label) => manager.get(id)?.stageFromOwner(stage, label) ?? { ok: false, reason: "not connected" },
     hangUp: (id) => manager.get(id)?.hangUpFromOwner() ?? { ok: false, reason: "not connected" },
+    extend: (id, minutes) => manager.get(id)?.extendFromOwner(minutes) ?? { ok: false, reason: "not connected" },
   });
   manager = new CallManager({
     config: () => config.get(),

@@ -44,6 +44,10 @@ steering:
       stage: waste_time
     - label: Spam
       stage: decline_spam
+    # Lets the call run this much past call-flow.yaml max_call_seconds; each tap adds more.
+    # Too late once the agent has been told to say goodbye (timing.time_up).
+    - label: +5 min
+      extend_minutes: 5
     # Ends the call once the goodbye has played (steering texts alone can't hang up); so does
     # sending /hangup.
     - label: Hang up
