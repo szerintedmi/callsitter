@@ -94,6 +94,24 @@ describe("Luna adapter", () => {
     expect(req.input).toContain("- Ask why: Ask what it's about.");
   });
 
+  test("a commentary message before the final answer is ignored (progress JSON, summary, run)", async () => {
+    const final = JSON.stringify({ summary: "Sarah wants a call back.", questions: [], suggestions: [], alert: false });
+    const phased = (id: string, draft: string, answer: string) => ({
+      id,
+      object: "response",
+      output: [
+        { type: "message", id: `c_${id}`, role: "assistant", status: "completed", phase: "commentary", content: [{ type: "output_text", text: draft, annotations: [] }] },
+        { type: "reasoning", id: `r_${id}`, summary: [] },
+        { type: "message", id: `m_${id}`, role: "assistant", status: "completed", phase: "final_answer", content: [{ type: "output_text", text: answer, annotations: [] }] },
+      ],
+    });
+    const r = await rig([phased("p1", '{"summary":"Sarah wa', final), phased("s1", "Drafting…", "Sarah called."), phased("r1", "Thinking…", "Be friendly.")]);
+    const progress = await r.agent.progress(r.input().meta, r.input().transcript);
+    expect(progress.summary).toBe("Sarah wants a call back.");
+    expect((await r.agent.summarize(r.input().meta, r.input().transcript)).text).toBe("Sarah called.");
+    expect((await r.agent.run(r.input())).instructions).toBe("Be friendly.");
+  });
+
   test("usage: every response of a run is summed, with the tier it ran on", async () => {
     const usage = (i: number, c: number, w: number, o: number, r: number) => ({
       input_tokens: i,

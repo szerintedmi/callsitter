@@ -93,6 +93,17 @@ export function usageOf(res: Response, sum?: TokenUsage): TokenUsage {
   };
 }
 
+/**
+ * The text of a response's answer. The model may first send a `commentary` message (for
+ * Structured Outputs, a draft of the JSON) before the `final_answer` one; `output_text` joins
+ * them all, so read only the final answer (or the last message, when phases aren't set).
+ */
+export function answerText(res: Response): string {
+  const messages = res.output.filter((o) => o.type === "message");
+  const answer = messages.findLast((m) => m.phase === "final_answer") ?? messages.at(-1);
+  return (answer?.content ?? []).map((c) => (c.type === "output_text" ? c.text : "")).join("");
+}
+
 /** The chained response is gone or unusable (e.g. expired): start a fresh chain instead. */
 const isBrokenChain = (err: unknown) => err instanceof OpenAI.APIError && (err.status === 400 || err.status === 404);
 
@@ -145,7 +156,7 @@ export class LunaAgent implements Agent {
       const res = round === 0 ? await this.createChained(previousId, create) : await create(previousId);
       usage = usageOf(res, usage);
       const calls = res.output.filter((o) => o.type === "function_call");
-      if (calls.length === 0) return { instructions: res.output_text.trim() || undefined, toolCalls, responseId: res.id, usage };
+      if (calls.length === 0) return { instructions: answerText(res).trim() || undefined, toolCalls, responseId: res.id, usage };
 
       const outputs: ResponseInputItem[] = [];
       for (const call of calls) {
@@ -175,7 +186,7 @@ export class LunaAgent implements Agent {
         store: false,
       }),
     );
-    return { text: res.output_text.trim(), usage: usageOf(res) };
+    return { text: answerText(res).trim(), usage: usageOf(res) };
   }
 
   /**
@@ -203,7 +214,7 @@ export class LunaAgent implements Agent {
       },
       { signal: opts.signal },
     );
-    const out = JSON.parse(res.output_text) as Partial<Progress>;
+    const out = JSON.parse(answerText(res)) as Partial<Progress>;
     return {
       summary: typeof out.summary === "string" ? out.summary : "",
       questions: Array.isArray(out.questions) ? out.questions.filter((q): q is string => typeof q === "string") : [],
