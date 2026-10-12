@@ -63,7 +63,7 @@ jobs:
     needs: image
     if: github.ref == 'refs/heads/main' && vars.DEPLOY_SSH_HOST != ''
     runs-on: ubuntu-latest
-    # Covers the VPS script's drain wait (DRAIN_WAIT, default 15 min) plus the switch.
+    # Covers the VPS script's drain wait (DRAIN_WAIT, default 21 min) plus the switch.
     timeout-minutes: 30
     permissions:
       packages: read # the job's GITHUB_TOKEN lets the VPS pull the image once

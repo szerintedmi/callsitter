@@ -69,6 +69,8 @@ export class Orchestrator {
   lastClassification: Classification | null = null;
   lunaCalls = 0;
   jevTicks = 0;
+  /** time the owner added to max_call_seconds (see FlowState.extendedMs) */
+  extendedMs = 0;
   /** what the call's Luna and Jev calls cost so far */
   readonly costs: CostMeter;
   readonly actions: FlowAction[] = [];
@@ -246,6 +248,7 @@ export class Orchestrator {
         lastLunaAt: this.lastLunaAt,
         lastLunaCallerRev: this.lastLunaCallerRev,
         callerRev: this.transcript.callerRev,
+        extendedMs: this.extendedMs,
       },
       cfg,
     );

@@ -18,6 +18,7 @@ async function rig(o: { steer?: (callId: string, text: string, as: LiveAppend) =
   const edits: { id: number; text: string; layout?: MessageLayout }[] = [];
   const steered: { callId: string; text: string; as: LiveAppend }[] = [];
   const hungUp: string[] = [];
+  const extended: { callId: string; minutes: number }[] = [];
   const staged: { callId: string; stage: string; label: string }[] = [];
   const answers: { pressId: string; notice?: string }[] = [];
   const chat: OwnerChat = {
@@ -51,6 +52,10 @@ async function rig(o: { steer?: (callId: string, text: string, as: LiveAppend) =
     },
     enterStage: (callId, stage, label) => (staged.push({ callId, stage, label }), { ok: true }),
     hangUp: (callId) => (hungUp.push(callId), { ok: true }),
+    extend: (callId, minutes) => {
+      extended.push({ callId, minutes });
+      return { ok: true, maxCallSeconds: config.flow.timing.max_call_seconds + 60 * extended.reduce((sum, e) => sum + e.minutes, 0) };
+    },
   });
   const start = (callId: string, from = "+441") => bus.publish({ type: "call.started", callId, meta: { callId, from, to: "+442", startedAt: now } });
   const message = (text: string | undefined, replyTo?: number) =>
@@ -63,6 +68,7 @@ async function rig(o: { steer?: (callId: string, text: string, as: LiveAppend) =
     edits,
     steered,
     hungUp,
+    extended,
     staged,
     answers,
     start,
@@ -104,7 +110,7 @@ describe("owner desk: the call's status message", () => {
     expect(text).toContain("❓ Is Peter home?");
     expect(r.lastQuote()).toBe("0:01 caller: Hi, it's the bank.");
     expect(text).toContain("Reply to steer");
-    expect(r.edits[0]!.layout?.buttons?.[0]?.map((b) => b.label)).toEqual(["Genuine", "Scam", "Spam", "Hang up"]);
+    expect(r.edits[0]!.layout?.buttons?.[0]?.map((b) => b.label)).toEqual(["Genuine", "Scam", "Spam", "+5 min", "Hang up"]);
     expect(text).toContain("https://admin.example.com/calls/c1");
   });
 
@@ -331,6 +337,23 @@ describe("owner desk: steering", () => {
     await settle();
     const as = r.config.flow.rules.find((x) => x.stage === "waste_time")!.then!.tell_live!.as;
     expect(r.lastEdit()).toContain(`${as}: Scam (stage: waste time)`);
+    r.desk.detach();
+  });
+
+  test("the extend button adds time to that call, and the status message shows the new limit", async () => {
+    const r = await rig();
+    r.start("c1");
+    await settle();
+    const status = r.sent[0]!;
+    const i = r.config.telegram.steering.buttons.findIndex((b) => "extend_minutes" in b);
+    const max = r.config.flow.timing.max_call_seconds;
+    await r.desk.onButton({ pressId: "q1", messageId: status.id, data: `steer:${i}` });
+    await r.desk.onButton({ pressId: "q2", messageId: status.id, data: `steer:${i}` });
+    expect(r.extended).toEqual([{ callId: "c1", minutes: 5 }, { callId: "c1", minutes: 5 }]);
+    expect(r.steered).toEqual([]);
+    expect(r.answers.at(-1)).toEqual({ pressId: "q2", notice: `Added 5 min: the call can run ${(max + 600) / 60}:00.` });
+    await settle();
+    expect(r.lastEdit()).toContain(`0:00 of ${(max + 600) / 60}:00`);
     r.desk.detach();
   });
 

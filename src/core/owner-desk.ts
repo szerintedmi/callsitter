@@ -1,5 +1,5 @@
 import type { AppConfig, LiveAppend, TelegramConfig } from "./config";
-import type { OwnerSteerResult } from "./call-session";
+import type { OwnerExtendResult, OwnerSteerResult } from "./call-session";
 import { describeCosts } from "./cost";
 import { logger } from "./log";
 import type { Clock, EventBus, MessageLayout, OwnerButtonPress, OwnerChat, OwnerMessage } from "./ports";
@@ -27,6 +27,8 @@ export interface OwnerDeskDeps {
   enterStage: (callId: string, stage: string, label: string) => OwnerSteerResult;
   /** ends the call once the agent's goodbye has played (CallSession.hangUpFromOwner) */
   hangUp: (callId: string) => OwnerSteerResult;
+  /** lets the call run `minutes` longer (CallSession.extendFromOwner) */
+  extend: (callId: string, minutes: number) => OwnerExtendResult;
   /** whether steering is possible at all (it needs a chat we can hear from) */
   canSteer: boolean;
 }
@@ -71,6 +73,8 @@ interface CallView {
   lines: Map<number, { speaker: string; text: string; at: number }>;
   ended?: { reason: string; at: number };
   costs?: CallCosts;
+  /** the call's length limit (ms), once the owner has extended it */
+  limitMs?: number;
   /** what the message shows now (text and layout, after the last edit) */
   shown: string;
   lastEditAt: number;
@@ -324,6 +328,13 @@ export class OwnerDesk {
     if (!button) return void (await answer("That button no longer does anything."));
     if (!callId || !v || v.ended) return void (await answer("That call has ended."));
     if (!this.steeringOn()) return void (await answer("Steering is turned off."));
+    if ("extend_minutes" in button) {
+      const res = this.d.extend(v.callId, button.extend_minutes);
+      if (!res.ok) return void (await answer(`Not extended: ${res.reason}.`));
+      v.limitMs = res.maxCallSeconds * 1000;
+      this.schedule(v);
+      return void (await answer(`Added ${button.extend_minutes} min: the call can run ${clock(v.limitMs)}.`));
+    }
     if ("stage" in button) {
       const res = this.d.enterStage(v.callId, button.stage, button.label);
       const as = this.d.config().flow.rules.find((r) => r.stage === button.stage)?.then?.tell_live?.as;
@@ -398,7 +409,7 @@ export class OwnerDesk {
     const now = v.ended ? v.startedAt + v.ended.at : this.d.clock.now();
     const head = v.ended
       ? `✅ Call ended · ${v.from || "unknown caller"} · ${clock(now - v.startedAt)} · ${v.ended.reason}`
-      : `📞 Incoming call · ${v.from || "unknown caller"} · ${clock(now - v.startedAt)}`;
+      : `📞 Incoming call · ${v.from || "unknown caller"} · ${clock(now - v.startedAt)}${v.limitMs ? ` of ${clock(v.limitMs)}` : ""}`;
     const c = v.verdict;
     const state = [
       c ? `${this.leaning(c) ? "leaning " : ""}${c.verdict} ${Math.round(c.confidence * 100)}% · urgency ${c.urgency.toFixed(2)}` : v.ended ? "" : "listening…",

@@ -17,7 +17,7 @@ The repo is private on GitHub Free, so `main` can't be protected, and environmen
 `scamsitter-deploy deploy <image>@sha256:<digest>` on the VPS:
 
 1. **Pulls** the image. The job's short-lived `GITHUB_TOKEN` arrives on stdin and goes into a throwaway Docker config, so no registry credential stays on the VPS.
-2. **Drains** the running app (`scripts/control.ts drain`). New calls are **rejected as busy** (Telnyx `USER_BUSY`, SIP `486`), and it waits up to `DRAIN_WAIT` (15 min) for live calls to end.
+2. **Drains** the running app (`scripts/control.ts drain`). New calls are **rejected as busy** (Telnyx `USER_BUSY`, SIP `486`), and it waits up to `DRAIN_WAIT` (21 min: a full call, call-flow.yaml `max_call_seconds`, plus its goodbye) for live calls to end. A call the owner extended from Telegram can outlast it.
    - If they don't end in time, the drain is lifted and the job fails with exit 75 ("deferred"). Nothing has changed; re-run the job later.
    - The drain expires by itself, so a deploy that dies can't leave calls blocked.
 3. **Backs up** SQLite (`VACUUM INTO`) to `/var/lib/scamsitter/backups/pre-deploy-<time>-<old digest>.db`. The last 10 are kept.

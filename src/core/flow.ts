@@ -14,6 +14,8 @@ export interface FlowState {
   /** the transcript's callerRev at the last Luna call; Luna is only re-invoked when the caller said more */
   lastLunaCallerRev: number | null;
   callerRev: number;
+  /** time the owner added to max_call_seconds (telegram.yaml extend_minutes buttons) */
+  extendedMs?: number;
 }
 
 export type FlowAction =
@@ -50,7 +52,7 @@ export function holds(cond: Condition, a: Answer | undefined): boolean {
 }
 
 export function decide(c: Classification, s: FlowState, cfg: Pick<AppConfig, "flow" | "luna">): FlowAction {
-  if (s.elapsedMs >= cfg.flow.timing.max_call_seconds * 1000) return { kind: "end_call", reason: "max call length reached" };
+  if (s.elapsedMs >= cfg.flow.timing.max_call_seconds * 1000 + (s.extendedMs ?? 0)) return { kind: "end_call", reason: "max call length reached" };
 
   const rule = matchRule(c, s.stage, cfg.flow.rules);
   if (!rule) return { kind: "none", reason: "no rule matched" };

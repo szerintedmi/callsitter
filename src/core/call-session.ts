@@ -49,6 +49,9 @@ export interface CallSessionDeps {
 /** Whether the owner's message went out (steerFromOwner), or why it didn't. */
 export type OwnerSteerResult = { ok: true } | { ok: false; reason: string };
 
+/** The call's new length limit once the owner extended it (extendFromOwner), or why not. */
+export type OwnerExtendResult = { ok: true; maxCallSeconds: number } | { ok: false; reason: string };
+
 /** caller audio kept while Live connects (~10 s of 20 ms frames) */
 const EARLY_AUDIO_MAX_FRAMES = 500;
 
@@ -75,6 +78,8 @@ export class CallSession {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private maxTimer: ReturnType<typeof setTimeout> | null = null;
   private timeUpTimer: ReturnType<typeof setTimeout> | null = null;
+  /** time_up or the deadline has come: the agent is saying goodbye, so the call can't be extended */
+  private timeIsUp = false;
   /**
    * Last caller speech or agent speech (wall clock). Agent speech counts until it has played
    * out, so this can be in the future.
@@ -176,15 +181,7 @@ export class CallSession {
     this.codec = codec;
     this.answeredAt = this.d.clock.now();
     // The deadline runs from answer, so a Live connection that stalls can't keep the call open.
-    // time_up asks for the goodbye first; at the deadline the call ends once it has played.
-    const maxMs = cfg.flow.timing.max_call_seconds * 1000;
-    const timeUpMs = cfg.flow.timing.time_up ? maxMs - cfg.flow.timing.time_up.seconds_left * 1000 : 0;
-    if (timeUpMs > 0) this.timeUpTimer = setTimeout(() => this.orch.timeUp(), timeUpMs);
-    this.maxTimer = setTimeout(() => {
-      void this.hangupAfterGoodbye("max call length reached", "bot");
-      // Backstop: the goodbye check only runs while the call is active.
-      this.maxTimer = setTimeout(() => void this.hangup("max call length reached", "bot"), cfg.flow.timing.agent_idle.max_hangup_wait_ms + 1000);
-    }, maxMs);
+    this.scheduleDeadline();
 
     // Say hello straight away with the recorded greeting; Live connects meanwhile and carries on from it.
     // Not over OpenAI SIP: the phone leg is OpenAI's, so there is nowhere to play it.
@@ -414,6 +411,51 @@ export class CallSession {
     return { ok: true };
   }
 
+  /**
+   * The owner's extend button (telegram.yaml steering.buttons extend_minutes): the call may run
+   * that much longer. Taps add up. Too late once the agent has been told to say goodbye.
+   */
+  extendFromOwner(minutes: number): OwnerExtendResult {
+    if (!this.d.config().telegram.steering.enabled) return { ok: false, reason: "steering is turned off (telegram.yaml)" };
+    if (this.stopped) return { ok: false, reason: "that call has ended" };
+    if (this.timeIsUp) return { ok: false, reason: "the agent is already saying goodbye" };
+    this.orch.extendedMs += minutes * 60_000;
+    this.scheduleDeadline();
+    const maxCallSeconds = this.maxCallMs() / 1000;
+    this.note("info", `the owner added ${minutes} min: the call can run ${Math.round(maxCallSeconds / 60)} min`);
+    return { ok: true, maxCallSeconds };
+  }
+
+  /** max_call_seconds plus what the owner added (ms) */
+  private maxCallMs(): number {
+    return this.d.config().flow.timing.max_call_seconds * 1000 + this.orch.extendedMs;
+  }
+
+  /**
+   * (Re)sets the call's deadline, from answer: time_up asks for the goodbye first; at the deadline
+   * the call ends once it has played.
+   */
+  private scheduleDeadline() {
+    if (this.maxTimer) clearTimeout(this.maxTimer);
+    if (this.timeUpTimer) clearTimeout(this.timeUpTimer);
+    const cfg = this.d.config();
+    const leftMs = this.answeredAt + this.maxCallMs() - this.d.clock.now();
+    const timeUpMs = cfg.flow.timing.time_up ? leftMs - cfg.flow.timing.time_up.seconds_left * 1000 : 0;
+    if (timeUpMs > 0) {
+      this.timeUpTimer = setTimeout(() => {
+        this.timeIsUp = true;
+        this.orch.timeUp();
+      }, timeUpMs);
+    }
+    this.maxTimer = setTimeout(() => {
+      this.timeIsUp = true;
+      void this.hangupAfterGoodbye("max call length reached", "bot");
+      // Backstop: the goodbye check only runs while the call is active.
+      const wait = cfg.flow.timing.agent_idle;
+      this.maxTimer = setTimeout(() => void this.hangup("max call length reached", "bot"), wait.max_hangup_wait_ms + wait.max_goodbye_overrun_ms + 1000);
+    }, Math.max(0, leftMs));
+  }
+
   /** The agent is speaking, or the caller spoke and the agent is about to reply. */
   private agentBusy(): boolean {
     const now = this.d.clock.now();
@@ -538,8 +580,12 @@ export class CallSession {
   checkPendingHangup() {
     const p = this.pendingHangup;
     if (!p) return;
-    const waited = this.d.clock.now() - p.since;
-    if (this.agentBusy() && waited < this.d.config().flow.timing.agent_idle.max_hangup_wait_ms) return;
+    const now = this.d.clock.now();
+    const waited = now - p.since;
+    const st = this.d.config().flow.timing.agent_idle;
+    if (this.agentBusy() && waited < st.max_hangup_wait_ms) return;
+    // Past the wait, still let a sentence in progress (a goodbye that started late) finish.
+    if (now < this.agentSpeechUntil + st.agent_pause_ms && waited < st.max_hangup_wait_ms + st.max_goodbye_overrun_ms) return;
     this.pendingHangup = null;
     void this.hangup(p.reason, p.by).then(p.resolve);
   }

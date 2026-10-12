@@ -298,7 +298,7 @@ export const CallFlowConfig = z
     // Frames the flow: when Jev runs, when the agent counts as idle, and the call length cap.
     timing: z
       .object({
-        max_call_seconds: z.number().int().positive().default(900),
+        max_call_seconds: z.number().int().positive().default(1200),
         // With seconds_left of max_call_seconds to go, the call enters the time_up stage and Live is
         // told tell_live (say goodbye). At max_call_seconds the call ends once the goodbye has
         // played. Omitted: the call just ends at max_call_seconds.
@@ -331,13 +331,16 @@ export const CallFlowConfig = z
             agent_pause_ms: z.number().int().min(0).default(1000),
             // A hangup waits for the agent's goodbye to play out (the agent idle), but at most this long.
             max_hangup_wait_ms: z.number().int().min(0).default(8000),
+            // If the agent is still speaking then (a goodbye that started late), the hangup waits
+            // for it to finish, but at most this much longer.
+            max_goodbye_overrun_ms: z.number().int().min(0).default(10000),
           })
-          .default({ reply_window_ms: 3000, agent_pause_ms: 1000, max_hangup_wait_ms: 8000 }),
+          .default({ reply_window_ms: 3000, agent_pause_ms: 1000, max_hangup_wait_ms: 8000, max_goodbye_overrun_ms: 10000 }),
       })
       .default({
-        max_call_seconds: 900,
+        max_call_seconds: 1200,
         classify: { settle_ms: 600, max_wait_ms: 4000, retry_min_ms: 500, retry_max_ms: 8000 },
-        agent_idle: { reply_window_ms: 3000, agent_pause_ms: 1000, max_hangup_wait_ms: 8000 },
+        agent_idle: { reply_window_ms: 3000, agent_pause_ms: 1000, max_hangup_wait_ms: 8000, max_goodbye_overrun_ms: 10000 },
       }),
     // gpt-live-1 waits quietly when nobody speaks and has no idle setting, so the server nudges it.
     silence: z
@@ -604,7 +607,8 @@ export const TelegramConfig = z.object({
         .refine((t) => t.includes(OWNER_MESSAGE), `needs ${OWNER_MESSAGE}`),
       // Buttons under a live call's status message; a tap sends `text` as `as`, and with hang_up
       // ends the call once the agent's goodbye has played (so does /hangup). A `stage` button
-      // moves the call into that call-flow stage instead, sending the rule's tell_live.
+      // moves the call into that call-flow stage instead, sending the rule's tell_live. An
+      // `extend_minutes` button lets the call run that much past max_call_seconds (taps add up).
       buttons: z
         .array(
           z.union([
@@ -615,6 +619,7 @@ export const TelegramConfig = z.object({
               hang_up: z.boolean().default(false),
             }),
             z.strictObject({ label: z.string().min(1).max(30), stage: labelName }),
+            z.strictObject({ label: z.string().min(1).max(30), extend_minutes: z.number().positive().max(60) }),
           ]),
         )
         .max(8)

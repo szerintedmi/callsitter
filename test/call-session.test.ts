@@ -453,6 +453,28 @@ describe("call session lifecycle", () => {
     expect(r.hangups).toEqual(["cc1"]);
   });
 
+  test("the owner's extensions add up and push time_up and the deadline back; too late once time is up", async () => {
+    const r = await rig({
+      config: (c) => {
+        c.flow.timing.max_call_seconds = 0.2;
+        c.flow.timing.time_up = { ...c.flow.timing.time_up!, seconds_left: 0.1 };
+      },
+    });
+    const ended: string[] = [];
+    r.bus.subscribe((e) => void (e.type === "call.ended" && ended.push(e.reason)));
+    expect(r.session.extendFromOwner(0.002)).toEqual({ ok: true, maxCallSeconds: 0.32 });
+    expect(r.session.extendFromOwner(0.002)).toEqual({ ok: true, maxCallSeconds: 0.44 });
+    await Bun.sleep(250);
+    expect(r.appended).toEqual([]);
+    expect(r.hangups).toEqual([]);
+    await Bun.sleep(150);
+    expect(r.session.orch.stage).toBe("time_up");
+    expect(r.session.extendFromOwner(5)).toEqual({ ok: false, reason: "the agent is already saying goodbye" });
+    await Bun.sleep(150);
+    await r.session.finished;
+    expect(ended).toEqual(["max call length reached"]);
+  });
+
   test("max call length applies while Live is still connecting", async () => {
     const r = await stalled((c) => {
       c.flow.timing.max_call_seconds = 0.03;
@@ -813,6 +835,29 @@ describe("call session silence watchdog", () => {
       await Bun.sleep(0);
       expect(r.hangups).toEqual(["cc1"]);
       expect(hungUp).toBe(true);
+    });
+
+    test("a goodbye still playing at max_hangup_wait_ms gets to finish (up to max_goodbye_overrun_ms)", async () => {
+      const r = await rig();
+      const steer = (r.session.orch as any).d.steer;
+      // The caller talks through the goodbye request; the agent only starts at 7.5 s.
+      r.session.onCallerAudio(loud);
+      void steer.hangup("max call length reached");
+      for (let t = 0; t < 7500; t += 100) {
+        r.session.onCallerAudio(loud);
+        r.advance(100);
+        r.session.checkPendingHangup();
+      }
+      r.handlers().onAudio(speech(3000)); // "Sorry, I have to dash now. Could you call back later?"
+      for (let t = 0; t < 3900; t += 100) {
+        r.advance(100);
+        r.session.checkPendingHangup();
+      }
+      expect(r.hangups).toHaveLength(0);
+      r.advance(200);
+      r.session.checkPendingHangup();
+      await Bun.sleep(0);
+      expect(r.hangups).toEqual(["cc1"]);
     });
 
     test("send: now goes out while the agent speaks, replacing an older stage still waiting", async () => {

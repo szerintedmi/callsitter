@@ -90,6 +90,7 @@ const desk = telegram
       enterStage: (callId, stage, label) =>
         manager.get(callId)?.stageFromOwner(stage, label) ?? { ok: false, reason: "the call isn't connected yet" },
       hangUp: (callId) => manager.get(callId)?.hangUpFromOwner() ?? { ok: false, reason: "the call isn't connected yet" },
+      extend: (callId, minutes) => manager.get(callId)?.extendFromOwner(minutes) ?? { ok: false, reason: "the call isn't connected yet" },
     })
   : undefined;
 

@@ -20,7 +20,7 @@ CONF=/etc/scamsitter/deploy.conf
 [[ -r $CONF ]] && . "$CONF"
 : "${IMAGE_REPO:?set IMAGE_REPO in $CONF}"
 GHCR_USER=${GHCR_USER:-github-actions}
-DRAIN_WAIT=${DRAIN_WAIT:-900}
+DRAIN_WAIT=${DRAIN_WAIT:-1260}
 KEEP_RELEASES=${KEEP_RELEASES:-5}
 KEEP_BACKUPS=${KEEP_BACKUPS:-10}
 

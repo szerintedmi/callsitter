@@ -49,12 +49,12 @@ defaults:
 
 timing:
   # Hang up after this long, whatever the rules say (public calls: public.yaml caps it lower).
-  max_call_seconds: 900
+  max_call_seconds: 1200
   # When seconds_left remain, the call enters the time_up stage and Live is told to say
   # goodbye. At max_call_seconds it ends once the goodbye has played (at most
   # agent_idle.max_hangup_wait_ms), or at the first silence after it (silence.hang_up_in).
   time_up:
-    seconds_left: 30
+    seconds_left: 45
     tell_live:
       as: commentary
       send: now
@@ -77,6 +77,7 @@ timing:
     reply_window_ms: 3000
     agent_pause_ms: 1000   # agent still "speaking" this long after its last audio (phrase pauses)
     max_hangup_wait_ms: 8000   # a hangup waits for the goodbye to play out, at most this long
+    max_goodbye_overrun_ms: 10000   # …but not mid-sentence: then it waits up to this much longer
 
 # gpt-live-1 has no idle behaviour: it sits quietly when nobody speaks. If there's no caller
 # speech and no agent audio for after_ms (speech levels: connection.yaml), tell_live is sent.
