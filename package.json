@@ -3,22 +3,22 @@
   "type": "module",
   "private": true,
   "devDependencies": {
-    "@types/bun": "^1.4.2",
-    "@types/three": "^0.180.0",
-    "drizzle-kit": "^0.31.11",
-    "playwright-core": "^1.64.0"
+    "@types/bun": "1.4.3",
+    "@types/three": "0.186.0",
+    "drizzle-kit": "0.31.11",
+    "playwright-core": "1.64.0"
   },
   "peerDependencies": {
-    "typescript": "^7.0.2"
+    "typescript": "7.0.2"
   },
   "dependencies": {
-    "@typesafe-ai/sdk": "^0.6.0",
-    "drizzle-orm": "^0.45.3",
-    "hono": "^4.13.13",
-    "openai": "^7.28.0",
-    "three": "^0.180.0",
-    "yaml": "^2.9.1",
-    "zod": "^4.6.5"
+    "@typesafe-ai/sdk": "0.6.0",
+    "drizzle-orm": "0.45.4",
+    "hono": "4.13.13",
+    "openai": "7.32.0",
+    "three": "0.186.1",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
   },
   "scripts": {
     "dev": "bun --watch src/runtime/bun.ts",
