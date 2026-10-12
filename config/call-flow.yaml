@@ -158,10 +158,6 @@ rules:
           after only made up: card numbers, codes, passwords or details that won't work, with
           slips to correct. Never share real data. Don't wrap up or offer to pass a message on:
           keep going until they give up.
-      # "Carry on as you were" (the default below) sent Live back to its prompt here: "I'll get
-      # back to you on that. Anything else?" on every push to transfer money, until the caller
-      # hung up (dev call 2026-10-01). This leaves it to Live how to go on. Sent as the default is.
-      when_live_asks_for_help: "SUPERVISOR: Nothing to add. Reply to the caller and keep playing along: it's up to you whether to stall this step a bit longer or go along with it."
 
   # The polite no is under way: nothing more until the call ends.
   - stage: keep_declining
@@ -237,14 +233,15 @@ rules:
 
 # Live asked for help itself (session.delegation.created). Live is waiting, so it always gets an
 # answer: the stage's own text (a rule's then.when_live_asks_for_help), sent as below, else
-# this default, also before any stage and in time_up. This one is fixed, without Luna: the Live prompt says to delegate only for what its
-# instructions don't cover (no eval case asks, but a prod scam call asked 8 times). The event has
-# no task text, so the answer can only give the status and the next step, as the live-delegation
-# guide asks of a backend result. Not "as your instructions say": Live took that as its prompt and
-# went back to "I'll pass that on" mid waste_time. As commentary the agent replies at once; as
-# thinking, in 5 runs it paused up to 1.7 s mid-reply. ({luna_response} in the text would ask
-# Luna, with `fallback` when she has none.)
+# this default. It's fixed, without Luna ({luna_response} in the text would ask her, with
+# `fallback` when she has none), so it can't tell Live anything new; the Live prompt says nobody
+# can look anything up. It says no more than that: in prod scam calls Live asked up to 12 times
+# a call, and an answer that said what to do ("keep playing along", "carry on as you were")
+# came after the owner's Telegram message and replaced it (prod call 2026-10-12: the badge
+# number question was never asked). "Carry on as you were" also sent Live back to its prompt
+# mid waste_time. As commentary the agent replies at once; as thinking, in 5 runs it paused up
+# to 1.7 s mid-reply.
 when_live_asks_for_help:
   tell_live:
     as: commentary
-    text: "SUPERVISOR: Nothing to add. Reply to the caller and carry on as you were; don't promise anything new."
+    text: "SUPERVISOR: Nothing new."

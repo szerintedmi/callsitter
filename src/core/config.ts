@@ -593,6 +593,8 @@ export const TelegramConfig = z.object({
       enabled: z.boolean().default(true),
       // the owner's messages older than this are ignored (sent while the server was down)
       stale_after_ms: z.number().int().positive().default(60_000),
+      // after the owner's message or stage button, a call-flow stage text waits this long
+      hold_stage_ms: z.number().int().nonnegative().default(30_000),
       default: z.enum(LIVE_APPENDS).default("commentary"),
       // first character(s) of a message → how it reaches Live instead of `default`
       prefixes: z.record(z.string().min(1).max(4).regex(/^\S+$/, "no spaces"), z.enum(LIVE_APPENDS)).default({ "!": "instructions", "~": "thinking" }),

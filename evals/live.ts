@@ -56,6 +56,7 @@ export async function runLiveCase(c: LiveCase, cfg: AppConfig, s: Settings, apiK
     `agent: ${reply.text || "(silent)"}${notes.length ? `\n    (${notes.join(", ")})` : ""}`,
     `    replied after ${secs(timing.replyAfterMs)}, longest pause ${secs(timing.longestPauseMs)} · recording: ${recordTo}`,
   ].join("\n");
+  if (c.no_help && reply.delegated) return { pass: false, detail: `Live asked for help. ${g.reason}`, log, recording: recordTo, timing };
   return { pass: g.pass, detail: g.reason, log, recording: recordTo, timing };
 }
 

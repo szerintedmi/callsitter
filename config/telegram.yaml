@@ -24,6 +24,9 @@ steering:
   enabled: true
   # Your messages older than this are ignored (sent while the server was down).
   stale_after_ms: 60000
+  # A call-flow stage text due this soon after your message or stage button waits until then,
+  # so it doesn't replace what you said (only the newest one goes out). Not the time-up text.
+  hold_stage_ms: 30000
   # How your message reaches Live (call-flow.yaml explains the kinds). It goes out at once:
   # commentary and thinking never cut the agent off; instructions do.
   default: commentary
