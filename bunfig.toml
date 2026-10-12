@@ -1,0 +1,3 @@
+[install]
+# `bun add` pins exact versions
+exact = true
