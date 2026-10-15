@@ -118,40 +118,95 @@ export const github = `<svg viewBox="0 0 16 16" width="28" height="28" aria-hidd
 /** "14:26:40": hours, minutes, seconds */
 const hms = (s: number) => [Math.floor(s / 3600), Math.floor(s / 60) % 60, Math.floor(s) % 60].map((n, i) => (i ? String(n).padStart(2, "0") : String(n))).join(":");
 
-/** The home page: the recordings, a call to play the game, and the bot's number. */
-export function realCallsPage(base: string, o: { selected: string; autoplay: boolean; wastedSeconds: number; phone: string }): string {
-  const config: PlayerConfig = { demos: DEMOS, selected: o.selected, autoplay: o.autoplay, render: false, base };
-  const tabs = DEMOS.map(
-    (x) => `<a class="rc-tab s-${x.scene}" href="${base}listen/${x.slug}" data-slug="${x.slug}">${esc(x.title)}</a>`,
-  ).join("");
-  return `<!doctype html>
+const head = (title: string, description: string, css: string) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="description" content="Real calls to my phone, answered by ScamSitter, the bot that wastes scammers' time.">
+<meta name="description" content="${description}">
 <meta name="theme-color" content="#0e0d10">
-<title>ScamSitter</title>
+<title>${title}</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jersey+10&family=Pixelify+Sans:wght@500;600&display=swap">
-<style>${rootCss}${homeCss}${realCallsCss}</style>
-</head>
+<style>${css}</style>
+</head>`;
+
+/**
+ * The public pages' top bar (home, /bot, the game at /play): the brand (home), scammer time wasted
+ * (#wasted: the game page's script keeps it live), the bot page's button (not on it), GitHub.
+ * `player`: the game page's player chip, first on the right (topCss; public.ts moves it on a phone).
+ */
+export const top = (base: string, wastedSeconds: number, o: { botLink: boolean; player?: string }) =>
+  `<header class="rc-top"><a class="rc-brand" href="${base}">SCAMSITTER</a><p class="rc-wasted">Scammer time wasted: <b id="wasted">${hms(wastedSeconds)}</b></p><div class="rc-right">${
+    o.player ?? ""
+  }${o.botLink ? `<a class="rc-own" href="${base}bot">GET YOUR OWN BOT</a>` : ""}<a class="rc-gh" href="https://github.com/szerintedmi/scamsitter" aria-label="ScamSitter on GitHub">${github}</a></div></header>`;
+
+/** The home page: the recordings, and a call to try the bot from the browser (the games at /play). */
+export function realCallsPage(base: string, o: { selected: string; autoplay: boolean; wastedSeconds: number }): string {
+  const config: PlayerConfig = { demos: DEMOS, selected: o.selected, autoplay: o.autoplay, render: false, base };
+  const tabs = DEMOS.map(
+    (x) => `<a class="rc-tab s-${x.scene}" href="${base}listen/${x.slug}" data-slug="${x.slug}">${esc(x.title)}</a>`,
+  ).join("");
+  return `${head("ScamSitter", "Real calls to my phone, answered by ScamSitter, the bot that wastes scammers' time.", rootCss + topCss + homeCss + realCallsCss)}
 <body>
-<header class="rc-top"><div><a class="rc-brand" href="${base}">SCAMSITTER</a><p class="rc-wasted">scammers' time wasted: <b>${hms(o.wastedSeconds)}</b></p></div><a class="rc-gh" href="https://github.com/szerintedmi/scamsitter" aria-label="ScamSitter on GitHub">${github}</a></header>
+<div class="rc-col">
+${top(base, o.wastedSeconds, { botLink: true })}
 <main class="rc" id="rc">
-  <h1 class="rc-h"><b>REAL CALL RECORDINGS</b><span>ScamSitter answering my phone</span></h1>
+  <h1 class="rc-h"><b>REAL CALLS.</b><span>A bot answers my phone. Scammers meet their match.</span></h1>
   <nav class="rc-tabs" aria-label="Recordings">${tabs}</nav>
   ${stage}
   <div class="rc-caption" id="rc-caption"></div>
-  <a class="rc-cta" href="${base}play"><b>PLAY WITH THE BOT ▸</b><span>Call it from your browser</span></a>${
-    o.phone ? `\n  <p class="rc-dial">OR FROM YOUR PHONE: <a href="tel:${o.phone.replaceAll(" ", "")}">${esc(o.phone)}</a></p>` : ""
-  }
+  <div class="rc-try"><a class="rc-cta" href="${base}play">PLAY THE BOT <i>▶</i></a><span>Call from your browser</span></div>
 </main>
+</div>
 <audio id="rc-audio" preload="metadata" playsinline></audio>
 <script type="application/json" id="rc-config">${json(config)}</script>
 <script src="${base}assets/listen.js?v=${BUILD}"></script>
+</body>
+</html>`;
+}
+
+/** "Get your own bot": not open yet, a waitlist (POST call/waitlist). Its few lines of script are inline. */
+export function botPage(base: string, o: { wastedSeconds: number }): string {
+  return `${head("Get your own bot · ScamSitter", "Get ScamSitter on your own phone: join the waitlist.", rootCss + topCss + homeCss + botCss)}
+<body>
+<div class="rc-col">
+${top(base, o.wastedSeconds, { botLink: false })}
+<main class="bot">
+  <h1 class="rc-h"><b>GET YOUR OWN BOT.</b></h1>
+  <form class="wl" id="wl" method="post" novalidate>
+    <label class="sr" for="wl-in">Your email</label>
+    <input id="wl-in" type="email" name="email" autocomplete="email" inputmode="email" maxlength="254" spellcheck="false" placeholder="you@example.com" required>
+    <button type="submit" id="wl-ok" disabled>JOIN THE WAITLIST</button>
+  </form>
+  <p class="wl-err" id="wl-err" role="alert" hidden></p>
+  <p class="wl-done" id="wl-done" role="status" hidden>THANKS! YOU'RE ON THE LIST.</p>
+  <a class="bot-back" href="${base}">BACK TO THE REAL CALLS</a>
+</main>
+</div>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id), form = $("wl"), input = $("wl-in"), ok = $("wl-ok"), err = $("wl-err");
+  const fail = (m) => { err.textContent = m; err.hidden = false; };
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = input.value.trim();
+    err.hidden = true;
+    if (!email) return input.focus();
+    ok.disabled = true;
+    try {
+      const r = await fetch(${json(`${base}call/waitlist`)}, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
+      if (r.ok) { form.hidden = true; $("wl-done").hidden = false; }
+      else fail((await r.json().catch(() => ({}))).message || "Something went wrong.");
+    } catch { fail("Couldn't send. Try again."); }
+    finally { ok.disabled = false; }
+  });
+  // Enabled only now: without the script, submitting would put the email in a URL.
+  ok.disabled = false;
+})();
+</script>
 </body>
 </html>`;
 }
@@ -186,42 +241,85 @@ html,body{margin:0;background:var(--ink);color:var(--paper);font-family:var(--te
 a:focus-visible,button:focus-visible{outline:3px solid var(--amb);outline-offset:2px}
 `;
 
-const homeCss = `
-.rc-top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:4px 24px;max-width:1132px;margin:0 auto;padding:12px 16px 4px}
-.rc-brand{font-family:var(--disp);font-size:clamp(28px,4vw,40px);line-height:1;letter-spacing:.03em;color:var(--paper);text-decoration:none}
+// The top bar (top()), on every public page, in a column as wide as the home page's: on a
+// desktop, the top bar, title, tabs, the 16:9 stage and the PLAY THE BOT button all fit the first
+// screen (the stage's width follows the window's height). public.ts includes it for /play.
+export const topCss = `
+.rc-col{--rc-chrome:318px;width:min(1132px,100% - 32px,max(560px,(100svh - var(--rc-chrome)) * 16 / 9));margin:0 auto}
+.rc-top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px 20px;padding:14px 0 12px;border-bottom:3px solid var(--line)}
+.rc-brand{justify-self:start}
+.rc-brand{font-family:var(--disp);font-size:34px;line-height:1;letter-spacing:.03em;color:var(--paper);text-decoration:none}
+.rc-wasted{margin:0;text-align:center;font-size:15px;color:var(--dim);white-space:nowrap}
+.rc-wasted b{font-family:var(--disp);font-weight:400;font-size:24px;color:var(--amb);font-variant-numeric:tabular-nums;vertical-align:-2px;margin-left:4px}
+.rc-right{display:flex;align-items:center;gap:16px;justify-self:end;min-height:37px}
+.rc-own{font-family:var(--disp);font-size:22px;line-height:1;letter-spacing:.04em;padding:7px 12px 8px;background:var(--amb);color:var(--ink);text-decoration:none;box-shadow:4px 4px 0 #000;white-space:nowrap}
+.rc-own:hover{transform:translate(-1px,-1px);box-shadow:5px 5px 0 #000}
 .rc-gh{color:var(--dim);display:flex}
 .rc-gh:hover{color:var(--paper)}
-.rc{max-width:1132px;margin:0 auto;padding:8px 16px 32px}
-.rc-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 14px;margin:8px 0 12px;font-weight:400}
-.rc-h b{font-family:var(--disp);font-weight:400;font-size:clamp(34px,5.4vw,60px);line-height:.85;letter-spacing:.03em;color:var(--amb);text-shadow:3px 3px 0 #000}
-.rc-h span{font-size:clamp(14px,1.6vw,18px);color:var(--dim)}
-.rc-wasted{margin:4px 0 0;font-size:14px;color:var(--dim)}
-.rc-wasted b{font-family:var(--disp);font-weight:400;font-size:20px;color:var(--amb);font-variant-numeric:tabular-nums}
-.rc-tabs{display:grid;grid-template-columns:repeat(4,1fr);margin-bottom:10px;box-shadow:inset 0 0 0 3px var(--line)}
-.rc-tab{display:flex;align-items:center;justify-content:center;min-height:48px;padding:6px 10px;text-align:center;font-family:var(--disp);font-size:clamp(17px,2.2vw,26px);line-height:1;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);text-decoration:none}
-.rc-tab+.rc-tab{box-shadow:inset 3px 0 0 var(--line)}
+.rc-own:active{transform:translate(2px,2px);box-shadow:2px 2px 0 #000}
+@media (max-width:640px){
+.rc-col{width:auto}
+.rc-top{display:flex;flex-wrap:wrap;padding:10px 16px 8px}
+.rc-right{margin-left:auto;gap:12px;min-height:32px}
+.rc-brand{font-size:28px}
+.rc-own{font-size:19px;padding:6px 10px 7px}
+.rc-wasted{order:3;flex-basis:100%;text-align:left;font-size:14px}
+.rc-wasted b{font-size:21px}
+}
+`;
+
+const homeCss = `
+.rc{padding:0 0 16px}
+.rc-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 16px;margin:14px 0 12px;font-weight:400}
+.rc-h b{font-family:var(--disp);font-weight:400;font-size:56px;line-height:.85;letter-spacing:.03em;color:var(--amb);text-shadow:3px 3px 0 #000}
+.rc-h span{font-size:18px;color:var(--paper)}
+.rc-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+.rc-tab{display:flex;align-items:center;justify-content:center;min-height:42px;padding:6px 10px;text-align:center;font-family:var(--disp);font-size:24px;line-height:1;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);text-decoration:none;box-shadow:inset 0 0 0 3px var(--line)}
 .rc-tab:hover{color:var(--paper)}
-.rc-tab[aria-current]{background:var(--amb);color:var(--ink);box-shadow:none}
-.rc-cta{display:flex;flex-direction:column;align-items:center;gap:6px;margin:28px auto 0;max-width:560px;padding:14px 20px 16px;background:var(--red);color:var(--paper);text-decoration:none;box-shadow:6px 6px 0 #000}
-.rc-cta b{font-family:var(--disp);font-weight:400;font-size:clamp(30px,4.4vw,44px);line-height:1;letter-spacing:.03em}
-.rc-cta span{font-size:16px;opacity:.9}
+.rc-tab[aria-current]{background:var(--amb);color:var(--ink);box-shadow:4px 4px 0 #000}
+.rc-try{display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:18px}
+.rc-try span{font-size:14px;color:var(--dim)}
+.rc-cta{display:block;padding:9px 28px 11px;background:var(--red);color:var(--paper);text-decoration:none;font-family:var(--disp);font-size:40px;line-height:1;letter-spacing:.04em;box-shadow:6px 6px 0 #000}
+.rc-cta i{font-style:normal;font-size:.7em;vertical-align:.08em}
 .rc-cta:hover{transform:translate(-1px,-1px);box-shadow:7px 7px 0 #000}
 .rc-cta:active{transform:translate(2px,2px);box-shadow:2px 2px 0 #000}
-.rc-dial{margin:16px 0 0;text-align:center;font-family:var(--disp);font-size:18px;letter-spacing:.06em;color:var(--dim)}
-.rc-dial a{color:var(--amb);text-decoration:none;white-space:nowrap}
 @media (max-width:640px){
-.rc-top{padding:10px 16px 2px}
-.rc{padding:4px 0 24px}
+.rc{padding:0 0 24px}
 .rc-h,.rc-tabs{margin-left:16px;margin-right:16px}
-.rc-h{margin-top:6px;margin-bottom:8px}
-.rc-tab{min-height:44px;font-size:15px;padding:4px 6px}
-.rc-tabs{grid-template-columns:repeat(2,1fr)}
-.rc-tab:nth-child(n+3){box-shadow:inset 0 3px 0 var(--line)}
-.rc-tab:nth-child(even){box-shadow:inset 3px 0 0 var(--line)}
-.rc-tab:nth-child(even):nth-child(n+3){box-shadow:inset 3px 0 0 var(--line),inset 0 3px 0 var(--line)}
-.rc-tab[aria-current]{box-shadow:none}
-.rc-cta{margin:20px 16px 0}
-.rc-dial{margin:12px 16px 0}
+.rc-h{flex-direction:column;gap:6px;margin-top:12px;margin-bottom:12px}
+.rc-h b{font-size:48px}
+.rc-h span{font-size:15px}
+.rc-tabs{grid-template-columns:repeat(2,1fr);gap:6px}
+.rc-tab{min-height:40px;font-size:18px;padding:4px 6px}
+.rc-try{margin:20px 16px 0}
+}
+`;
+
+const botCss = `
+.bot{max-width:600px;margin:0 auto;padding:14vh 0 40px;text-align:center}
+.bot .rc-h{justify-content:center;margin:0 0 22px}
+.bot .rc-h b{font-size:64px}
+.bot .wl{justify-content:center}
+.bot p{margin:0;font-size:18px;line-height:1.4}
+.wl{display:flex;gap:10px;flex-wrap:wrap}
+.wl input{flex:1 1 240px;min-width:0;padding:12px 14px;border:0;border-radius:0;background:var(--ink);color:var(--paper);box-shadow:inset 0 0 0 3px var(--line);font-family:var(--text);font-size:18px}
+.wl input::placeholder{color:var(--dim)}
+.wl input:focus{outline:0;box-shadow:inset 0 0 0 3px var(--amb)}
+.wl button{padding:9px 18px 11px;border:0;border-radius:0;background:var(--amb);color:var(--ink);font-family:var(--disp);font-size:26px;line-height:1;letter-spacing:.04em;box-shadow:5px 5px 0 #000;cursor:pointer}
+.wl button:active{transform:translate(2px,2px);box-shadow:2px 2px 0 #000}
+.wl button:disabled{opacity:.6}
+.bot .wl-err{margin-top:12px;color:var(--red-hi);font-size:16px}
+.bot .wl-done{font-family:var(--disp);font-size:32px;line-height:1;letter-spacing:.03em;color:var(--amb)}
+.bot-back{display:inline-block;margin-top:32px;font-family:var(--disp);font-size:22px;letter-spacing:.04em;color:var(--dim);text-decoration:none}
+.bot-back:hover{color:var(--paper)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+[hidden]{display:none!important}
+@media (max-width:640px){
+.bot{padding:48px 16px 32px}
+.bot .rc-h{align-items:center;margin:0 0 16px}
+.bot .rc-h b{font-size:44px}
+.bot p{font-size:16px}
+.wl button{flex:1 1 100%}
 }
 `;
 

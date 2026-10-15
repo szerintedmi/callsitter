@@ -1,4 +1,4 @@
-import { Hono, type MiddlewareHandler } from "hono";
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { streamSSE, type SSEStreamingApi } from "hono/streaming";
 import { NO_MEDIA, type CallManager } from "../core/call-manager";
@@ -7,12 +7,12 @@ import { GAMES, START, goalMet, nextPlay, playSummary, playerName, rankIn, score
 import type { LimitHit } from "../core/limits";
 import { logger } from "../core/log";
 import { errMsg } from "../core/orchestrator";
-import type { Referee, Repo } from "../core/ports";
+import type { NotifySignup, Referee, Repo } from "../core/ports";
 import { GoalWatch } from "../core/referee";
 import type { OpenAiWebRtc, WebRtcAnswer } from "../adapters/openai-live/webrtc";
 import { hostOf } from "./admin-guard";
 import type { ClientAssets } from "./admin";
-import { DEMOS, findDemo, github, realCallsPage } from "./listen";
+import { botPage, DEMOS, findDemo, realCallsPage, top, topCss } from "./listen";
 
 // The public game page, at the root of the public host (and at /public on the admin host, as a
 // preview), or at /play when the real call recordings (listen.ts) take the root: two games (config/games.yaml, src/core/game.ts). "Scam me": the visitor plays a
@@ -33,8 +33,10 @@ import { DEMOS, findDemo, github, realCallsPage } from "./listen";
 //   GET  call/:id/events      server-sent events: PlayState as Jev and the call flow move on,
 //                             until the call ends
 //   GET  call/:id/result      the game's score, rank and leaderboard once the call has ended
+//   GET  bot                  "Get your own bot": a waitlist form (listen.ts botPage)
 //   POST call/notify          {email} → 204: tell me when there's game again (shown once the
 //                             day's calls or budget have run out, or the page is closed)
+//   POST call/waitlist        {email} → 204: the bot page's waitlist (same table, list "waitlist")
 
 const log = logger("public");
 
@@ -44,11 +46,14 @@ export const isPublicCall = (callControlId: string) => callControlId.startsWith(
 /** The caller shown in the call list. */
 export const PUBLIC_FROM = "public";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 /** an SDP offer is a few KB; a request much bigger isn't one */
 const MAX_BODY_BYTES = 64 * 1024;
-/** POST call/notify: an email address */
-const MAX_NOTIFY_BYTES = 2 * 1024;
+/** POST call/notify and call/waitlist: an email address */
+const MAX_SIGNUP_BYTES = 2 * 1024;
+/** IPs whose sign-up times are kept for the per-IP limit; past this the oldest-touched go */
+const MAX_SIGNUP_IPS = 10_000;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** What has run out for everyone (the page then offers a "notify me" form); null: nothing. */
@@ -194,14 +199,13 @@ export function publicRoutes(d: PublicDeps) {
   }
 
   // Mounted at / (public host) and /public (admin preview): the page's URLs are under its own path.
-  const game = async (base: string) => page(base, await lobby(), d.config().public.phone_number, d.realCalls);
+  const game = async (base: string) => page(base, await lobby(), d.realCalls);
   if (d.realCalls) {
     const home = async (base: string, slug?: string) =>
       realCallsPage(base, {
         selected: slug ?? DEMOS[0]!.slug,
         autoplay: slug !== undefined,
         wastedSeconds: (await wasted()).seconds,
-        phone: d.config().public.phone_number,
       });
     app.get("/", async (c) => c.html(await home(c.req.path.replace(/\/?$/, "/"))));
     app.get("/play", async (c) => c.html(await game(c.req.path.slice(0, c.req.path.lastIndexOf("play")))));
@@ -212,6 +216,7 @@ export function publicRoutes(d: PublicDeps) {
       return findDemo(slug) ? c.html(await home(c.req.path.slice(0, c.req.path.indexOf("listen/")), slug)) : c.notFound();
     });
   } else app.get("/", async (c) => c.html(await game(c.req.path.replace(/\/?$/, "/"))));
+  app.get("/bot", async (c) => c.html(botPage(c.req.path.slice(0, c.req.path.lastIndexOf("bot")), { wastedSeconds: (await wasted()).seconds })));
   app.get("/call/lobby", async (c) => c.json(await lobby(), 200, { "Cache-Control": "no-store" }));
 
   app.get("/assets/public.js", async (c) => {
@@ -378,39 +383,61 @@ export function publicRoutes(d: PublicDeps) {
     }
   });
 
-  /** "notify me" sign-up times by client IP (in memory: a restart resets it) */
-  const notifyByIp = new Map<string, number[]>();
-  app.post(
-    "/call/notify",
-    bodyLimit({ maxSize: MAX_NOTIFY_BYTES, onError: (c) => c.json({ error: "bad_request", message: "Something went wrong." }, 413) }),
-    async (c) => {
-      const body = await c.req.json<{ email?: unknown }>().catch(() => ({}) as { email?: unknown });
-      const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
-      if (email.length > 254 || !EMAIL.test(email)) return c.json({ error: "email", message: "That doesn't look like an email." }, 400);
-      const ip = c.req.header("cf-connecting-ip") ?? "local";
-      const now = Date.now();
-      const recent = (notifyByIp.get(ip) ?? []).filter((t) => t > now - DAY_MS);
-      if (recent.length >= d.config().public.notify_per_ip_per_day) {
-        notifyByIp.set(ip, recent);
-        return c.json({ error: "limit", message: "Got it already. We'll let you know!" }, 429);
-      }
-      notifyByIp.set(ip, [...recent, now]);
-      // Worked out here, not taken from the page.
-      const reason = await out();
-      // Always 204, signed up before or not: the form doesn't tell who's on the list. A repeat
-      // sign-up refreshes the row and makes it pending again.
-      await d.repo.addNotifySignup({
-        email,
-        createdAt: now,
-        ip,
-        country: c.req.header("cf-ipcountry") ?? null,
-        userAgent: c.req.header("user-agent")?.slice(0, 300) ?? null,
-        reason,
-      });
-      log.info("notify signup", { reason });
-      return c.body(null, 204);
-    },
-  );
+  /** sign-up times by list and client IP (in memory: a restart resets it), oldest-touched first */
+  const signupsByIp = new Map<string, number[]>();
+  let sweptAt = 0;
+  /** Drops IPs with no sign-up in the last day (at most hourly), then the oldest-touched beyond the cap. */
+  const sweepSignups = (now: number) => {
+    if (now - sweptAt >= HOUR_MS) {
+      sweptAt = now;
+      for (const [key, times] of signupsByIp) if (times.every((t) => t <= now - DAY_MS)) signupsByIp.delete(key);
+    }
+    for (const key of signupsByIp.keys()) {
+      if (signupsByIp.size <= MAX_SIGNUP_IPS) break;
+      signupsByIp.delete(key);
+    }
+  };
+  /**
+   * An email form's POST: {email} → 204. Always 204, signed up before or not: the form doesn't
+   * tell who's on the list. A repeat sign-up refreshes the row and makes it pending again.
+   */
+  const signup = (list: NotifySignup["list"], limitMessage: string) =>
+    [
+      bodyLimit({ maxSize: MAX_SIGNUP_BYTES, onError: (c) => c.json({ error: "bad_request", message: "Something went wrong." }, 413) }),
+      async (c: Context) => {
+        const body: unknown = await c.req.json().catch(() => null);
+        const raw = body && typeof body === "object" ? (body as { email?: unknown }).email : undefined;
+        const email = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+        if (email.length > 254 || !EMAIL.test(email)) return c.json({ error: "email", message: "That doesn't look like an email." }, 400);
+        const ip = c.req.header("cf-connecting-ip") ?? "local";
+        const key = `${list} ${ip}`;
+        const now = Date.now();
+        sweepSignups(now);
+        const recent = (signupsByIp.get(key) ?? []).filter((t) => t > now - DAY_MS);
+        signupsByIp.delete(key); // re-set below: the most recently touched goes last
+        if (recent.length >= d.config().public.notify_per_ip_per_day) {
+          signupsByIp.set(key, recent);
+          return c.json({ error: "limit", message: limitMessage }, 429);
+        }
+        signupsByIp.set(key, [...recent, now]);
+        // Worked out here, not taken from the page.
+        const reason = list === "notify" ? await out() : null;
+        await d.repo.addNotifySignup({
+          email,
+          list,
+          createdAt: now,
+          ip,
+          country: c.req.header("cf-ipcountry") ?? null,
+          userAgent: c.req.header("user-agent")?.slice(0, 300) ?? null,
+          reason,
+        });
+        if (list === "notify") log.info("notify signup", { reason });
+        else log.info("waitlist signup");
+        return c.body(null, 204);
+      },
+    ] as const;
+  app.post("/call/notify", ...signup("notify", "Got it already. We'll let you know!"));
+  app.post("/call/waitlist", ...signup("waitlist", "Got it already. You're on the list!"));
 
   app.post("/call/:id/connected", (c) => {
     connected.get(c.req.param("id"))?.();
@@ -469,20 +496,22 @@ canvas.sprite{image-rendering:pixelated;display:block;flex:none;height:auto}
 .wasted span{font-family:var(--disp);font-size:clamp(16px,2.4vh,20px);letter-spacing:.06em;line-height:1;color:var(--dim)}
 #s-home:not(:has(.split[data-active])) .hero{padding-bottom:calc(clamp(22px,3.4vh,28px) + 28px)}
 #s-home:has(.split[data-active]) .hero :is(.tagline,.wasted){display:none}
-/* the header when the recordings are the home page: the same as theirs (listen.ts) */
-.ptop{justify-content:space-between;align-items:flex-start;padding:12px max(16px,calc((100% - 1100px) / 2)) calc(clamp(22px,3.4vh,28px) + 22px)}
-#s-home:has(.split[data-active]) .ptop{padding-bottom:10px}
-.pbrand{font-family:var(--disp);font-size:clamp(28px,4vw,40px);line-height:1;letter-spacing:.03em;color:var(--paper);text-decoration:none}
-.pwasted{margin:4px 0 0;font-size:14px;color:var(--dim)}
-.pwasted b{font-family:var(--disp);font-weight:400;font-size:20px;color:var(--amb);font-variant-numeric:tabular-nums}
-.pright{display:flex;align-items:center;gap:14px}
-.ptop .chip{position:static}
-.gh{color:var(--dim);display:flex}.gh:hover{color:var(--paper)}
-.dial{flex-wrap:wrap;column-gap:14px;row-gap:2px;line-height:1}
-.dial span{color:var(--dim);letter-spacing:.06em}
-.dial a{color:var(--amb);text-decoration:none;white-space:nowrap;font-variant-numeric:tabular-nums;-webkit-user-select:text;user-select:text}
-.dial a:hover{text-decoration:underline}
-#s-home:has(.split[data-active]) .dial{display:none}
+/* when the recordings are the home page: their top bar (listen.ts top(), topCss), with the
+   player's chip first on the right; room under it for the split's question */
+.ptop{flex:none;padding-top:env(safe-area-inset-top);padding-bottom:calc(clamp(22px,3.4vh,28px) + 18px)}
+#s-home:has(.split[data-active]) .ptop{padding-bottom:0}
+.rc-top .chip{padding:7px 10px 8px}
+@media (max-width:640px){
+/* a phone: the chip moves to the end of the counter's row, under GET YOUR OWN BOT */
+.ptop .rc-top{gap:0}
+.ptop .rc-right{display:contents}
+.ptop .rc-own{order:1;margin-left:auto}
+.ptop .rc-gh{order:2;margin-left:12px}
+.ptop .rc-top::after{content:"";order:3;flex-basis:100%}
+.ptop .rc-wasted{order:4;flex:1 1 auto;margin-top:8px}
+.ptop .chip{order:5;margin:6px 0 0 12px;padding:4px 8px 5px;font-size:20px}
+.ptop .chip small{font-size:16px}
+}
 .foot{font-family:var(--disp);font-size:clamp(20px,3.4vh,26px);letter-spacing:.04em;padding:10px 16px;padding-bottom:max(10px,env(safe-area-inset-bottom));text-align:center}
 .board{list-style:none;margin:0;padding:8px 14px;width:100%;font-family:var(--disp);font-variant-numeric:tabular-nums;font-size:clamp(20px,3.1vh,24px);line-height:1;letter-spacing:.05em;text-align:left;background:var(--m-shade)}
 .board li{display:grid;grid-template-columns:2.4ch 1fr auto;gap:12px;align-items:baseline;padding:3px 4px}
@@ -640,7 +669,7 @@ const half = (game: Game, title: string, goal: string, sprite: string) => `
         <div class="detail" data-detail="${game}"></div>
       </div>`;
 
-const page = (base: string, lobby: Lobby, phone: string, realCalls?: boolean) => `<!doctype html>
+const page = (base: string, lobby: Lobby, realCalls?: boolean) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -652,17 +681,14 @@ const page = (base: string, lobby: Lobby, phone: string, realCalls?: boolean) =>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jersey+10&family=Pixelify+Sans:wght@500;600&display=swap">
-<style>${css}</style>
+<style>${css}${realCalls ? topCss : ""}</style>
 </head>
 <body data-base="${base}" data-mode="scam" class="idle">
 <div id="app">
   <section class="scr" id="s-home">
 ${
   realCalls
-    ? `    <header class="band ptop">
-      <div><a class="pbrand" href="${base}" title="Real call recordings">SCAMSITTER</a><p class="pwasted">scammers' time wasted: <b id="wasted">0:00:00</b></p></div>
-      <div class="pright"><button class="chip" type="button" data-chip hidden></button><a class="gh" href="https://github.com/szerintedmi/scamsitter" aria-label="ScamSitter on GitHub">${github}</a></div>
-    </header>`
+    ? `    <div class="ptop"><div class="rc-col">${top(base, lobby.wasted.seconds, { botLink: true, player: `<button class="chip" type="button" data-chip hidden></button>` })}</div></div>`
     : `    <header class="band hero">
       <h1><button type="button" data-home>SCAMSITTER</button></h1><button class="chip" type="button" data-chip hidden></button>
       <p class="tagline">WASTE THE TIME OF SCAMMERS WHO CALL YOU</p>
@@ -671,8 +697,7 @@ ${
 }
     <div class="split" id="split">
       <p class="ask">CAN YOU FOOL THE BOT<br>THAT ANSWERS MY PHONE?</p>${half("scam", "SCAM ME", "Be the scammer. Don't get caught.", "bandit")}${half("get_through", "GET THROUGH", "Be a real caller. Reach me fast.", "caller")}
-    </div>${phone ? `
-    <footer class="band foot dial"><span>OR CALL THE BOT FROM YOUR PHONE</span><a href="tel:${phone.replaceAll(" ", "")}" id="dial" draggable="false">${phone}</a></footer>` : ""}
+    </div>
   </section>
 
   <section class="scr callbg" id="s-call" hidden>
@@ -703,7 +728,7 @@ ${
     <div class="stage">
       <h2 id="out-title">OUT OF GAME</h2>
       <p class="out-msg" id="out-msg">WE'VE RUN OUT OF GAME FOR TODAY. CHECK BACK LATER!</p>
-      <form class="notify" id="notify" novalidate>
+      <form class="notify" id="notify" method="post" novalidate>
         <label for="notify-in">WANT A SHOUT WHEN WE'RE BACK?</label>
         <input id="notify-in" type="email" name="email" autocomplete="email" inputmode="email" maxlength="254" spellcheck="false" placeholder="you@example.com" required>
         <button class="btn" type="submit" id="notify-ok">NOTIFY ME</button>
