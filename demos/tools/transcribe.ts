@@ -1,7 +1,8 @@
 // Transcribes a call recording per speaker, with word timings, for the demo builder (build.ts).
 //
-//   bun demos/tools/transcribe.ts <recording.wav> <out dir> [--end <sec>]
+//   bun demos/tools/transcribe.ts <recording.wav> <out dir> [--from <sec>] [--end <sec>]
 //
+// --from/--end transcribe a stretch of the recording; the word timings stay on its clock.
 // Each channel is cut into utterances by its energy, and each utterance goes to Whisper on its
 // own: a whole channel at once drops lines after long silences and smears word timings over
 // them. Writes <out dir>/<speaker>.words.json. The output holds the unredacted transcript: keep it
@@ -27,10 +28,11 @@ const PARALLEL = 6;
 const MIN_PEAK = 0.015;
 const peak = (env: Float32Array, a: number, b: number) => Math.max(...env.subarray(Math.floor(a / VAD_FRAME), Math.ceil(b / VAD_FRAME)));
 
-const { values, positionals } = parseArgs({ args: Bun.argv.slice(2), options: { end: { type: "string" } }, allowPositionals: true });
+const { values, positionals } = parseArgs({ args: Bun.argv.slice(2), options: { from: { type: "string" }, end: { type: "string" } }, allowPositionals: true });
 const [wav, outDir] = positionals;
-if (!wav || !outDir) throw new Error("usage: transcribe.ts <recording.wav> <out dir> [--end <sec>]");
+if (!wav || !outDir) throw new Error("usage: transcribe.ts <recording.wav> <out dir> [--from <sec>] [--end <sec>]");
 const endSec = values.end ? Number(values.end) : undefined;
+const fromSec = Number(values.from ?? 0);
 const client = new OpenAI();
 
 async function transcribeChunk(samples: Float32Array, [a, b]: [number, number], speaker: Speaker): Promise<Word[]> {
@@ -46,7 +48,7 @@ async function transcribeChunk(samples: Float32Array, [a, b]: [number, number], 
     response_format: "verbose_json",
     timestamp_granularities: ["word"],
   });
-  return withText(r.text, r.words ?? []).map((w) => ({ ...w, start: round(from + w.start), end: round(from + w.end) }));
+  return withText(r.text, r.words ?? []).map((w) => ({ ...w, start: round(fromSec + from + w.start), end: round(fromSec + from + w.end) }));
 }
 
 /** Gives each word its stretch of `text`: the word, its punctuation, and the space after it. */
@@ -71,7 +73,7 @@ export function withText(text: string, words: { word: string; start: number; end
 
 
 for (const speaker of SPEAKERS) {
-  const samples = await channelSamples(wav, speaker, RATE, endSec);
+  const samples = await channelSamples(wav, speaker, RATE, endSec, fromSec);
   const env = envelope(samples, RATE, VAD_FRAME);
   // Clicks and line noise (call setup, hang-up) make Whisper invent words ("Bye-bye.", "Peace.").
   const chunks = utterances(env, { mergeGap: 0.7, minLen: 0.15 }).filter(([a, b]) => peak(env, a, b) >= MIN_PEAK);

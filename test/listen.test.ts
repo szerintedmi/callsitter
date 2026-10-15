@@ -30,6 +30,14 @@ describe("listen routes", () => {
     expect(html).toContain('href="https://github.com/szerintedmi/scamsitter"');
   });
 
+  test("the song demo comes first, of four tabs", () => {
+    expect(DEMOS.map((d) => d.slug)).toEqual(["areyouai", "police-scam", "crypto-bot", "electrician"]);
+    expect(DEMOS[0]!.scene).toBe("areyouai");
+    const html = realCallsPage("/", { selected: "areyouai", autoplay: false, wastedSeconds: 0, phone: "" });
+    expect(html.match(/class="rc-tab /g)).toHaveLength(4);
+    expect(html).toContain("grid-template-columns:repeat(4,1fr)");
+  });
+
   test("the recorder's page has the stage only", async () => {
     const res = await get("/listen/render/electrician");
     expect(res.status).toBe(200);
@@ -38,6 +46,9 @@ describe("listen routes", () => {
     expect(html).not.toContain("<audio");
     expect(html).not.toContain('class="rc-tiles"');
     expect(await (await get("/listen/render/electrician?poster=1")).text()).toContain('"poster":true');
+    const song = await get("/listen/render/areyouai");
+    expect(song.status).toBe(200);
+    expect(await song.text()).toContain('"selected":"areyouai"');
   });
 
   test("unknown demos and files are not found", async () => {
@@ -47,6 +58,7 @@ describe("listen routes", () => {
     expect((await get("/listen/media/..%2Fpackage.json")).status).toBe(404);
     expect(asked).toEqual([]);
     expect(await (await get("/listen/media/electrician.json")).text()).toBe("electrician.json");
+    expect(await (await get("/listen/media/areyouai.mp3")).text()).toBe("areyouai.mp3");
     expect((await get("/listen/media/electrician.jpg")).status).toBe(404);
   });
 

@@ -18,10 +18,10 @@ export async function run(cmd: string[], opts: { stdin?: Uint8Array } = {}): Pro
 
 export const ffmpeg = (args: string[], opts?: { stdin?: Uint8Array }) => run(["ffmpeg", "-nostdin", "-hide_banner", "-v", "error", "-y", ...args], opts);
 
-/** One channel of `wav` as mono float samples at `rate`, cut at `endSec` if given. */
-export async function channelSamples(wav: string, speaker: Speaker, rate: number, endSec?: number): Promise<Float32Array> {
-  const cut = endSec ? ["-t", String(endSec)] : [];
-  const { stdout } = await ffmpeg(["-i", wav, ...cut, "-af", `pan=mono|c0=c${CHANNEL[speaker]}`, "-ar", String(rate), "-f", "f32le", "-"]);
+/** One channel of `wav` as mono float samples at `rate`, from `fromSec` (sample 0) to `endSec` if given. */
+export async function channelSamples(wav: string, speaker: Speaker, rate: number, endSec?: number, fromSec = 0): Promise<Float32Array> {
+  const cut = endSec ? ["-t", String(endSec - fromSec)] : [];
+  const { stdout } = await ffmpeg([...(fromSec ? ["-ss", String(fromSec)] : []), "-i", wav, ...cut, "-af", `pan=mono|c0=c${CHANNEL[speaker]}`, "-ar", String(rate), "-f", "f32le", "-"]);
   return new Float32Array(stdout.buffer, stdout.byteOffset, stdout.byteLength / 4);
 }
 
