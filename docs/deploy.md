@@ -138,7 +138,7 @@ Telnyx, and the OpenAI webhook if SIP is set up, already point at these hostname
   - `scamsitter-dev-admin.geekmango.com`: its own Access app, so its own `CF_ACCESS_AUD` in `.env`.
 - `deploy/cloudflared.yml` and `.env` (`PUBLIC_WS_BASE`, `ADMIN_HOST`, `CF_ACCESS_AUD`) point at them. Dev needs no service token.
 - Dev gets no real phone calls. Use the browser test call (`/test-call`).
-- Dev needs its own Telegram bot (`TELEGRAM_BOT_TOKEN`): the app long-polls for the owner's messages, and Telegram lets only one process poll a bot, so sharing production's would steal its messages.
+- Dev needs its own Telegram bot (`TELEGRAM_BOT_TOKEN`): the app long-polls for the owner's messages, and Telegram lets only one process poll a bot, so sharing production's would steal its messages. The same goes for `TELEGRAM_PUBLIC_CHAT_ID`: production's one bot serves both chats from one poll loop, so leave dev's blank, or point it at a group with dev's own bot in it.
 - The browser **SIP** test in dev would need its own Telnyx credential connection and OpenAI webhook pointed at the dev hostnames (`scripts/setup-sip.ts`).
 
 ## Operations
@@ -168,6 +168,15 @@ Rolling back to an older commit can also be done by reverting on `main`, which d
 | `bun run prod get-recording <call id>` | The call's recordings to `data/prod/recordings/`. |
 
 The copies hold callers' transcripts, numbers and voices. `data/` is gitignored; delete them when you're done. Then query locally, e.g. `sqlite3 data/prod/scamsitter-….db "select id, started_at, verdict from calls order by started_at desc limit 10"` or `jq -c 'select(.level != "info")' data/prod/logs/call-*-<id>.jsonl`.
+
+The public page's "notify me" sign-ups (emails left once the day's calls or budget ran out) are in the same copy. Those not yet told there's game again: `sqlite3 data/prod/scamsitter-….db "select email, datetime(created_at/1000,'unixepoch'), reason, country from notify_signups where notified_at is null"`. Nothing sets `notified_at` yet: set it yourself on the server's database once you've mailed them (signing up again clears it).
+
+**Call limits** (`config/limits.yaml`): once the phone number's calls that ended in the last 24 h have cost `phone.max_spend_usd_per_day` ($20), new callers hear busy (SIP 486: Telnyx `reject` with `USER_BUSY` over the media stream, `live.sessions.reject` over direct SIP) before any Live session starts; the call that crossed the cap runs to its end. Each declined call is stored as an ended call (`declined` set, ended by `system`, the spend in its end reason) and sends one notifying line to the main Telegram chat. The declined calls: `sqlite3 data/prod/scamsitter-….db "select datetime(started_at/1000,'unixepoch'), \"from\", declined, end_reason from calls where declined is not null order by started_at desc"`. What the spend misses:
+- Over direct SIP there's no Call Control, so no `call.cost`: the phone spend is OpenAI, Luna and Jev only. Over the media stream the carrier's bill is counted once it arrives after the hangup.
+- A call's cost is stored when it ends (and updated by the summary and the carrier's bill), so live calls don't count until then.
+- The owner's "+5 min" extensions aren't capped.
+
+`config/` is baked into the image (`Dockerfile`; `deploy/compose.yaml` doesn't mount it), so changing a limit takes a push to `main` (a deploy). Leave a key out, or set it to null, for no limit.
 
 **Maintenance**: Docker and cloudflared aren't upgraded automatically, because restarting either can drop calls. Drain first:
 

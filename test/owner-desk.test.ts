@@ -4,11 +4,21 @@ import { MemoryEventBus } from "../src/core/event-bus";
 import { OwnerDesk } from "../src/core/owner-desk";
 import type { LiveAppend } from "../src/core/config";
 import type { MessageLayout, OwnerChat } from "../src/core/ports";
+import type { CallMeta } from "../src/core/types";
 import { cls, loadRepoConfig } from "./helpers";
 
 const settle = () => new Promise((r) => setTimeout(r, 5));
 
-async function rig(o: { steer?: (callId: string, text: string, as: LiveAppend) => OwnerSteerResult; canSteer?: boolean; failSends?: number } = {}) {
+async function rig(
+  o: {
+    steer?: (callId: string, text: string, as: LiveAppend) => OwnerSteerResult;
+    canSteer?: boolean;
+    failSends?: number;
+    accepts?: (meta: CallMeta) => boolean;
+    /** shared with another desk (another chat) */
+    bus?: MemoryEventBus;
+  } = {},
+) {
   const config = await loadRepoConfig();
   config.telegram.status.min_edit_interval_ms = 0;
   let now = 1_000_000;
@@ -38,7 +48,7 @@ async function rig(o: { steer?: (callId: string, text: string, as: LiveAppend) =
       answers.push({ pressId, ...(notice ? { notice } : {}) });
     },
   };
-  const bus = new MemoryEventBus();
+  const bus = o.bus ?? new MemoryEventBus();
   const desk = new OwnerDesk({
     bus,
     chat,
@@ -46,6 +56,7 @@ async function rig(o: { steer?: (callId: string, text: string, as: LiveAppend) =
     clock: { now: () => now },
     callLink: (id) => `https://admin.example.com/calls/${id}`,
     canSteer: o.canSteer ?? true,
+    ...(o.accepts ? { accepts: o.accepts } : {}),
     steer: (callId, text, as) => {
       steered.push({ callId, text, as });
       return o.steer?.(callId, text, as) ?? { ok: true };
@@ -57,7 +68,8 @@ async function rig(o: { steer?: (callId: string, text: string, as: LiveAppend) =
       return { ok: true, maxCallSeconds: config.flow.timing.max_call_seconds + 60 * extended.reduce((sum, e) => sum + e.minutes, 0) };
     },
   });
-  const start = (callId: string, from = "+441") => bus.publish({ type: "call.started", callId, meta: { callId, from, to: "+442", startedAt: now } });
+  const start = (callId: string, from = "+441", meta: Partial<CallMeta> = {}) =>
+    bus.publish({ type: "call.started", callId, meta: { callId, from, to: "+442", channel: from === "public" ? "public" : "phone", startedAt: now, ...meta } });
   const message = (text: string | undefined, replyTo?: number) =>
     desk.onMessage({ messageId: nextId++, date: now, ...(text !== undefined ? { text } : {}), ...(replyTo !== undefined ? { replyTo } : {}) });
   return {
@@ -422,5 +434,69 @@ describe("owner desk: steering", () => {
     expect(r.sent[0]!.text).not.toContain("Reply to steer");
     await r.message("hello");
     expect(r.steered).toEqual([]);
+  });
+});
+
+describe("owner desk: a chat of its own for some calls", () => {
+  const isPublic = (m: CallMeta) => m.channel === "public";
+
+  test("a desk ignores the calls it doesn't take", async () => {
+    const r = await rig({ accepts: isPublic });
+    r.start("phone", "+441");
+    await settle();
+    expect(r.sent).toEqual([]);
+    r.bus.publish({ type: "stage", callId: "phone", at: 1, stage: "clarify" });
+    await settle();
+    expect(r.edits).toEqual([]);
+    await r.message("hello", 5);
+    expect(r.sent.at(-1)!.text).toContain("I can't tell which call");
+    await r.message("hello");
+    expect(r.sent.at(-1)!.text).toBe("No call in progress.");
+    expect(r.steered).toEqual([]);
+  });
+
+  test("two chats on one bus, with the same message ids: each steers only its own calls", async () => {
+    const main = await rig({ accepts: (m) => !isPublic(m) });
+    const pub = await rig({ accepts: isPublic, bus: main.bus });
+    pub.start("game", "public");
+    await settle();
+    main.advance(1000);
+    pub.advance(1000);
+    main.start("phone", "+441");
+    await settle();
+    expect(main.sent).toHaveLength(1);
+    expect(main.sent[0]!.text).toContain("+441");
+    expect(pub.sent).toHaveLength(1);
+    expect(pub.sent[0]!.text).toContain("public");
+    // Telegram numbers messages per chat: both status messages have id 100.
+    expect(main.sent[0]!.id).toBe(100);
+    expect(pub.sent[0]!.id).toBe(100);
+
+    await main.message("hold on", 100);
+    await pub.message("say you're a pirate", 100);
+    // A plain message in the public chat steers the newest public call, though the phone call came later.
+    await pub.message("keep going");
+    expect(main.steered).toEqual([{ callId: "phone", text: "hold on", as: "commentary" }]);
+    expect(pub.steered).toEqual([
+      { callId: "game", text: "say you're a pirate", as: "commentary" },
+      { callId: "game", text: "keep going", as: "commentary" },
+    ]);
+  });
+});
+
+describe("owner desk: declined calls", () => {
+  test("a call a limit turned away gets one notifying line, with no buttons and no edits", async () => {
+    const r = await rig();
+    r.start("d1", "+447700900123", { declined: "declined: daily spend reached ($20.10 of $20 in 24 h)" });
+    r.bus.publish({ type: "call.ended", callId: "d1", at: 0, endedAt: 1, reason: "declined: daily spend reached", endedBy: "system", costUsd: 0, lunaCalls: 0, jevTicks: 0 });
+    await settle();
+    expect(r.sent).toHaveLength(1);
+    expect(r.sent[0]!.text).toContain("+447700900123");
+    expect(r.sent[0]!.text).toContain("https://admin.example.com/calls/d1");
+    expect(r.sent[0]!.layout).toBeUndefined();
+    expect(r.sent[0]!.replyTo).toBeUndefined();
+    r.advance(60_000);
+    await settle();
+    expect(r.edits).toEqual([]);
   });
 });

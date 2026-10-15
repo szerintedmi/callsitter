@@ -31,6 +31,8 @@ Calls to my number divert to a Telnyx number, where an OpenAI **gpt-live-1** age
 
 **Costs** come from what the vendors report: Live per second, Luna's tokens (uncached, cached, cache writes, output, times the service tier) and Jev's input tokens (`cost.yaml`). Each call stores the breakdown; the call list, the call page and the final Telegram update show it.
 
+**Limits** (`limits.yaml`, `src/core/limits.ts`), per channel (the phone number, admin test calls, the public page): spend, calls a day, calls at once, calls per caller a day and call length, counted over a rolling 24 h from the call list. Once the last 24 h's phone calls have cost $20, the next caller hears busy (SIP 486) before anything billed starts, and I get one Telegram line about it; the call that crosses the cap runs to its end.
+
 ## Run
 
 ```sh
@@ -87,9 +89,10 @@ Replay examples:
 
 - The browser talks to gpt-live-1 over **WebRTC**. The server exchanges the SDP offer with `POST /v1/live/sessions` ([voice-webrtc](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live): "we recommend using WebRTC rather than WebSockets for more consistent performance") and attaches a sideband, as for a SIP call. The API key and the prompt stay on the server.
 - The page's data channel is locked down (`client.data_channel`): it can't send any client event, so a visitor can't append instructions. It only receives `session.closed`.
-- Cost caps (`config/public.yaml`): a 15-minute call length, 3 calls at once, 20 calls per IP a day, and a rolling-24 h budget. A call is admitted only if it fits even if it and every live public call run the full 15 minutes.
+- Cost caps (`config/limits.yaml → public`): a 10-minute call length, 3 calls at once, 20 calls per IP a day, 100 public calls a day and $10 a day, all counted from the call list over a rolling 24 h, so a restart doesn't reset them. The spend is the ended calls' stored cost: new calls are refused once it reaches the cap, and the call that crosses it runs to its end.
+- Once the day's calls or budget have run out (or the page is closed), the page says it has run out of game and offers a "notify me" form (`POST /call/notify`, 5 sign-ups per IP a day). The emails go in the `notify_signups` table, with the visitor's IP, country and what had run out; reading them: `docs/deploy.md`.
 - During the call the page shows a meter that leans from genuine to scam/spam (P(scam) + P(spam) − P(genuine); an unclear verdict pulls it to the middle), the goal, and when the call was caught or got through, streamed as server-sent events from `/call/:id/events`. The score, rank and leaderboard come from `/call/:id/result` once the call has ended.
-- Luna's tools are live (`public.yaml → tools`). The call gets a Telegram status message like any other, and the owner can steer it. The budget counts the rolling summaries too. Calls are recorded and listed with the caller `public` and the visitor's IP (`CF-Connecting-IP`, stored with the call).
+- Luna's tools are live (`public.yaml → tools`). The call gets a Telegram status message like any other (in `TELEGRAM_PUBLIC_CHAT_ID`'s group, if set), and the owner can steer it. The spend counts the rolling summaries too. Calls are recorded and listed in the `public` channel, with the caller `public` and the visitor's IP (`CF-Connecting-IP`, stored with the call).
 - Why the admin test call uses a WebSocket relay instead: it exercises the Telnyx media-stream path that real calls take. The public page is the only caller that really arrives over WebRTC.
 
 **Call page:** a live status strip, and an aligned timeline with one row per utterance: transcript | Jev classifications | Luna, call-flow stages, tools and errors.
@@ -103,6 +106,8 @@ Replay examples:
    - Create a bot with [@BotFather](https://t.me/BotFather) and put its token in `TELEGRAM_BOT_TOKEN`.
    - Send the bot any message from the owner's account, then read `message.chat.id` from `https://api.telegram.org/bot<token>/getUpdates` into `TELEGRAM_CHAT_ID`. A bot can't message someone who hasn't started a chat with it.
    - The app receives your messages by long polling (`getUpdates`), so no public URL is needed. Only one process can poll a bot at a time, so give dev its own bot. Steering needs a numeric chat id, and only that chat is heard.
+   - Optional: public-page calls can go to a chat of their own, a group, with `TELEGRAM_PUBLIC_CHAT_ID` (phone and test calls stay in `TELEGRAM_CHAT_ID`; blank, everything goes there). Add the same bot to the group, send a message there, and read the negative `message.chat.id` from `getUpdates`. If Telegram upgrades the group to a supergroup, its id changes (to `-100…`): update the variable. The group gets fewer edits and no urgent alerts (`telegram.yaml → public`), since a group allows about 20 messages a minute.
+   - In a group, replies to the bot's messages and its buttons work as they are. For a plain message to steer the newest public call (or a bare `/hangup`), turn the bot's privacy mode off (@BotFather → `/setprivacy` → Disable, then remove and re-add the bot), or make it an admin of the group; otherwise the bot only hears replies to it and `/hangup@<botname>`.
    - Send `/help` to the bot for how steering works.
 3. **Cloudflare tunnel:** see [deploy/cloudflared.example.yml](deploy/cloudflared.example.yml).
    - `hooks.<domain>` is public, but only the webhook, media and public-page paths are routed.
@@ -166,9 +171,10 @@ Each file has one job (schemas and cross-file checks: `src/core/config.ts`; `bun
 | `luna.yaml`       | Everything about Luna: model, tools, limits, prompts.                                                                                                                                                       |
 | `connection.yaml` | How the audio reaches the agent: OpenAI SIP, Telnyx media stream, speech levels.                                                                                                                            |
 | `cost.yaml`       | Prices for each call's cost: Live per minute, Luna and Jev per token.                                                                                                                                       |
-| `public.yaml`     | The public page's limits: call length, calls at once, per IP, daily budget.                                                                                                                                 |
+| `public.yaml`     | The public page's settings: open or closed, Luna's tools, the greeting wait, the number it shows, "notify me" sign-ups per IP.                                                                              |
+| `limits.yaml`     | Call limits per channel (phone, test, public): spend, calls a day, calls at once, calls per caller a day, call length. Left out or null: no limit.                                                          |
 | `games.yaml`      | The public page's games: goals for Scam me and Get through, the referee that judges them, leaderboard size.                                                                                                  |
-| `telegram.yaml`   | The owner's Telegram: the per-call status message, and how steering messages reach Live.                                                                                                                     |
+| `telegram.yaml`   | The owner's Telegram: the per-call status message, how steering messages reach Live, and the public-calls group's limits. |
 | `logging.yaml`    | The server's log files (`DATA_DIR/logs`, JSON Lines): how many days they're kept.                                                                                                                            |
 
 
@@ -178,7 +184,7 @@ What reaches Live, and when:
 - **Each caller pause:** Jev answers the `jev.yaml` questions, and the first matching `call-flow.yaml` rule runs. It sends Live a text, or hangs up after the goodbye (a rule can also ask Luna, `ask_luna`; none does now). Texts wait until the agent is idle, unless the rule says to send at once.
 - **Live asks for help:** a fixed, neutral text answers at once ("Nothing new.", `call-flow.yaml → when_live_asks_for_help`), so it doesn't replace your Telegram message; with `{luna_response}` in it, Luna would answer.
 - **Silence:** the agent is nudged; after the goodbyes, or repeated silence, the call ends.
-- **Time up:** 30 s before `max_call_seconds` (`call-flow.yaml → timing.time_up`), the agent is told to say goodbye and the call enters `time_up`, where no rule sends anything. At the limit, the call ends once the goodbye has played, or at the first silence after it.
+- **Time up:** 30 s before `max_call_seconds` (`call-flow.yaml → timing.time_up`; a channel's `limits.yaml → max_call_seconds` can cap it lower), the agent is told to say goodbye and the call enters `time_up`, where no rule sends anything. At the limit, the call ends once the goodbye has played, or at the first silence after it.
 - **Your Telegram message:** sent at once, as commentary, instructions or thinking (`telegram.yaml → steering`). Luna guidance from a run that started before it is dropped, and a call-flow stage text due within `hold_stage_ms` waits (not time-up).
 - **Hangup:** nothing more reaches Live; Luna writes the summary, which goes into the call's Telegram status message.
 
@@ -226,5 +232,4 @@ These differ from the original plan:
 - L16: Telnyx byte order (assumed big-endian and swapped), and whether the inbound stream is also 16 kHz after `streaming_start`.
 - The transcript segmenter's gap and idle defaults against real Live transcript timing.
 - Jev latency from the UK, and whether the verdict probabilities are well calibrated for the `call-flow.yaml` thresholds.
-- Luna's cost per call for the public page's worst-case budget (`cost.yaml → luna_usd_per_call` is a rough estimate; calls themselves are priced from Luna's tokens).
 

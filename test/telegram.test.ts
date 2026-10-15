@@ -80,9 +80,8 @@ describe("Telegram bot", () => {
     expect(String(err)).not.toContain(TOKEN);
   });
 
-  test("long-polls for the owner's messages only, moving the offset on", async () => {
+  test("long-polls once for every chat's messages, each to its own handlers; others dropped, offset moved on", async () => {
     const ac = new AbortController();
-    const got: OwnerMessage[] = [];
     let polls = 0;
     const { b, calls } = bot((method) => {
       if (method !== "getUpdates") throw new Error(method);
@@ -98,18 +97,25 @@ describe("Telegram bot", () => {
           { update_id: 12, message: { message_id: 3, date: 1002, chat: { id: 42 } } },
           { update_id: 13, callback_query: { id: "q1", data: "steer:0", message: { message_id: 7, chat: { id: 42 } } } },
           { update_id: 14, callback_query: { id: "q2", data: "steer:0", message: { message_id: 8, chat: { id: 99 } } } },
+          { update_id: 15, message: { message_id: 1, date: 1003, chat: { id: -100 }, text: "say you're a pirate" } },
+          { update_id: 16, callback_query: { id: "q3", data: "steer:1", message: { message_id: 7, chat: { id: -100 } } } },
         ],
       });
     });
-    const presses: OwnerButtonPress[] = [];
-    await b.listen({ message: (m) => void got.push(m), button: (p) => void presses.push(p) }, ac.signal);
-    expect(got).toEqual([
+    const owner = { messages: [] as OwnerMessage[], presses: [] as OwnerButtonPress[] };
+    const pub = { messages: [] as OwnerMessage[], presses: [] as OwnerButtonPress[] };
+    const routeTo = (chatId: string, to: typeof owner) => ({ chatId, message: (m: OwnerMessage) => void to.messages.push(m), button: (p: OwnerButtonPress) => void to.presses.push(p) });
+    await b.listen([routeTo("42", owner), routeTo("-100", pub)], ac.signal);
+    expect(owner.messages).toEqual([
       { messageId: 1, date: 1_000_000, text: "keep them talking", replyTo: 7 },
       { messageId: 3, date: 1_002_000 },
     ]);
-    expect(presses).toEqual([{ pressId: "q1", messageId: 7, data: "steer:0" }]);
+    expect(owner.presses).toEqual([{ pressId: "q1", messageId: 7, data: "steer:0" }]);
+    expect(pub.messages).toEqual([{ messageId: 1, date: 1_003_000, text: "say you're a pirate" }]);
+    expect(pub.presses).toEqual([{ pressId: "q3", messageId: 7, data: "steer:1" }]);
+    expect(calls).toHaveLength(2);
     expect(calls[0]!.body).toEqual({ timeout: 50, allowed_updates: ["message", "callback_query"] });
-    expect(calls[1]!.body.offset).toBe(15);
+    expect(calls[1]!.body.offset).toBe(17);
   });
 
   test("only a numeric chat can be heard from", () => {

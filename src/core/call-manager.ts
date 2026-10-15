@@ -1,10 +1,12 @@
 import type { AudioFormat } from "./audio";
 import { CallSession, type CallSessionDeps } from "./call-session";
 import { withCarrier } from "./cost";
+import { CallGate, callSecondsCap, type Channel, type LimitHit } from "./limits";
 import type { BlobStore, EventBus, MediaChannel, Repo, VoiceAgent } from "./ports";
 import type { CallMeta, EndedBy, SipHeader } from "./types";
 
-// Registry of live calls plus the call lifecycle (incoming → media → hangup → recording).
+// Registry of live calls plus the call lifecycle (incoming → media → hangup → recording), and
+// each channel's call limits (limits.yaml, CallGate), applied to every incoming call.
 
 export type SharedDeps = Omit<CallSessionDeps, "meta" | "callControlId" | "media" | "mediaViaVoice" | "onStopped" | "dryRun"> & {
   repo: Repo;
@@ -16,8 +18,6 @@ export interface AttachOptions {
   /** per-call voice agent (OpenAI SIP: accept + sideband for this session) instead of the shared one */
   voice?: VoiceAgent;
   mediaViaVoice?: boolean;
-  /** caps flow.timing.max_call_seconds for this call (public calls) */
-  maxCallSeconds?: number;
 }
 
 /**
@@ -44,7 +44,15 @@ export class CallManager {
   /** while set and in the future, new calls are turned away (a deploy waits for the rest to end) */
   private drainUntil: number | null = null;
 
-  constructor(private d: SharedDeps) {}
+  /** limits.yaml: whether a new call fits its channel's limits; a slot is released when the call ends */
+  readonly gate: CallGate;
+
+  constructor(private d: SharedDeps) {
+    this.gate = new CallGate({ repo: d.repo, config: d.config, clock: d.clock });
+    d.bus.subscribe((ev) => {
+      if (ev.type === "call.ended") this.gate.release(ev.callId);
+    });
+  }
 
   get bus(): EventBus {
     return this.d.bus;
@@ -70,12 +78,32 @@ export class CallManager {
     return new Set([...this.pending, ...this.attaching.keys(), ...this.sessions.keys()]).size;
   }
 
-  async registerIncoming(c: { callId: string; callControlId: string; from: string; to: string; divertedFrom?: string; callerIp?: string }) {
+  /**
+   * Registers an incoming call, unless a limit of its channel (limits.yaml) turns it away: then it
+   * isn't registered and the limit is returned. `caller` is who it counts for per caller (the
+   * number, or the public page's client IP); none: not counted.
+   */
+  async registerIncoming(c: {
+    callId: string;
+    callControlId: string;
+    from: string;
+    to: string;
+    divertedFrom?: string;
+    callerIp?: string;
+    channel: Channel;
+    caller?: string;
+  }): Promise<LimitHit | null> {
     // Checked before the first await, so a call can't slip in after a drain reports no calls.
     if (!this.accepting) throw new Error("not accepting calls (draining or shutting down)");
     this.pending.add(c.callId);
-    const startedAt = this.d.clock.now();
+    let startedAt: number;
     try {
+      const hit = await this.gate.admit({ callId: c.callId, channel: c.channel, caller: c.caller });
+      if (hit) {
+        this.pending.delete(c.callId);
+        return hit;
+      }
+      startedAt = this.d.clock.now();
       await this.d.repo.createCall({
         id: c.callId,
         callControlId: c.callControlId,
@@ -83,14 +111,73 @@ export class CallManager {
         to: c.to,
         divertedFrom: c.divertedFrom ?? null,
         callerIp: c.callerIp ?? null,
+        channel: c.channel,
         startedAt,
       });
     } catch (err) {
       this.pending.delete(c.callId);
+      this.gate.release(c.callId);
       throw err;
     }
-    const meta: CallMeta = { callId: c.callId, from: c.from, to: c.to, divertedFrom: c.divertedFrom, startedAt };
+    const meta: CallMeta = { callId: c.callId, from: c.from, to: c.to, divertedFrom: c.divertedFrom, channel: c.channel, startedAt };
     this.d.bus.publish({ type: "call.started", callId: c.callId, meta });
+    return null;
+  }
+
+  /**
+   * Records a call turned away by a limit (registerIncoming's answer), after the caller has been
+   * rejected: an ended row in the call list, and a call.started the owner's chat tells them about.
+   */
+  async declineIncoming(c: {
+    callId: string;
+    callControlId: string;
+    from: string;
+    to: string;
+    divertedFrom?: string;
+    channel: Channel;
+    declined: LimitHit;
+    reason: string;
+  }) {
+    const startedAt = this.d.clock.now();
+    await this.d.repo.createCall({
+      id: c.callId,
+      callControlId: c.callControlId,
+      from: c.from,
+      to: c.to,
+      divertedFrom: c.divertedFrom ?? null,
+      channel: c.channel,
+      declined: c.declined,
+      startedAt,
+    });
+    const meta: CallMeta = { callId: c.callId, from: c.from, to: c.to, divertedFrom: c.divertedFrom, channel: c.channel, declined: c.reason, startedAt };
+    this.d.bus.publish({ type: "call.started", callId: c.callId, meta });
+    this.d.bus.publish({
+      type: "call.ended",
+      callId: c.callId,
+      at: 0,
+      endedAt: startedAt,
+      reason: c.reason,
+      endedBy: "system",
+      costUsd: 0,
+      lunaCalls: 0,
+      jevTicks: 0,
+    });
+  }
+
+  /** Why a limit turned a call on `channel` away, for the call list and the owner. */
+  async declineReason(channel: Channel, hit: LimitHit): Promise<string> {
+    const lim = this.d.config().limits[channel];
+    const u = await this.gate.usage(channel);
+    switch (hit) {
+      case "budget":
+        return `declined: daily spend reached ($${u.spentUsd.toFixed(2)} of $${lim.max_spend_usd_per_day} in 24 h)`;
+      case "quota":
+        return `declined: ${lim.max_calls_per_day} calls in 24 h reached`;
+      case "per_caller":
+        return `declined: this caller's ${lim.max_calls_per_caller_per_day} calls in 24 h reached`;
+      case "busy":
+        return `declined: ${lim.max_concurrent_calls} calls at once reached`;
+    }
   }
 
   /** Media connected (or a SIP call arrived): start the voice session for this call. */
@@ -114,14 +201,13 @@ export class CallManager {
     // stopAll has already hung up the sessions it saw; the next startup reaps this call.
     if (this.shuttingDown) throw new Error("server shutting down");
 
-    const cap = opts.maxCallSeconds;
-    const config = cap
-      ? () => {
-          const cfg = this.d.config();
-          const timing = { ...cfg.flow.timing, max_call_seconds: Math.min(cfg.flow.timing.max_call_seconds, cap) };
-          return { ...cfg, flow: { ...cfg.flow, timing } };
-        }
-      : this.d.config;
+    // The channel's limits.yaml max_call_seconds caps the call flow's.
+    const config = () => {
+      const cfg = this.d.config();
+      const max = callSecondsCap(cfg, call.channel);
+      if (max === cfg.flow.timing.max_call_seconds) return cfg;
+      return { ...cfg, flow: { ...cfg.flow, timing: { ...cfg.flow.timing, max_call_seconds: max } } };
+    };
     const session = new CallSession({
       ...this.d,
       config,
@@ -130,6 +216,7 @@ export class CallManager {
         from: call.from,
         to: call.to,
         divertedFrom: call.divertedFrom ?? undefined,
+        channel: call.channel,
         startedAt: call.startedAt,
       },
       callControlId: call.callControlId,

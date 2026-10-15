@@ -23,7 +23,7 @@ export async function runJevCase(c: { transcript: string }, cfg: AppConfig, apiK
     if (ev.type === "classification") last = ev;
   });
   const orch = new Orchestrator({
-    meta: { callId: "eval", from: "+440000000000", to: "+440000000001", startedAt },
+    meta: { callId: "eval", from: "+440000000000", to: "+440000000001", channel: "phone", startedAt },
     config: () => cfg,
     classifier: new JevClassifier({ apiKey }),
     agent: stubAgent,

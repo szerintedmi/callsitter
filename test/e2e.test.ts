@@ -33,6 +33,10 @@ const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => 
   if (url.includes("v3%3Anostream/actions/streaming_start")) {
     return Response.json({ errors: [{ code: "90034", title: "Stream could not be started" }] }, { status: 500 });
   }
+  // Declined calls whose busy reject fails (and, for the second, whose fallback hangup fails too).
+  if (/v3%3A(rejectfail|bothfail)\/actions\/reject/.test(url) || url.includes("v3%3Abothfail/actions/hangup")) {
+    return Response.json({ errors: [{ code: "90015", title: "Telnyx unavailable" }] }, { status: 503 });
+  }
   if (url.includes("v3%3Agone/actions/answer")) {
     return Response.json(
       { errors: [{ code: "90018", title: "Call has already ended", detail: "This call is no longer active" }] },
@@ -383,8 +387,71 @@ describe("telephony failures", () => {
     expect(await repo.findByCallControlId("v3:drain")).toBeNull();
   });
 
+  test("over the phone's daily spend → declined as busy before answering; test calls still start", async () => {
+    const phone = config.get().limits.phone;
+    const max = phone.max_spend_usd_per_day;
+    phone.max_spend_usd_per_day = 0;
+    const sentBefore = owner.sent.length;
+    try {
+      const payload = { call_control_id: "v3:budget", direction: "incoming", from: "+447700900555", to: "+44" };
+      await webhook("call.initiated", payload);
+      await until(() => telnyxRequests.some((r) => r.url.includes("v3%3Abudget/actions/reject")));
+      expect(telnyxRequests.find((r) => r.url.includes("v3%3Abudget/actions/reject"))!.body).toMatchObject({ cause: "USER_BUSY" });
+      await until(async () => (await repo.findByCallControlId("v3:budget"))?.status === "ended");
+      expect(await repo.findByCallControlId("v3:budget")).toMatchObject({ channel: "phone", declined: "budget", endedBy: "system" });
+      await until(() => owner.sent.length > sentBefore);
+      expect(owner.sent.at(-1)!.text).toContain("+447700900555");
+
+      // Redelivered, then the carrier's hangup: no second reject or row, nothing else happens.
+      await webhook("call.initiated", payload);
+      await webhook("call.hangup", { call_control_id: "v3:budget", hangup_cause: "user_busy", hangup_source: "callee" });
+      await Bun.sleep(100);
+      expect(telnyxRequests.filter((r) => r.url.includes("v3%3Abudget/actions/reject"))).toHaveLength(1);
+      expect(telnyxRequests.some((r) => r.url.includes("v3%3Abudget/actions/answer"))).toBe(false);
+      expect((await repo.listCalls(100)).filter((c) => c.callControlId === "v3:budget")).toHaveLength(1);
+      expect(owner.sent.length).toBe(sentBefore + 1);
+
+      // The phone's limits don't touch admin test calls.
+      const ws = new WebSocket(`ws://127.0.0.1:${server.port}/test-call/ws`);
+      const text: any[] = [];
+      let closed = false;
+      ws.onmessage = (m) => typeof m.data === "string" && text.push(JSON.parse(m.data));
+      ws.onclose = () => (closed = true);
+      await new Promise((r) => (ws.onopen = r));
+      ws.send(JSON.stringify({ type: "start", dryRun: true, protocol: TEST_CALL_PROTOCOL }));
+      await until(() => text.some((m) => m.type === "started"));
+      ws.send(JSON.stringify({ type: "hangup" }));
+      ws.close();
+      await until(() => closed);
+    } finally {
+      phone.max_spend_usd_per_day = max;
+    }
+  });
+
+  test("declined but the busy reject fails → hung up instead; if that fails too, nothing is stored", async () => {
+    const phone = config.get().limits.phone;
+    const max = phone.max_spend_usd_per_day;
+    phone.max_spend_usd_per_day = 0;
+    const sent = (ccid: string) => telnyxRequests.filter((r) => r.url.includes(`${encodeURIComponent(ccid)}/actions/`)).map((r) => r.url.split("/").pop());
+    try {
+      await webhook("call.initiated", { call_control_id: "v3:rejectfail", direction: "incoming", from: "+44", to: "+44" });
+      await until(async () => (await repo.findByCallControlId("v3:rejectfail"))?.status === "ended");
+      expect(sent("v3:rejectfail")).toEqual(["reject", "hangup"]);
+      expect(await repo.findByCallControlId("v3:rejectfail")).toMatchObject({ declined: "budget" });
+
+      await webhook("call.initiated", { call_control_id: "v3:bothfail", direction: "incoming", from: "+44", to: "+44" });
+      await until(() => sent("v3:bothfail").includes("hangup"));
+      await Bun.sleep(100);
+      expect(sent("v3:bothfail")).toEqual(["reject", "hangup"]);
+      // No row, so a redelivered call.initiated tries again.
+      expect(await repo.findByCallControlId("v3:bothfail")).toBeNull();
+    } finally {
+      phone.max_spend_usd_per_day = max;
+    }
+  });
+
   test("orphaned open calls (no session) are reaped and hung up", async () => {
-    await manager.registerIncoming({ callId: "orphan", callControlId: "v3:orphan", from: "+44", to: "+44" });
+    await manager.registerIncoming({ callId: "orphan", callControlId: "v3:orphan", from: "+44", to: "+44", channel: "phone" });
     await manager.reapOrphans(60_000, "too young"); // just created: left alone
     expect((await repo.getCall("orphan"))?.status).toBe("ringing");
     await manager.reapOrphans(0, "server restarted");

@@ -1,6 +1,7 @@
 import type { AudioFormat } from "./audio";
 import type { AppConfig, GamesConfig, JevConfig, LiveAppend, LunaTool } from "./config";
 import type { BoardEntry, Game } from "./game";
+import type { Channel, LimitHit } from "./limits";
 import type { CallCosts, CallEvent, CallMeta, CallStatus, EndedBy, Classification, Speaker, Suggestion, TokenUsage, ToolCallRecord, TranscriptEntry } from "./types";
 
 // Ports: everything core needs from the outside world. Adapters implement these.
@@ -179,6 +180,9 @@ export interface CallRecord {
   from: string;
   to: string;
   divertedFrom: string | null;
+  channel: Channel;
+  /** the limit (limits.yaml) it was turned away for, unanswered; null: admitted */
+  declined: LimitHit | null;
   /** public page calls: the visitor's IP */
   callerIp: string | null;
   status: CallStatus;
@@ -220,15 +224,17 @@ export interface StoredEvent {
 }
 
 export interface Repo {
-  createCall(rec: Pick<CallRecord, "id" | "callControlId" | "from" | "to" | "divertedFrom" | "startedAt"> & { callerIp?: string | null }): Promise<void>;
+  createCall(
+    rec: Pick<CallRecord, "id" | "callControlId" | "from" | "to" | "divertedFrom" | "channel" | "startedAt"> & { callerIp?: string | null; declined?: LimitHit | null },
+  ): Promise<void>;
   updateCall(id: string, patch: Partial<Omit<CallRecord, "id">>): Promise<void>;
   getCall(id: string): Promise<CallRecord | null>;
   findByCallControlId(callControlId: string): Promise<CallRecord | null>;
   listCalls(limit: number): Promise<CallRecord[]>;
   /** calls not yet ended */
   listOpenCalls(): Promise<CallRecord[]>;
-  /** calls from `from` that started at or after `since` */
-  listCallsFrom(from: string, since: number): Promise<CallRecord[]>;
+  /** calls on `channel` that started or ended at or after `since` */
+  listCallsByChannel(channel: Channel, since: number): Promise<CallRecord[]>;
   /** stores the event and, in the same transaction, applies `patch` to its call row */
   appendEvent(ev: CallEvent, patch?: Partial<Omit<CallRecord, "id">>): Promise<void>;
   listEvents(callId: string): Promise<StoredEvent[]>;
@@ -241,6 +247,19 @@ export interface Repo {
   scores(game: Game, goal: string): Promise<BoardEntry[]>;
   /** total seconds of ended calls whose verdict is scam or spam, and of every "Scam me" game */
   junkCallSeconds(): Promise<number>;
+  /** stores a "notify me" sign-up; an email signed up before gets the new details and is pending (not notified) again */
+  addNotifySignup(s: NotifySignup): Promise<void>;
+}
+
+/** A public page visitor who asked to hear when there's game again (POST call/notify). */
+export interface NotifySignup {
+  email: string;
+  createdAt: number;
+  ip: string | null;
+  country: string | null;
+  userAgent: string | null;
+  /** what had run out then; null: nothing */
+  reason: "closed" | "quota" | "budget" | null;
 }
 
 export interface BlobStore {

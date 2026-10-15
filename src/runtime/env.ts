@@ -1,6 +1,9 @@
 import { z } from "zod";
 import type { AdminAuth } from "../web/admin-guard";
 
+/** a Telegram chat: numeric id (negative for groups) or a channel's @username */
+const CHAT_ID = /^(-?[0-9]+|@[A-Za-z0-9_]{5,})$/;
+
 const Env = z.object({
   PORT: z.coerce.number().int().default(8787),
   BIND_HOST: z.string().default("127.0.0.1"),
@@ -25,7 +28,9 @@ const Env = z.object({
   /** Telegram bot (@BotFather) that messages the owner; messages to the owner are off unless both are set */
   TELEGRAM_BOT_TOKEN: z.string().regex(/^[0-9]+:[A-Za-z0-9_-]+$/, "e.g. 123456789:AA… (from @BotFather)").optional(),
   /** the owner's chat with the bot (numeric id, negative for groups) or a channel's @username */
-  TELEGRAM_CHAT_ID: z.string().regex(/^(-?[0-9]+|@[A-Za-z0-9_]{5,})$/, "a numeric chat id, or @channelname").optional(),
+  TELEGRAM_CHAT_ID: z.string().regex(CHAT_ID, "a numeric chat id, or @channelname").optional(),
+  /** a separate chat (a group, same bot) for public-page calls; unset: they go to TELEGRAM_CHAT_ID */
+  TELEGRAM_PUBLIC_CHAT_ID: z.string().regex(CHAT_ID, "a numeric chat id (negative for groups), or @channelname").optional(),
   /** first name callers may ask for; lets the voice agent and Luna recognise requests for the owner */
   OWNER_NAME: z.string().trim().optional(),
   /** languages the voice agent speaks, e.g. "English and Hungarian" */
@@ -52,6 +57,12 @@ const Env = z.object({
   }
   if (!!e.TELEGRAM_BOT_TOKEN !== !!e.TELEGRAM_CHAT_ID) {
     ctx.addIssue({ code: "custom", path: ["TELEGRAM_CHAT_ID"], message: "set both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID for Telegram, or neither" });
+  }
+  if (e.TELEGRAM_PUBLIC_CHAT_ID && !e.TELEGRAM_BOT_TOKEN) {
+    ctx.addIssue({ code: "custom", path: ["TELEGRAM_PUBLIC_CHAT_ID"], message: "needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID (the same bot serves both chats)" });
+  }
+  if (e.TELEGRAM_PUBLIC_CHAT_ID && e.TELEGRAM_PUBLIC_CHAT_ID === e.TELEGRAM_CHAT_ID) {
+    ctx.addIssue({ code: "custom", path: ["TELEGRAM_PUBLIC_CHAT_ID"], message: "must differ from TELEGRAM_CHAT_ID (leave it blank to keep public calls there)" });
   }
   if (!!e.OPENAI_PROJECT_ID !== !!e.OPENAI_WEBHOOK_SECRET) {
     ctx.addIssue({ code: "custom", path: ["OPENAI_WEBHOOK_SECRET"], message: "set both OPENAI_PROJECT_ID and OPENAI_WEBHOOK_SECRET for SIP, or neither" });

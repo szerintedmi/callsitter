@@ -8,7 +8,7 @@ const source = new Bun.Transpiler({ loader: "ts" })
   .transformSync(readFileSync(new URL("../src/web/client/phone.ts", import.meta.url), "utf8"))
   .replace(/^export /gm, "");
 
-function phone() {
+function phone(answer: { ok: boolean; body: unknown } = { ok: true, body: { callId: "test", sdp: "answer", elapsedMs: 1500 } }) {
   const t = { amplitude: 0, tonesStarted: 0, tonesStopped: 0 };
   const intervals = new Map<number, { run: () => void; ms: number }>();
   const timeouts = new Map<number, { run: () => void; ms: number }>();
@@ -31,7 +31,7 @@ function phone() {
   const mic = { getTracks: () => [{ stop() {} }] };
   const remote = { paused: true, srcObject: null as unknown, play: async () => { remote.paused = false; } };
   const posts: { path: string; body: any }[] = [];
-  const ends: { live: boolean; text: string; callId: string | null }[] = [];
+  const ends: { live: boolean; text: string; callId: string | null; error?: string }[] = [];
   let lives = 0;
   let pc: any;
   let answered: () => void = () => {};
@@ -48,7 +48,7 @@ function phone() {
     EventSource: class { addEventListener() {} close() {} },
     fetch: async (url: string, init: { body: string }) => {
       posts.push({ path: url, body: JSON.parse(init.body) });
-      return { ok: true, json: async () => ({ callId: "test", sdp: "answer", elapsedMs: 1500 }) };
+      return { ok: answer.ok, json: async () => answer.body };
     },
     setTimeout: (run: () => void, ms: number) => (timeouts.set(nextTimer, { run, ms }), nextTimer++),
     clearTimeout: (id: number) => timeouts.delete(id),
@@ -158,4 +158,12 @@ test("hanging up or failing while connecting stops the ringback, and never went 
   expect(p.ends.at(-1)).toEqual({ live: false, text: "Call ended.", callId: "test" });
   expect(p.t.tonesStopped).toBe(4);
   expect(p.intervals.size).toBe(0);
+});
+
+test("passes on why the server turned the call away", async () => {
+  const p = phone({ ok: false, body: { error: "quota", message: "Out of game." } });
+  p.start();
+  for (let i = 0; i < 20 && !p.ends.length; i++) await Promise.resolve();
+  expect(p.ends).toEqual([{ live: false, text: "Out of game.", callId: null, error: "quota" }]);
+  expect(p.t.tonesStopped).toBe(2);
 });

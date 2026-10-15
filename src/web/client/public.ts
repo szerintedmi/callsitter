@@ -8,7 +8,8 @@ type Game = "scam" | "get_through";
 interface Goal { id: string; name: string; brief: string; hard: boolean; intro?: string }
 interface Entry { player: string; scoreMs: number }
 /** src/web/public.ts Lobby */
-interface Lobby { games: Record<Game, Goal[]>; boards: Record<Game, Record<string, Entry[]>>; size: number; undetectedMultiplier: number; wasted: { seconds: number; live: number } }
+type Out = "closed" | "quota" | "budget";
+interface Lobby { games: Record<Game, Goal[]>; boards: Record<Game, Record<string, Entry[]>>; size: number; undetectedMultiplier: number; wasted: { seconds: number; live: number }; out: Out | null }
 /** src/web/public.ts GameResult */
 interface Result { game: Game; goal: string; player: string; scoreMs: number | null; durationMs: number | null; rank: number | null; board: Entry[] }
 
@@ -45,12 +46,12 @@ const goalIdx = { scam: 0, get_through: 0 } as Record<Game, number>;
 for (const g of ["scam", "get_through"] as Game[]) goalIdx[g] = Math.max(0, lobby.games[g].findIndex((x) => x.id === store.get(`goal-${g}`)));
 const goalOf = (g: Game) => lobby.games[g][goalIdx[g]] ?? lobby.games[g][0]!;
 
-let screen: "home" | "call" | "result" = "home";
+let screen: "home" | "call" | "result" | "out" = "home";
 let mode: Game = "scam";
 
 function show(next: typeof screen) {
   screen = next;
-  for (const s of ["home", "call", "result"]) $(`s-${s}`).hidden = s !== next;
+  for (const s of ["home", "call", "result", "out"]) $(`s-${s}`).hidden = s !== next;
   closeName();
   drawChips();
 }
@@ -179,6 +180,7 @@ split.querySelectorAll<HTMLElement>(".half").forEach((h) => {
     if (t.closest(".x")) return splitSet(null);
     if (t.closest("[data-start]")) {
       setMode(g);
+      if (lobby.out) return showOut(lobby.out);
       return player ? startGame() : openName("call");
     }
     if (!h.classList.contains("on")) splitSet(g);
@@ -354,6 +356,10 @@ function startGame() {
       clearInterval(tick);
       document.body.className = "idle";
       if (end.live && end.callId) return void showResult(end.callId);
+      if (isOut(end.error)) {
+        showOut(end.error);
+        return void refreshLobby();
+      }
       show("home");
       toast(end.text || "Call ended.");
     },
@@ -516,6 +522,40 @@ function drawResult(r: Result) {
   $("r-board").innerHTML = boardHTML(r.game, r.board, scored ? { you: { player: r.player, scoreMs: r.scoreMs!, rank: r.rank! } } : {});
   void refreshLobby();
 }
+
+// ---------- out of game ----------
+const isOut = (e: string | undefined): e is Out => e === "closed" || e === "quota" || e === "budget";
+
+/** No calls for anyone now (the day's calls or budget are used up, or closed): a "notify me" form instead. */
+function showOut(why: Out) {
+  show("out");
+  $("out-title").textContent = why === "closed" ? "CLOSED" : "OUT OF GAME";
+  $("out-msg").textContent = why === "closed" ? "WE'RE CLOSED FOR NOW. CHECK BACK LATER!" : "WE'VE RUN OUT OF GAME FOR TODAY. CHECK BACK LATER!";
+  $("notify").hidden = false;
+  $("notify-done").hidden = true;
+}
+
+const notifyIn = $<HTMLInputElement>("notify-in");
+$("notify").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const email = notifyIn.value.trim();
+  if (!email) return notifyIn.focus();
+  const ok = $<HTMLButtonElement>("notify-ok");
+  ok.disabled = true;
+  try {
+    const r = await fetch(`${base}call/notify`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
+    if (r.ok) {
+      $("notify").hidden = true;
+      $("notify-done").hidden = false;
+      notifyIn.value = "";
+    } else toast(((await r.json().catch(() => ({}))) as { message?: string }).message || "Something went wrong.");
+  } catch {
+    toast("Couldn't send. Try again.");
+  } finally {
+    ok.disabled = false;
+  }
+});
+$("out-back").addEventListener("click", () => goHome());
 
 $("again").addEventListener("click", () => startGame());
 function goHome() {

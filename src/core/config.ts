@@ -11,7 +11,8 @@ import { spokenNumber } from "./phone";
 //   call-flow.yaml   what happens: timing, silence, and rules over Jev's answers
 //   connection.yaml  how the call's audio reaches the agent (OpenAI SIP or Telnyx media stream)
 //   cost.yaml        rough per-call cost estimate
-//   public.yaml      the public "Scam me" page: limits that cap what strangers can spend
+//   public.yaml      the public "Scam me" page: open or closed, its tools and what it shows
+//   limits.yaml      call limits per channel (phone, test, public): spend, calls, call length
 //   games.yaml       the public page's games: goals, scoring and leaderboards
 //   telegram.yaml    the owner's Telegram: a status message per call, and steering the call from it
 
@@ -500,24 +501,14 @@ export const CostConfig = z.object({
       tier_multipliers: z.record(z.string(), z.number().min(0)).default({ priority: 2, fast: 2, flex: 0.5 }),
     })
     .prefault({}),
-  // Only for the public page's worst-case budget check (calls are priced from their tokens).
-  luna_usd_per_call: z.number().min(0).default(0.01),
   jev_usd_per_mtok: z.number().min(0).default(0.042),
 });
 
-// The public page (src/web/public.ts): anyone with the link can call, so these bound the cost.
+// The public page (src/web/public.ts). Its call limits are in limits.yaml.
 export const PublicConfig = z.object({
   enabled: z.boolean().default(true),
-  // Public calls end after this long, whatever the call flow says (flow.timing.max_call_seconds
-  // still applies if it is shorter).
-  max_call_seconds: z.number().int().positive().default(300),
-  max_concurrent: z.number().int().min(0).default(3),
-  // Estimated spend (cost.yaml) on public calls over a rolling 24 h. A new call is admitted only
-  // if it fits even if it and every live public call run to max_call_seconds.
-  daily_usd: z.number().min(0).default(10),
-  // Calls per client IP (Cloudflare's CF-Connecting-IP) over a rolling 24 h; kept in memory, so a
-  // restart resets it.
-  per_ip_per_day: z.number().int().min(0).default(10),
+  // "Notify me" sign-ups (POST call/notify) per client IP over a rolling 24 h; kept in memory.
+  notify_per_ip_per_day: z.number().int().min(0).default(5),
   // Luna's tools are live on public calls: she can end the call. false: they run dry, as on admin
   // test calls.
   tools: z.boolean().default(true),
@@ -529,6 +520,25 @@ export const PublicConfig = z.object({
     .string()
     .regex(/^(\+?[\d ]+)?$/, "digits and spaces, optionally after a +")
     .default(""),
+});
+
+// Call limits per channel (limits.yaml, src/core/limits.ts). null: no limit; 0 is a cap of 0.
+// Strict, so a typo can't silently remove a cap.
+const cap = () => z.number().int().min(0).nullable().default(null);
+export const ChannelLimits = z.strictObject({
+  // New calls are refused once the last 24 h's ended calls add up to this (cost_usd); the call
+  // that crosses it runs to its end.
+  max_spend_usd_per_day: z.number().min(0).nullable().default(null),
+  max_calls_per_day: cap(),
+  max_concurrent_calls: cap(),
+  max_calls_per_caller_per_day: cap(),
+  // caps call-flow.yaml timing.max_call_seconds lower
+  max_call_seconds: z.number().int().positive().nullable().default(null),
+});
+export const LimitsConfig = z.strictObject({
+  phone: ChannelLimits.prefault({}),
+  test: ChannelLimits.prefault({}),
+  public: ChannelLimits.prefault({}),
 });
 
 const GameGoal = z.object({
@@ -631,7 +641,31 @@ export const TelegramConfig = z.object({
       suggestions: z.object({ enabled: z.boolean().default(true), as: z.enum(LIVE_APPENDS).default("commentary") }).prefault({}),
     })
     .prefault({}),
+  // Public-page calls' chat (TELEGRAM_PUBLIC_CHAT_ID), in place of status.min_edit_interval_ms and
+  // status.urgent_alert there: a group allows ~20 messages a minute, and game callers fake urgency.
+  public: z
+    .object({
+      min_edit_interval_ms: z.number().int().min(1000).default(10_000),
+      urgent_alert: z.boolean().default(false),
+    })
+    .prefault({}),
 });
+
+/** The config as the public-page calls' chat sees it: telegram.public over telegram.status. */
+export function publicChatConfig(cfg: AppConfig): AppConfig {
+  const { status, public: pub } = cfg.telegram;
+  return {
+    ...cfg,
+    telegram: {
+      ...cfg.telegram,
+      status: {
+        ...status,
+        min_edit_interval_ms: pub.min_edit_interval_ms,
+        urgent_alert: { ...status.urgent_alert, enabled: status.urgent_alert.enabled && pub.urgent_alert },
+      },
+    },
+  };
+}
 
 export type LiveConfig = z.infer<typeof LiveConfig>;
 export type JevConfig = z.infer<typeof JevConfig>;
@@ -641,6 +675,8 @@ export type CallFlowConfig = z.infer<typeof CallFlowConfig>;
 export type ConnectionConfig = z.infer<typeof ConnectionConfig>;
 export type CostConfig = z.infer<typeof CostConfig>;
 export type PublicConfig = z.infer<typeof PublicConfig>;
+export type ChannelLimits = z.infer<typeof ChannelLimits>;
+export type LimitsConfig = z.infer<typeof LimitsConfig>;
 export type GamesConfig = z.infer<typeof GamesConfig>;
 export type TelegramConfig = z.infer<typeof TelegramConfig>;
 export type LoggingConfig = z.infer<typeof LoggingConfig>;
@@ -653,6 +689,7 @@ export interface AppConfig {
   connection: ConnectionConfig;
   cost: CostConfig;
   public: PublicConfig;
+  limits: LimitsConfig;
   games: GamesConfig;
   telegram: TelegramConfig;
   logging: LoggingConfig;
@@ -666,6 +703,7 @@ const schemas = {
   connection: ConnectionConfig,
   cost: CostConfig,
   public: PublicConfig,
+  limits: LimitsConfig,
   games: GamesConfig,
   telegram: TelegramConfig,
   logging: LoggingConfig,
@@ -682,6 +720,7 @@ export const CONFIG_FILES: Record<ConfigName, string> = {
   connection: "connection.yaml",
   cost: "cost.yaml",
   public: "public.yaml",
+  limits: "limits.yaml",
   games: "games.yaml",
   telegram: "telegram.yaml",
   logging: "logging.yaml",
@@ -755,6 +794,29 @@ export function checkGames(games: GamesConfig, flow: CallFlowConfig): void {
   if (missing.length) {
     throw new ConfigError(`Invalid config:\n  games.yaml: scam.caught_stages: no call-flow.yaml rule has stage ${missing.join(", ")}`);
   }
+}
+
+/**
+ * The public page must keep its cost caps (anyone with the link can call), and a channel's call
+ * length cap must leave room for the time_up goodbye.
+ */
+export function checkLimits(limits: LimitsConfig, flow: CallFlowConfig): void {
+  const issues: string[] = [];
+  for (const key of ["max_spend_usd_per_day", "max_concurrent_calls", "max_call_seconds"] as const) {
+    if (limits.public[key] === null) issues.push(`  limits.yaml: public.${key}: needed (anyone with the link can call)`);
+  }
+  for (const ch of ["phone", "test", "public"] as const) {
+    const cap = limits[ch].max_call_seconds;
+    if (cap === null) continue;
+    if (cap > flow.timing.max_call_seconds) {
+      issues.push(`  limits.yaml: ${ch}.max_call_seconds: ${cap} is longer than call-flow.yaml timing.max_call_seconds (${flow.timing.max_call_seconds})`);
+    }
+    const left = flow.timing.time_up?.seconds_left;
+    if (left !== undefined && cap <= left) {
+      issues.push(`  limits.yaml: ${ch}.max_call_seconds: ${cap} leaves no time before timing.time_up.seconds_left (${left})`);
+    }
+  }
+  if (issues.length) throw new ConfigError(`Invalid config:\n${issues.join("\n")}`);
 }
 
 /** What answers Live's request for help in this call-flow stage (null: none yet). */
@@ -860,6 +922,7 @@ export async function loadConfig(source: ConfigSource, vars: ConfigVars = {}): P
   checkFlow(cfg.flow, cfg.jev);
   checkProgress(cfg.luna, cfg.jev);
   checkGames(cfg.games, cfg.flow);
+  checkLimits(cfg.limits, cfg.flow);
   checkButtons(cfg.telegram, cfg.flow);
   checkLunaGuidance(cfg.luna, cfg.flow);
   return fillPlaceholders(cfg, vars);

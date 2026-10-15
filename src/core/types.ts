@@ -1,4 +1,5 @@
 import type { LiveAppend } from "./config";
+import type { Channel } from "./limits";
 
 export type Speaker = "caller" | "agent";
 
@@ -78,6 +79,9 @@ export interface CallMeta {
   from: string;
   to: string;
   divertedFrom?: string;
+  channel: Channel;
+  /** turned away unanswered (limits.yaml): why, for the owner */
+  declined?: string;
   startedAt: number;
 }
 

@@ -4,9 +4,10 @@ import { streamSSE, type SSEStreamingApi } from "hono/streaming";
 import { NO_MEDIA, type CallManager } from "../core/call-manager";
 import type { AppConfig } from "../core/config";
 import { GAMES, START, goalMet, nextPlay, playSummary, playerName, rankIn, scoreOf, type BoardEntry, type Game, type PlayState } from "../core/game";
+import type { LimitHit } from "../core/limits";
 import { logger } from "../core/log";
 import { errMsg } from "../core/orchestrator";
-import type { Clock, Referee, Repo } from "../core/ports";
+import type { Referee, Repo } from "../core/ports";
 import { GoalWatch } from "../core/referee";
 import type { OpenAiWebRtc, WebRtcAnswer } from "../adapters/openai-live/webrtc";
 import { hostOf } from "./admin-guard";
@@ -19,8 +20,8 @@ import { DEMOS, findDemo, github, realCallsPage } from "./listen";
 // they play a real caller and try to get their message through fast. A referee (src/core/referee.ts) judges
 // the goal; the call itself is handled like any other. The browser talks to Live over WebRTC (adapters/openai-live/webrtc.ts);
 // we only swap the SDP and steer the call over a sideband, like an OpenAI SIP call. Anyone with
-// the link can call, so PublicGate caps calls per IP, calls at once and the estimated daily spend
-// (config/public.yaml).
+// the link can call, so CallManager's gate caps calls per IP, calls at once, calls a day and the
+// day's spend (config/limits.yaml public).
 //
 //   GET  play                 the games, when realCalls (/ is then the recordings, and
 //                             listen/:slug opens them on one)
@@ -32,84 +33,34 @@ import { DEMOS, findDemo, github, realCallsPage } from "./listen";
 //   GET  call/:id/events      server-sent events: PlayState as Jev and the call flow move on,
 //                             until the call ends
 //   GET  call/:id/result      the game's score, rank and leaderboard once the call has ended
+//   POST call/notify          {email} → 204: tell me when there's game again (shown once the
+//                             day's calls or budget have run out, or the page is closed)
 
 const log = logger("public");
 
 /** Call-control ids of public calls. Their Live session ends when the sideband closes it. */
 const PREFIX = "web:";
 export const isPublicCall = (callControlId: string) => callControlId.startsWith(PREFIX);
-/** The caller shown in the call list, and how the budget finds public calls. */
+/** The caller shown in the call list. */
 export const PUBLIC_FROM = "public";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** an SDP offer is a few KB; a request much bigger isn't one */
 const MAX_BODY_BYTES = 64 * 1024;
+/** POST call/notify: an email address */
+const MAX_NOTIFY_BYTES = 2 * 1024;
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export type Refusal = { status: 429 | 503; error: "closed" | "busy" | "limit" | "budget"; message: string };
+/** What has run out for everyone (the page then offers a "notify me" form); null: nothing. */
+export type Out = "closed" | "quota" | "budget" | null;
 
-/** Admission for public calls: per-IP, concurrency and a rolling 24 h budget. */
-export class PublicGate {
-  private active = new Set<string>();
-  /** call start times by client IP (in memory: a restart resets it) */
-  private byIp = new Map<string, number[]>();
-
-  constructor(private d: { repo: Repo; config: () => AppConfig; clock: Clock }) {}
-
-  /** Reserves a slot for `callId`, or says why not. Call `release` once the call has ended. */
-  async admit(callId: string, ip: string): Promise<Refusal | null> {
-    const cfg = this.d.config();
-    const p = cfg.public;
-    const now = this.d.clock.now();
-    if (!p.enabled) return { status: 503, error: "closed", message: "Closed for now." };
-    const recent = (this.byIp.get(ip) ?? []).filter((t) => t > now - DAY_MS);
-    if (recent.length) this.byIp.set(ip, recent);
-    else this.byIp.delete(ip); // only IPs that called in the last 24 h are kept
-    if (recent.length >= p.per_ip_per_day) return { status: 429, error: "limit", message: "That's enough scamming for today." };
-    if (this.active.size >= p.max_concurrent) return { status: 503, error: "busy", message: "All lines are busy. Try again in a few minutes." };
-
-    // Reserved before the await, so concurrent requests see this one; undone if it's refused.
-    this.active.add(callId);
-    this.byIp.set(ip, [...recent, now]);
-    let admitted = false;
-    try {
-      const ended = await this.d.repo.listCallsFrom(PUBLIC_FROM, now - DAY_MS);
-      const spent = ended.reduce((sum, c) => sum + (c.status === "ended" ? (c.costUsd ?? 0) : 0), 0);
-      if (spent + this.active.size * worstCaseUsd(cfg) > p.daily_usd) {
-        return { status: 503, error: "budget", message: "Out of scams for today. Come back tomorrow." };
-      }
-      admitted = true;
-      return null;
-    } finally {
-      if (!admitted) this.unreserve(callId, ip, now);
-    }
-  }
-
-  private unreserve(callId: string, ip: string, at: number) {
-    this.active.delete(callId);
-    const times = this.byIp.get(ip) ?? [];
-    times.splice(times.indexOf(at), 1);
-    if (!times.length) this.byIp.delete(ip);
-  }
-
-  isActive(callId: string) {
-    return this.active.has(callId);
-  }
-
-  release(callId: string) {
-    this.active.delete(callId);
-  }
-}
-
-
-/**
- * The most one public call can cost: Live for max_call_seconds plus every Luna call it may make,
- * including the owner's rolling summaries (luna.yaml progress; counted even without Telegram).
- */
-export function worstCaseUsd(cfg: AppConfig): number {
-  const secs = Math.min(cfg.public.max_call_seconds, cfg.flow.timing.max_call_seconds);
-  const progress = cfg.luna.progress.enabled ? Math.ceil((secs * 1000) / cfg.luna.progress.min_interval_ms) : 0;
-  return (secs / 60) * cfg.cost.live_usd_per_min + (cfg.luna.limits.max_calls + progress) * cfg.cost.luna_usd_per_call;
-}
+/** What the page is told when a limit (limits.yaml public) turns a call away. */
+const REFUSALS: Record<LimitHit, { status: 429 | 503; error: LimitHit | "limit"; message: string }> = {
+  per_caller: { status: 429, error: "limit", message: "That's enough scamming for today." },
+  busy: { status: 503, error: "busy", message: "All lines are busy. Try again in a few minutes." },
+  quota: { status: 503, error: "quota", message: "We've run out of game for today. Check back later!" },
+  budget: { status: 503, error: "budget", message: "Out of scams for today. Come back tomorrow." },
+};
 
 /** What the page starts from (embedded in it, and refreshed from GET call/lobby after a call). */
 export interface Lobby {
@@ -121,6 +72,8 @@ export interface Lobby {
   undetectedMultiplier: number;
   /** SCAMMER TIME WASTED: seconds so far on calls judged scam or spam (public ones too), and how many are live now */
   wasted: { seconds: number; live: number };
+  /** what has run out for everyone: the page says so and offers a "notify me" form instead of a call */
+  out: Out;
 }
 
 /** A game once its call has ended (GET call/:id/result). */
@@ -142,7 +95,6 @@ export interface PublicDeps {
   /** judges the game calls' goals (games.yaml referee) */
   referee: Referee;
   config: () => AppConfig;
-  gate: PublicGate;
   webrtc: OpenAiWebRtc;
   clientAssets: ClientAssets;
   /** the real call recordings as the home page (listen.ts), /listen/<slug>, and the games at /play */
@@ -164,6 +116,10 @@ export function publicRoutes(d: PublicDeps) {
   };
   /** live calls (public ones too), for the time-wasted counter; `scamGame`: counts whatever Jev says */
   const liveCalls = new Map<string, { startedAt: number; junk: boolean; scamGame: boolean }>();
+  /** public calls registered and not yet ended */
+  const active = new Set<string>();
+  /** what has run out for everyone, closed included */
+  const out = async (): Promise<Out> => (d.config().public.enabled ? await d.manager.gate.exhausted("public") : "closed");
 
   d.manager.bus.subscribe((ev) => {
     if (ev.type === "call.started") {
@@ -175,11 +131,11 @@ export function publicRoutes(d: PublicDeps) {
     if (lc && ev.type === "classification") lc.junk = lc.scamGame || JUNK.includes(ev.classification.verdict);
     if (ev.type === "call.ended") liveCalls.delete(ev.callId);
 
-    if (!d.gate.isActive(ev.callId)) return;
+    if (!active.has(ev.callId)) return;
     const p = plays.get(ev.callId);
     // Every call ends up here, however it ended (page, call flow, max length, Live closing).
     if (ev.type === "call.ended") {
-      d.gate.release(ev.callId);
+      active.delete(ev.callId);
       connected.delete(ev.callId);
       plays.delete(ev.callId);
       for (const st of p?.streams ?? []) void st.writeSSE({ event: "ended", data: "{}" }).finally(() => st.close());
@@ -214,21 +170,26 @@ export function publicRoutes(d: PublicDeps) {
     push(p);
   });
 
+  async function wasted(): Promise<Lobby["wasted"]> {
+    const now = Date.now();
+    const live = [...liveCalls.values()].filter((c) => c.junk);
+    const liveSeconds = live.reduce((sum, c) => sum + (now - c.startedAt) / 1000, 0);
+    return { seconds: Math.round((await d.repo.junkCallSeconds()) + liveSeconds), live: live.length };
+  }
+
   async function lobby(): Promise<Lobby> {
     const g = d.config().games;
     const boards = { scam: {}, get_through: {} } as Lobby["boards"];
     for (const game of GAMES) {
       for (const goal of g[game].goals) boards[game][goal.id] = (await d.repo.scores(game, goal.id)).slice(0, g.leaderboard_size);
     }
-    const now = Date.now();
-    const live = [...liveCalls.values()].filter((c) => c.junk);
-    const liveSeconds = live.reduce((sum, c) => sum + (now - c.startedAt) / 1000, 0);
     return {
       games: { scam: g.scam.goals, get_through: g.get_through.goals },
       boards,
       size: g.leaderboard_size,
       undetectedMultiplier: g.scam.undetected_multiplier,
-      wasted: { seconds: Math.round((await d.repo.junkCallSeconds()) + liveSeconds), live: live.length },
+      wasted: await wasted(),
+      out: await out(),
     };
   }
 
@@ -239,7 +200,7 @@ export function publicRoutes(d: PublicDeps) {
       realCallsPage(base, {
         selected: slug ?? DEMOS[0]!.slug,
         autoplay: slug !== undefined,
-        wastedSeconds: (await lobby()).wasted.seconds,
+        wastedSeconds: (await wasted()).seconds,
         phone: d.config().public.phone_number,
       });
     app.get("/", async (c) => c.html(await home(c.req.path.replace(/\/?$/, "/"))));
@@ -318,11 +279,10 @@ export function publicRoutes(d: PublicDeps) {
     }
     const player = playerName(body.player);
     if (!player) return c.json({ error: "name", message: "Pick another name." }, 400);
+    if (!d.config().public.enabled) return c.json({ error: "closed", message: "Closed for now." }, 503);
     if (!d.manager.accepting) return c.json({ error: "busy", message: "Back in a minute." }, 503);
     const callId = crypto.randomUUID();
     const ip = c.req.header("cf-connecting-ip");
-    const refused = await d.gate.admit(callId, ip ?? "local");
-    if (refused) return c.json({ error: refused.error, message: refused.message }, refused.status);
     // Event times count from here (the call's start), so the page can set its clock by them.
     const startedAt = Date.now();
     const play = {
@@ -372,13 +332,30 @@ export function publicRoutes(d: PublicDeps) {
               .catch((err) => logger("call").warn("recording not saved", { callId, err }))
         : undefined,
     });
+    // Admitted (limits.yaml public) before anything billed: the Live session starts in attachMedia.
+    let hit: LimitHit | "failed" | null;
+    active.add(callId);
     try {
-      await d.manager.registerIncoming({ callId, callControlId: `${PREFIX}${callId}`, from: PUBLIC_FROM, to: "public page", callerIp: ip });
+      hit = await d.manager.registerIncoming({
+        callId,
+        callControlId: `${PREFIX}${callId}`,
+        from: PUBLIC_FROM,
+        to: "public page",
+        callerIp: ip,
+        channel: "public",
+        caller: ip ?? "local",
+      });
     } catch (err) {
-      d.gate.release(callId);
-      plays.delete(callId);
       log.warn("not started", { callId, err });
-      return c.json({ error: "busy", message: "Back in a minute." }, 503);
+      hit = "failed";
+    }
+    if (hit) {
+      active.delete(callId);
+      connected.delete(callId);
+      plays.delete(callId);
+      if (hit === "failed") return c.json({ error: "busy", message: "Back in a minute." }, 503);
+      const r = REFUSALS[hit];
+      return c.json({ error: r.error, message: r.message }, r.status);
     }
     // Without its game row the call still works; it just isn't scored.
     await d.repo
@@ -390,7 +367,6 @@ export function publicRoutes(d: PublicDeps) {
       voice,
       mediaViaVoice: true,
       dryRun: !cfg.public.tools,
-      maxCallSeconds: cfg.public.max_call_seconds,
     });
     try {
       const a = await Promise.race([answer, attached.then(() => answer)]);
@@ -402,6 +378,40 @@ export function publicRoutes(d: PublicDeps) {
     }
   });
 
+  /** "notify me" sign-up times by client IP (in memory: a restart resets it) */
+  const notifyByIp = new Map<string, number[]>();
+  app.post(
+    "/call/notify",
+    bodyLimit({ maxSize: MAX_NOTIFY_BYTES, onError: (c) => c.json({ error: "bad_request", message: "Something went wrong." }, 413) }),
+    async (c) => {
+      const body = await c.req.json<{ email?: unknown }>().catch(() => ({}) as { email?: unknown });
+      const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+      if (email.length > 254 || !EMAIL.test(email)) return c.json({ error: "email", message: "That doesn't look like an email." }, 400);
+      const ip = c.req.header("cf-connecting-ip") ?? "local";
+      const now = Date.now();
+      const recent = (notifyByIp.get(ip) ?? []).filter((t) => t > now - DAY_MS);
+      if (recent.length >= d.config().public.notify_per_ip_per_day) {
+        notifyByIp.set(ip, recent);
+        return c.json({ error: "limit", message: "Got it already. We'll let you know!" }, 429);
+      }
+      notifyByIp.set(ip, [...recent, now]);
+      // Worked out here, not taken from the page.
+      const reason = await out();
+      // Always 204, signed up before or not: the form doesn't tell who's on the list. A repeat
+      // sign-up refreshes the row and makes it pending again.
+      await d.repo.addNotifySignup({
+        email,
+        createdAt: now,
+        ip,
+        country: c.req.header("cf-ipcountry") ?? null,
+        userAgent: c.req.header("user-agent")?.slice(0, 300) ?? null,
+        reason,
+      });
+      log.info("notify signup", { reason });
+      return c.body(null, 204);
+    },
+  );
+
   app.post("/call/:id/connected", (c) => {
     connected.get(c.req.param("id"))?.();
     return c.body(null, 204);
@@ -409,7 +419,7 @@ export function publicRoutes(d: PublicDeps) {
 
   app.post("/call/:id/hangup", (c) => {
     const id = c.req.param("id");
-    if (d.gate.isActive(id)) void d.manager.hangup(id, "hung up on the page", "caller");
+    if (active.has(id)) void d.manager.hangup(id, "hung up on the page", "caller");
     return c.body(null, 204);
   });
 
@@ -604,6 +614,12 @@ body.connecting .clock b{opacity:.35}
 .r-extra canvas.sprite{width:18px}
 .r-btns{display:flex;flex-wrap:wrap;justify-content:center;gap:12px}
 .r-btns .btn.ghost{font-size:clamp(22px,3.6vh,28px);padding:10px 18px 12px}
+.out-msg{margin:0;font-family:var(--disp);font-size:clamp(26px,4.4vh,34px);line-height:1;letter-spacing:.03em;text-wrap:balance}
+.notify{display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;max-width:360px}
+.notify label{font-family:var(--disp);font-size:clamp(18px,2.8vh,22px);line-height:1;letter-spacing:.05em;opacity:.75}
+.notify input{width:100%;padding:12px 14px;border:0;border-radius:0;background:var(--ink);color:var(--paper);box-shadow:inset 0 0 0 2px var(--line);font-family:var(--text);font-size:18px;-webkit-user-select:text;user-select:text}
+.notify input::placeholder{color:var(--dim)}
+.notify input:focus{outline:0;box-shadow:inset 0 0 0 3px var(--amb)}
 .toast{position:absolute;left:50%;top:calc(64px + env(safe-area-inset-top));transform:translateX(-50%);z-index:9;max-width:calc(100% - 32px);padding:10px 16px 12px;background:var(--ink);color:var(--paper);box-shadow:inset 0 0 0 2px var(--amb),5px 5px 0 rgba(0,0,0,.3);font-family:var(--disp);font-size:24px;letter-spacing:.03em;text-align:center}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
@@ -680,6 +696,22 @@ ${
       <div class="r-btns"><button class="btn" type="button" id="again">PLAY AGAIN</button><button class="btn ghost" type="button" id="menu">CHANGE GAME</button></div>
     </div>
     <footer class="band foot">PLAY NOW. REAL SCAMMERS PAY LATER.</footer>
+  </section>
+
+  <section class="scr modebg" id="s-out" hidden>
+    <header class="band"><h1><button type="button" data-home>SCAMSITTER</button></h1><button class="chip" type="button" data-chip hidden></button></header>
+    <div class="stage">
+      <h2 id="out-title">OUT OF GAME</h2>
+      <p class="out-msg" id="out-msg">WE'VE RUN OUT OF GAME FOR TODAY. CHECK BACK LATER!</p>
+      <form class="notify" id="notify" novalidate>
+        <label for="notify-in">WANT A SHOUT WHEN WE'RE BACK?</label>
+        <input id="notify-in" type="email" name="email" autocomplete="email" inputmode="email" maxlength="254" spellcheck="false" placeholder="you@example.com" required>
+        <button class="btn" type="submit" id="notify-ok">NOTIFY ME</button>
+      </form>
+      <p class="out-msg" id="notify-done" hidden>THANKS! WE'LL LET YOU KNOW.</p>
+      <div class="r-btns"><button class="btn ghost" type="button" id="out-back">BACK</button></div>
+    </div>
+    <footer class="band foot">REAL SCAMMERS NEVER TAKE A DAY OFF. WE DO.</footer>
   </section>
 
   <section class="scr modebg overlay" id="s-name" hidden>

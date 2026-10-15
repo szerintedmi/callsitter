@@ -5,7 +5,8 @@ import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { BoardEntry, Game } from "../../core/game";
-import type { CallRecord, PlayRecord, Repo, StoredEvent } from "../../core/ports";
+import type { CallRecord, NotifySignup, PlayRecord, Repo, StoredEvent } from "../../core/ports";
+import type { Channel } from "../../core/limits";
 import type { CallEvent } from "../../core/types";
 import * as schema from "./schema";
 
@@ -22,7 +23,7 @@ export function openSqlite(path: string, migrationsFolder = "./drizzle"): BunSQL
 export class SqliteRepo implements Repo {
   constructor(private db: BunSQLiteDatabase<typeof schema>) {}
 
-  async createCall(rec: Pick<CallRecord, "id" | "callControlId" | "from" | "to" | "divertedFrom" | "startedAt"> & { callerIp?: string | null }) {
+  async createCall(rec: Parameters<Repo["createCall"]>[0]) {
     this.db
       .insert(schema.calls)
       .values({ ...rec, status: "ringing" })
@@ -53,11 +54,12 @@ export class SqliteRepo implements Repo {
     return this.db.select().from(schema.calls).where(ne(schema.calls.status, "ended")).all();
   }
 
-  async listCallsFrom(from: string, since: number) {
+  async listCallsByChannel(channel: Channel, since: number) {
+    const c = schema.calls;
     return this.db
       .select()
-      .from(schema.calls)
-      .where(and(eq(schema.calls.from, from), gte(schema.calls.startedAt, since)))
+      .from(c)
+      .where(and(eq(c.channel, channel), or(gte(c.startedAt, since), gte(c.endedAt, since))))
       .all();
   }
 
@@ -112,5 +114,15 @@ export class SqliteRepo implements Repo {
       .where(and(eq(c.status, "ended"), or(inArray(c.verdict, ["scam", "spam"]), inArray(c.id, scamGames)), isNotNull(c.endedAt)))
       .get();
     return Math.round((row?.ms ?? 0) / 1000);
+  }
+
+  async addNotifySignup(s: NotifySignup) {
+    const { email: _, ...fresh } = s;
+    // Signing up again refreshes the row and makes it pending again, even if mailed already.
+    this.db
+      .insert(schema.notifySignups)
+      .values(s)
+      .onConflictDoUpdate({ target: schema.notifySignups.email, set: { ...fresh, notifiedAt: null } })
+      .run();
   }
 }

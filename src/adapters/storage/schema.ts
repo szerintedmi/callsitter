@@ -1,31 +1,39 @@
 import { integer, real, sqliteTable, text, index } from "drizzle-orm/sqlite-core";
 import type { CallCosts, EndedBy } from "../../core/types";
 
-export const calls = sqliteTable("calls", {
-  id: text("id").primaryKey(),
-  callControlId: text("call_control_id").notNull(),
-  from: text("from").notNull(),
-  to: text("to").notNull(),
-  divertedFrom: text("diverted_from"),
-  // Public page calls: the visitor's IP (Cloudflare's CF-Connecting-IP).
-  callerIp: text("caller_ip"),
-  status: text("status", { enum: ["ringing", "active", "ended"] }).notNull(),
-  startedAt: integer("started_at").notNull(),
-  endedAt: integer("ended_at"),
-  endReason: text("end_reason"),
-  // Who ended it (EndedBy); null on calls from before it was recorded.
-  endedBy: text("ended_by").$type<EndedBy>(),
-  verdict: text("verdict"),
-  // The column predates the call flow (it held the strategy id); a stage is the same idea.
-  stage: text("strategy"),
-  lunaCalls: integer("luna_calls").notNull().default(0),
-  // The call's total cost, and broken down by vendor with the tokens (CallCosts). costs is null
-  // on calls from before costs were recorded, which only have the estimate in cost_usd.
-  costUsd: real("cost_usd"),
-  costs: text("costs", { mode: "json" }).$type<CallCosts>(),
-  summary: text("summary"),
-  recordingPath: text("recording_path"),
-});
+export const calls = sqliteTable(
+  "calls",
+  {
+    id: text("id").primaryKey(),
+    callControlId: text("call_control_id").notNull(),
+    from: text("from").notNull(),
+    to: text("to").notNull(),
+    divertedFrom: text("diverted_from"),
+    // Where the call came from (src/core/limits.ts Channel).
+    channel: text("channel", { enum: ["phone", "test", "public"] }).notNull().default("phone"),
+    // A limit (limits.yaml) it was declined for, without being answered; null: admitted.
+    declined: text("declined", { enum: ["busy", "per_caller", "quota", "budget"] }),
+    // Public page calls: the visitor's IP (Cloudflare's CF-Connecting-IP).
+    callerIp: text("caller_ip"),
+    status: text("status", { enum: ["ringing", "active", "ended"] }).notNull(),
+    startedAt: integer("started_at").notNull(),
+    endedAt: integer("ended_at"),
+    endReason: text("end_reason"),
+    // Who ended it (EndedBy); null on calls from before it was recorded.
+    endedBy: text("ended_by").$type<EndedBy>(),
+    verdict: text("verdict"),
+    // The column predates the call flow (it held the strategy id); a stage is the same idea.
+    stage: text("strategy"),
+    lunaCalls: integer("luna_calls").notNull().default(0),
+    // The call's total cost, and broken down by vendor with the tokens (CallCosts). costs is null
+    // on calls from before costs were recorded, which only have the estimate in cost_usd.
+    costUsd: real("cost_usd"),
+    costs: text("costs", { mode: "json" }).$type<CallCosts>(),
+    summary: text("summary"),
+    recordingPath: text("recording_path"),
+  },
+  (t) => [index("calls_channel_idx").on(t.channel, t.startedAt)],
+);
 
 export const events = sqliteTable(
   "events",
@@ -58,6 +66,24 @@ export const plays = sqliteTable(
   },
   (t) => [index("plays_board_idx").on(t.game, t.goal, t.scoreMs)],
 );
+
+// Public page visitors who asked to hear when there's game again (POST call/notify).
+export const notifySignups = sqliteTable("notify_signups", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  // trimmed, lowercased
+  email: text("email").notNull().unique(),
+  createdAt: integer("created_at").notNull(),
+  // Cloudflare's CF-Connecting-IP
+  ip: text("ip"),
+  // Cloudflare's CF-IPCountry, if it sends it
+  country: text("country"),
+  // cut to 300 characters
+  userAgent: text("user_agent"),
+  // what had run out then; null: nothing
+  reason: text("reason", { enum: ["closed", "quota", "budget"] }),
+  // for whoever sends the "we're back" mail later; cleared when the email signs up again
+  notifiedAt: integer("notified_at"),
+});
 
 export type CallRow = typeof calls.$inferSelect;
 export type EventRow = typeof events.$inferSelect;

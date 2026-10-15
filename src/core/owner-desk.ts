@@ -3,7 +3,7 @@ import type { OwnerExtendResult, OwnerSteerResult } from "./call-session";
 import { describeCosts } from "./cost";
 import { logger } from "./log";
 import type { Clock, EventBus, MessageLayout, OwnerButtonPress, OwnerChat, OwnerMessage } from "./ports";
-import type { CallCosts, CallEvent, Suggestion, Verdict } from "./types";
+import type { CallCosts, CallEvent, CallMeta, Suggestion, Verdict } from "./types";
 
 const log = logger("owner");
 
@@ -13,6 +13,9 @@ const log = logger("owner");
 // Buttons under a live call's status message send telegram.yaml steering.buttons texts or move the
 // call into a call-flow stage, and Luna's suggestions from her latest rolling summary
 // (steering.suggestions).
+// A desk serves one chat. With `accepts`, it only takes the calls that match (public-page calls
+// can have a chat of their own); each desk keeps its own message ids, since Telegram numbers
+// messages per chat, so "the newest live call" means the newest one in that chat.
 
 export interface OwnerDeskDeps {
   bus: EventBus;
@@ -31,6 +34,8 @@ export interface OwnerDeskDeps {
   extend: (callId: string, minutes: number) => OwnerExtendResult;
   /** whether steering is possible at all (it needs a chat we can hear from) */
   canSteer: boolean;
+  /** the calls this desk's chat is about; all of them when unset */
+  accepts?: (meta: CallMeta) => boolean;
 }
 
 /** Telegram's limit for a message's text */
@@ -115,7 +120,11 @@ export class OwnerDesk {
   }
 
   private onEvent(ev: CallEvent) {
-    if (ev.type === "call.started") return this.open(ev.callId, ev.meta.from, ev.meta.startedAt);
+    if (ev.type === "call.started") {
+      if (this.d.accepts && !this.d.accepts(ev.meta)) return;
+      if (ev.meta.declined) return this.declined(ev.callId, ev.meta.from, ev.meta.declined);
+      return this.open(ev.callId, ev.meta.from, ev.meta.startedAt);
+    }
     const v = this.views.get(ev.callId);
     if (!v) return;
     switch (ev.type) {
@@ -182,6 +191,13 @@ export class OwnerDesk {
     void v.message
       .then((replyTo) => this.sendFor(v.callId, text, replyTo !== null ? { replyTo } : {}))
       .catch((err) => log.warn("urgent alert not sent", { callId: v.callId, err }));
+  }
+
+  /** A call turned away by a limit (limits.yaml): one line, which notifies; nothing follows it. */
+  private declined(callId: string, from: string, reason: string) {
+    const link = this.d.callLink?.(callId);
+    const text = `📵 Declined call · ${from || "unknown caller"} · ${reason.replace(/^declined: /, "")}${link ? `\n${link}` : ""}`;
+    this.d.chat.send(text).catch((err) => log.warn("declined call message not sent", { callId, err }));
   }
 
   private open(callId: string, from: string, startedAt: number) {

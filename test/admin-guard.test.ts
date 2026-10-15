@@ -177,4 +177,13 @@ describe("admin env", () => {
     expect(env.OWNER_NAME).toBeUndefined();
     expect(() => readEnv({ ...base, CF_ACCESS_AUD: "" })).toThrow(/CF_ACCESS_AUD: required when ADMIN_AUTH=access/);
   });
+
+  test("a public-calls chat needs the bot token, a valid id, and a chat of its own", () => {
+    const tg = { ...base, ADMIN_AUTH: "none", TELEGRAM_BOT_TOKEN: "123456:ABC", TELEGRAM_CHAT_ID: "42" };
+    expect(readEnv({ ...tg, TELEGRAM_PUBLIC_CHAT_ID: "-1001234" }).TELEGRAM_PUBLIC_CHAT_ID).toBe("-1001234");
+    expect(readEnv({ ...tg, TELEGRAM_PUBLIC_CHAT_ID: "" }).TELEGRAM_PUBLIC_CHAT_ID).toBeUndefined();
+    expect(() => readEnv({ ...base, ADMIN_AUTH: "none", TELEGRAM_PUBLIC_CHAT_ID: "-1001234" })).toThrow(/TELEGRAM_PUBLIC_CHAT_ID: needs TELEGRAM_BOT_TOKEN/);
+    expect(() => readEnv({ ...tg, TELEGRAM_PUBLIC_CHAT_ID: "my group" })).toThrow(/TELEGRAM_PUBLIC_CHAT_ID: a numeric chat id/);
+    expect(() => readEnv({ ...tg, TELEGRAM_PUBLIC_CHAT_ID: "42" })).toThrow(/TELEGRAM_PUBLIC_CHAT_ID: must differ/);
+  });
 });

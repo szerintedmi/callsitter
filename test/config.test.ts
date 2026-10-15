@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { YamlDirSource } from "../src/adapters/config/yaml-fs";
-import { ConfigError, fillCurrentTime, fillPlaceholders, loadConfig, parseConfig, type ConfigName } from "../src/core/config";
+import { checkLimits, ConfigError, fillCurrentTime, fillPlaceholders, loadConfig, parseConfig, publicChatConfig, type ChannelLimits, type ConfigName } from "../src/core/config";
 import { loadConfigWithLuna, loadRepoConfig } from "./helpers";
 
 describe("config", () => {
@@ -27,6 +27,9 @@ describe("config", () => {
     expect(f.silence.max_prompts).toBe(2);
     expect(parseConfig("connection", {}).media_stream.codec).toBe("pcmu");
     expect(parseConfig("luna", { instructions: "x" }).limits).toEqual({ max_calls: 4, cooldown_ms: 15000 });
+    expect(parseConfig("public", {})).toMatchObject({ notify_per_ip_per_day: 5 });
+    const none = { max_spend_usd_per_day: null, max_calls_per_day: null, max_concurrent_calls: null, max_calls_per_caller_per_day: null, max_call_seconds: null };
+    expect(parseConfig("limits", {})).toEqual({ phone: none, test: none, public: none });
   });
 
   test("rejects out-of-range thresholds with a readable message", () => {
@@ -125,6 +128,38 @@ describe("config", () => {
     expect(() => fillPlaceholders(cfg)).toThrow(/live\.yaml: greeting: unknown placeholder \{owner_message\}/);
     expect(() => parseConfig("telegram", { steering: { text: "SUPERVISOR: hi" } })).toThrow(/needs \{owner_message\}/);
     expect(() => parseConfig("telegram", { steering: { prefixes: { "!": "shout" } } })).toThrow(ConfigError);
+  });
+
+  test("telegram.public: defaults, and applied over status in the public chat's view", async () => {
+    expect(parseConfig("telegram", {}).public).toEqual({ min_edit_interval_ms: 10_000, urgent_alert: false });
+    expect(() => parseConfig("telegram", { public: { min_edit_interval_ms: 500 } })).toThrow(ConfigError);
+    const cfg = await loadRepoConfig();
+    const view = publicChatConfig(cfg);
+    expect(view.telegram.status.min_edit_interval_ms).toBe(cfg.telegram.public.min_edit_interval_ms);
+    expect(view.telegram.status.urgent_alert.enabled).toBe(false);
+    expect(view.telegram.status.urgent_alert.min_urgency).toBe(cfg.telegram.status.urgent_alert.min_urgency);
+    expect(view.telegram.steering).toBe(cfg.telegram.steering);
+    expect(cfg.telegram.status.urgent_alert.enabled).toBe(true);
+  });
+
+  test("limits.yaml: null or left out is no limit, 0 is a cap; unknown keys rejected; the public page keeps its caps", async () => {
+    const phone = parseConfig("limits", { phone: { max_spend_usd_per_day: 20 } }).phone;
+    expect(phone).toMatchObject({ max_spend_usd_per_day: 20, max_calls_per_day: null, max_concurrent_calls: null });
+    expect(parseConfig("limits", { phone: { max_spend_usd_per_day: null } }).phone.max_spend_usd_per_day).toBeNull();
+    expect(parseConfig("limits", { phone: { max_spend_usd_per_day: 0 } }).phone.max_spend_usd_per_day).toBe(0);
+    expect(() => parseConfig("limits", { phone: { daily_usd: 20 } })).toThrow(ConfigError);
+    expect(() => parseConfig("limits", { mobile: {} })).toThrow(ConfigError);
+    expect(() => parseConfig("limits", { phone: { max_spend_usd_per_day: -1 } })).toThrow(ConfigError);
+
+    const cfg = await loadRepoConfig();
+    expect(() => checkLimits(cfg.limits, cfg.flow)).not.toThrow();
+    const without = (l: Partial<ChannelLimits>) => ({ ...cfg.limits, public: { ...cfg.limits.public, ...l } });
+    expect(() => checkLimits(without({ max_spend_usd_per_day: null }), cfg.flow)).toThrow("public.max_spend_usd_per_day");
+    expect(() => checkLimits(without({ max_concurrent_calls: null }), cfg.flow)).toThrow("public.max_concurrent_calls");
+    expect(() => checkLimits(without({ max_call_seconds: cfg.flow.timing.max_call_seconds + 1 }), cfg.flow)).toThrow("longer than");
+    expect(() => checkLimits({ ...cfg.limits, test: { ...cfg.limits.test, max_call_seconds: 10 } }, cfg.flow)).toThrow("time_up");
+    // The phone's budget off: still valid.
+    expect(() => checkLimits({ ...cfg.limits, phone: { ...cfg.limits.phone, max_spend_usd_per_day: null } }, cfg.flow)).not.toThrow();
   });
 
   test("rejects unknown Luna tools", () => {

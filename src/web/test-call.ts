@@ -175,7 +175,12 @@ export function testCallRoutes(d: TestCallDeps) {
             .catch((err) => log.warn("recording not saved", { callId, err }));
         });
         d.browserCalls.register(ccid, () => media.close());
-        await d.manager.registerIncoming({ callId, callControlId: ccid, from: "browser", to: "test call" });
+        const hit = await d.manager.registerIncoming({ callId, callControlId: ccid, from: "browser", to: "test call", channel: "test" });
+        if (hit) {
+          ws.send(JSON.stringify({ type: "error", message: (await d.manager.declineReason("test", hit)).replace(/^declined: /, "Not started: ") }));
+          ws.close();
+          return;
+        }
         ws.send(JSON.stringify({ type: "started", callId }));
         session = await d.manager.attachMedia(callId, media, "l16", { dryRun });
       };

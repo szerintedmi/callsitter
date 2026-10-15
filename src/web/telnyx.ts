@@ -85,13 +85,19 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
         }
         const callId = crypto.randomUUID();
         const codec = d.config.get().connection.media_stream.codec;
-        await d.manager.registerIncoming({
-          callId,
-          callControlId: ccid,
-          from: p.from ?? "",
-          to: p.to ?? "",
-          divertedFrom: divertedFrom(p.sip_headers),
-        });
+        const call = { callId, callControlId: ccid, from: p.from ?? "", to: p.to ?? "", divertedFrom: divertedFrom(p.sip_headers) };
+        // Over a limit (limits.yaml phone): busy, before anything billed. If the reject fails, hang
+        // up instead; if that fails too, the error propagates and no row is stored, since the
+        // stored declined call makes a redelivery skip this and orphan cleanup ignore it.
+        const hit = await d.manager.registerIncoming({ ...call, channel: "phone", caller: p.from });
+        if (hit) {
+          await d.telnyx.reject(ccid, "USER_BUSY").catch(async (err) => {
+            callLog.warn("reject failed: hanging up instead", { callId, err: describe(err) });
+            await d.telnyx.hangup(ccid);
+          });
+          await d.manager.declineIncoming({ ...call, channel: "phone", declined: hit, reason: await d.manager.declineReason("phone", hit) });
+          return;
+        }
         await d.manager.sipHeaders(callId, "telnyx", [...(p.sip_headers ?? []), ...(p.custom_headers ?? [])], { info: payloadInfo(p, INITIATED_SKIP) });
         const token = await mediaToken(d.mediaSecret, callId, codec);
         const streamUrl = `${d.publicWsBase}/media/${callId}/${codec}/${token}`;

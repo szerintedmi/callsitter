@@ -129,7 +129,7 @@ test("player names: 1–3 letters or digits, stored in capitals", () => {
 test("leaderboards keep every score, a player's several too; unscored games don't count", async () => {
   const repo = new SqliteRepo(openSqlite(":memory:"));
   const play = async (id: string, game: "scam" | "get_through", player: string, scoreMs: number | null) => {
-    await repo.createCall({ id, callControlId: id, from: "public", to: "public page", divertedFrom: null, startedAt: 0 });
+    await repo.createCall({ id, callControlId: id, from: "public", to: "public page", divertedFrom: null, channel: "public", startedAt: 0 });
     await repo.createPlay({ callId: id, game, goal: "g", player, createdAt: 0 });
     await repo.finishPlay(id, scoreMs, 1);
   };

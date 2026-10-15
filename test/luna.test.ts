@@ -27,7 +27,7 @@ async function rig(replies: (object | { status: number; error: string })[]) {
   }) as unknown as typeof globalThis.fetch;
   const agent = new LunaAgent({ apiKey: "k", config: () => config.luna, fetch });
   const input = (p: Partial<AgentInput> = {}): AgentInput => ({
-    meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+    meta: { callId: "c", from: "+441", to: "+442", channel: "phone", startedAt: 0 },
     transcript: [{ seq: 1, speaker: "caller", text: "It's Sarah, ask him to call me back.", at: 0, final: true }],
     classification: null,
     reason: "genuine caller",
@@ -68,7 +68,7 @@ describe("Luna adapter", () => {
 
   test("the summary continues Luna's conversation when there is one", async () => {
     const r = await rig([text("s1", "Sarah called; message taken."), text("s2", "Nobody said much.")]);
-    const meta = { callId: "c", from: "+441", to: "+442", startedAt: 0 };
+    const meta = { callId: "c", from: "+441", to: "+442", channel: "phone" as const, startedAt: 0 };
     expect((await r.agent.summarize(meta, [], { previousResponseId: "r2" })).text).toBe("Sarah called; message taken.");
     expect((await r.agent.summarize(meta, [])).text).toBe("Nobody said much.");
     expect(r.requests.map((q) => q.previous_response_id)).toEqual(["r2", undefined]);

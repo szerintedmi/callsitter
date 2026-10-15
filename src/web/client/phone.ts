@@ -20,8 +20,11 @@ export interface DialOptions {
   /** the agent's greeting is playing (or the page can't tell and waited long enough) */
   onLive(): void;
   onState(s: PlayState): void;
-  /** the call is over; `live`: it got that far. `text` says why, for the visitor ("" if they hung up) */
-  onEnd(end: { live: boolean; text: string; callId: string | null }): void;
+  /**
+   * the call is over; `live`: it got that far. `text` says why, for the visitor ("" if they hung
+   * up); `error`: the server's reason when it turned the call away (POST call's `error`)
+   */
+  onEnd(end: { live: boolean; text: string; callId: string | null; error?: string }): void;
 }
 
 export interface Call {
@@ -114,7 +117,7 @@ export function dial(o: DialOptions): Call {
   }
 
   /** Ends the call on the page (and on the server, unless the server ended it). */
-  function end(text: string, tellServer = false) {
+  function end(text: string, tellServer = false, error?: string) {
     if (ended) return;
     ended = true;
     connecting?.();
@@ -127,7 +130,7 @@ export function dial(o: DialOptions): Call {
     void ctx?.close().catch(() => {});
     void wake?.release().catch(() => {});
     o.remote.srcObject = null;
-    o.onEnd({ live, text, callId: call.id });
+    o.onEnd({ live, text, callId: call.id, error });
   }
 
   const post = (path: string, body?: unknown) =>
@@ -183,9 +186,9 @@ export function dial(o: DialOptions): Call {
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
       const r = await post("call", { sdp: offer.sdp, ...o.game });
-      const j = (await r.json().catch(() => ({}))) as { callId?: string; sdp?: string; elapsedMs?: number; message?: string };
+      const j = (await r.json().catch(() => ({}))) as { callId?: string; sdp?: string; elapsedMs?: number; error?: string; message?: string };
       if (ended) return; // hung up meanwhile
-      if (!r.ok || !j.callId || !j.sdp) return end(j.message || "Couldn't connect. Try again.");
+      if (!r.ok || !j.callId || !j.sdp) return end(j.message || "Couldn't connect. Try again.", false, j.error);
       call.id = j.callId;
       call.t0 = Date.now() - (j.elapsedMs ?? 0);
       const es = (events = new EventSource(`${o.base}call/${j.callId}/events`));
