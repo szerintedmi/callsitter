@@ -4,9 +4,9 @@ An AI that answers my phone. Scammers get their time wasted, sales calls get a p
 
 ## Hear it on real calls
 
-| [![The police](demos/posters/police-scam.jpg)](https://scamsitter.geekmango.com/listen/police-scam) | [![Bot vs bot](demos/posters/crypto-bot.jpg)](https://scamsitter.geekmango.com/listen/crypto-bot) | [![The electrician](demos/posters/electrician.jpg)](https://scamsitter.geekmango.com/listen/electrician) |
-| :-: | :-: | :-: |
-| **The police** (13 min) | **Bot vs bot** (4 min) | **The electrician** (1½ min) |
+| [![Are you AI?](demos/posters/areyouai.jpg)](https://scamsitter.geekmango.com/listen/areyouai) | [![The police](demos/posters/police-scam.jpg)](https://scamsitter.geekmango.com/listen/police-scam) | [![Bot vs bot](demos/posters/crypto-bot.jpg)](https://scamsitter.geekmango.com/listen/crypto-bot) | [![The electrician](demos/posters/electrician.jpg)](https://scamsitter.geekmango.com/listen/electrician) |
+| :-: | :-: | :-: | :-: |
+| **Are you AI?** (¾ min + the song) | **The police** (13 min) | **Bot vs bot** (4 min) | **The electrician** (1½ min) |
 
 ## Try it
 

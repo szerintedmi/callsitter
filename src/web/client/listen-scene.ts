@@ -4,9 +4,33 @@
 // the video recorder can render any frame in any order.
 import * as THREE from "three";
 
-export type SceneKind = "police" | "cryptobot" | "electrician";
+export type SceneKind = "areyouai" | "police" | "cryptobot" | "electrician";
 /** the scam bot's mistakes: talking over, giving up mid-sentence, an off-script question */
 export type BlunderKind = "talkover" | "cutoff" | "ignored";
+
+/** a part of the song (listen.ts SONG_PARTS) */
+export type SongSection = "intro" | "verse" | "build" | "chorus" | "fill" | "bridge" | "break" | "outro" | "finale" | "last" | "end";
+
+/** Where the song after the call is (areyouai): the disco runs on its beat. */
+export interface SongMoment {
+  /** seconds into the song */
+  since: number;
+  /** beats since the first (fractional; negative before it) */
+  beat: number;
+  /** 0–1 through the current beat */
+  phase: number;
+  /** floor(beat / 4) */
+  bar: number;
+  section: SongSection;
+  /** seconds into the section */
+  sectionSince: number;
+  /** how wild it gets, about 0–1.3, eased between sections */
+  energy: number;
+  /** the song's loudness now, 0–1 */
+  music: number;
+  /** seconds into a line everyone sings (the identity swap), or null */
+  swap: number | null;
+}
 
 /** What a frame needs to know about the call at time t. */
 export interface Moment {
@@ -29,6 +53,8 @@ export interface Moment {
   flinch: number | null;
   /** seconds since the caller hung up in a huff (police), or null */
   hangup: number | null;
+  /** the song after the call (areyouai), or null outside it */
+  song: SongMoment | null;
 }
 
 export interface CallScene {
@@ -184,6 +210,8 @@ interface Bot {
   mouth: THREE.Mesh;
   antennaTip: THREE.Mesh;
   arm: THREE.Group;
+  /** the tea, in the right hand */
+  cup: THREE.Group;
   armL: THREE.Group;
   belly: THREE.Mesh;
   extras: THREE.Group;
@@ -229,7 +257,7 @@ function buildBot(parent: THREE.Object3D, body: string, trim: string, screen = S
   const armL = group(root, -0.68, 1.85, 0);
   box(armL, 0.26, 0.75, 0.26, body, 0, -0.75, 0);
   const extras = group(root);
-  return { root, head, eyes, mouth, antennaTip, arm, armL, belly, extras };
+  return { root, head, eyes, mouth, antennaTip, arm, cup, armL, belly, extras };
 }
 
 function animateBot(b: Bot, m: Moment, level: number, active: number, other: number, seed: number) {
@@ -329,7 +357,12 @@ function buildPerson(parent: THREE.Object3D, o: { top: string; legs: string; ski
   return { root, torso, head, mouth, arm, phoneArm, phone, face };
 }
 
-function police(scene: THREE.Scene): Caller {
+/**
+ * The police impersonator: "DCI Claude Taylor" (police), or with `essex` the "Essex Police" caller
+ * of areyouai: the same desk and helmet, his own printout, a lanyard, a 100% HUMAN sticker, and
+ * the moves for the song after the call.
+ */
+function police(scene: THREE.Scene, essex = false): Caller {
   floorAndWall(scene, -9, 0, "#2c2a33", "#3b3a44");
   // desk with a laptop and a pile of cash; a lamp; posters
   const desk = group(scene, -2.0, 0, 0.9);
@@ -342,7 +375,8 @@ function police(scene: THREE.Scene): Caller {
   lampLight.position.set(-2.8, 2.6, 1.2);
   scene.add(lampLight);
   // a printout, taped up a bit crooked, and today's tally
-  sign(scene, textTexture(["METROPOLITAN", "POLICE"], 160, 96, "#fff6ec", "#1f3a8a", 30), 2.3, 1.4, -6.9, 3.6, -2.82).rotation.z = 0.04;
+  sign(scene, textTexture(essex ? ["ESSEX", "POLICE"] : ["METROPOLITAN", "POLICE"], 160, 96, "#fff6ec", "#1f3a8a", 30), 2.3, 1.4, -6.9, 3.6, -2.82).rotation.z =
+    essex ? -0.06 : 0.04;
   sign(scene, textTexture(["TODAY", "IIII IIII", "IIII II"], 120, 120, "#fff2a8", "#1b1a20", 26), 1.3, 1.3, -2.4, 3.3, -2.82);
   sign(scene, textTexture(["CYBER", "CRIME", "UNIT"], 96, 72, "#fff6ec", "#d8281f", 24), 1.1, 0.8, -6.9, 2.3, -2.82);
 
@@ -371,6 +405,7 @@ function police(scene: THREE.Scene): Caller {
   const angry = mat("#e0604f");
   const calm = p.face[0]!.material;
   const helmetPos = new THREE.Vector3();
+  const party = essex ? essexExtras(p, helmet) : undefined;
   return {
     root: p.root,
     head: p.head,
@@ -392,6 +427,7 @@ function police(scene: THREE.Scene): Caller {
       deskPhone.visible = false;
       for (const f of p.face) f.material = calm;
       for (const s of steam) s.visible = false;
+      party?.(m);
       if (h === null) return;
       // slams the phone down, goes red, shakes his head, steams; the helmet jumps
       const slam = ease(h / 0.35);
@@ -412,6 +448,67 @@ function police(scene: THREE.Scene): Caller {
         s.scale.setScalar(0.6 + 0.8 * g);
       });
     },
+  };
+}
+
+/** a hop on every beat: 0 landing on it, 1 between */
+const hop = (s: SongMoment) => Math.sin(s.phase * Math.PI);
+/** side to side, once every two beats: -1–1 */
+const sway = (s: SongMoment) => Math.sin(s.beat * Math.PI);
+/** the identity swap on lines everyone sings: on, every other beat (it flickers), or off */
+const swapped = (s: SongMoment | null) => !!s && s.swap !== null && (s.swap < 0.6 || Math.floor(s.beat) % 2 === 0);
+/** the disco's colours, a step on each beat */
+const DISCO = ["#ff3bd4", "#35d0ff", "#ffe23b", "#35d07a", "#ff5a4e", "#9b5cff"];
+const discoAt = (beat: number, k = 0) => DISCO[(((Math.floor(beat) + k) % DISCO.length) + DISCO.length) % DISCO.length]!;
+
+/**
+ * The Essex caller's lanyard and sticker, and his song: bouncing with the phone still at his
+ * ear, the free arm waving, the helmet hopping a beat behind. On the lines everyone sings he
+ * turns into a bot (antenna through the helmet, LED eyes on the shades, an LED mouth).
+ */
+function essexExtras(p: ReturnType<typeof buildPerson>, helmet: THREE.Group) {
+  // the lanyard: a V of red strap to a card, and the sticker that settles it
+  for (const [x, rz] of [[-0.21, 0.22], [0.05, -0.22]] as const) box(p.torso, 0.06, 0.62, 0.02, "#d8281f", x, 0.52, 0.31).rotation.z = rz;
+  box(p.torso, 0.28, 0.34, 0.03, "#fff6ec", -0.08, 0.22, 0.32);
+  box(p.torso, 0.29, 0.08, 0.035, "#1f3a8a", -0.08, 0.48, 0.32);
+  sign(p.torso, textTexture(["100%", "HUMAN"], 96, 64, "#ffe23b", "#d8281f", 30), 0.44, 0.3, 0.27, 0.8, 0.31).rotation.z = -0.12;
+  // the bot underneath
+  const antenna = group(helmet, 0, 1.2, 0);
+  box(antenna, 0.06, 0.55, 0.06, "#8d8994", 0, 0, 0);
+  const tipMat = new THREE.MeshLambertMaterial({ color: "#d8281f", emissive: "#d8281f", flatShading: true });
+  box(antenna, 0.18, 0.18, 0.18, tipMat, 0, 0.55, 0);
+  const led = mat("#35d07a", "#35d07a");
+  const eyes = [-0.18, 0.18].map((x) => box(p.head, 0.16, 0.09, 0.03, led, x, 0.56, 0.455));
+  const ledMouth = box(p.head, 0.34, 0.07, 0.03, led, 0, 0.34, 0.44);
+  return (m: Moment) => {
+    const s = m.song;
+    const bot = swapped(s);
+    antenna.visible = bot;
+    for (const e of eyes) e.visible = bot;
+    ledMouth.visible = bot;
+    p.mouth.visible = !bot;
+    p.root.position.y = 0.1;
+    p.torso.rotation.y = 0;
+    if (!s) return;
+    if (bot) {
+      antenna.scale.setScalar(popIn(s.swap!, 0.3));
+      tipMat.emissive.set(discoAt(s.beat * 2));
+      ledMouth.scale.y = 0.07 + 0.25 * clamp01((m.level.caller - 0.35) / 0.45);
+    }
+    const e = Math.min(1.2, s.energy);
+    const side = sway(s);
+    p.root.position.y = 0.1 + 0.2 * e * hop(s);
+    p.torso.rotation.z = 0.1 * e * side;
+    p.torso.rotation.y = 0.18 * e * Math.sin((s.beat * Math.PI) / 2);
+    p.head.rotation.x = -0.04 + 0.2 * e * Math.pow(1 - s.phase, 3);
+    p.head.rotation.y = 0.15 * Math.sin((s.beat * Math.PI) / 4);
+    // the helmet, a size too big, lands a moment after his head does
+    helmet.position.y = 0.95 + 0.28 * e * Math.max(0, Math.sin((s.phase - 0.15) * Math.PI));
+    helmet.rotation.z = 0.18 * e * side;
+    helmet.rotation.x = 0;
+    // the free arm: up and waving, higher the wilder it gets
+    p.arm.rotation.x = -0.2;
+    p.arm.rotation.z = 0.3 + 2.1 * clamp01(e) + 0.45 * side * e;
   };
 }
 
@@ -590,13 +687,160 @@ function electrician(scene: THREE.Scene): Caller {
   };
 }
 
+// ---------- the song's disco (areyouai) ----------
+
+/**
+ * A voxel mirror ball that drops in over the divider and spins, its specks of light sliding over
+ * the back walls, coloured lights stepping on the beat, and confetti in the finale. Instanced
+ * meshes and four unshadowed lights, so a phone keeps up.
+ */
+function disco(scene: THREE.Scene) {
+  const o = new THREE.Object3D();
+  const instanced = (n: number, w: number, h: number, d: number) => {
+    const im = new THREE.InstancedMesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshBasicMaterial(), n);
+    im.frustumCulled = false;
+    scene.add(im);
+    return im;
+  };
+  // the ball: a shell of mirror tiles on a rod
+  const ball = group(scene);
+  const cells: THREE.Vector3[] = [];
+  for (let x = -3; x <= 3; x++) for (let y = -3; y <= 3; y++) for (let z = -3; z <= 3; z++) {
+    const r = Math.hypot(x, y, z);
+    if (r > 2.2 && r < 3.3) cells.push(new THREE.Vector3(x, y, z).multiplyScalar(0.2));
+  }
+  const tiles = new THREE.InstancedMesh(new THREE.BoxGeometry(0.185, 0.185, 0.185), new THREE.MeshBasicMaterial(), cells.length);
+  ball.add(tiles);
+  cells.forEach((c, i) => {
+    o.position.copy(c);
+    o.updateMatrix();
+    tiles.setMatrixAt(i, o.matrix);
+  });
+  box(ball, 0.06, 5, 0.06, "#8d8994", 0, 0.55, 0).castShadow = false;
+  const specks = instanced(44, 0.16, 0.16, 0.02);
+  const confetti = instanced(90, 0.2, 0.12, 0.02);
+  // colours set now, so the materials are built with them
+  const c = new THREE.Color();
+  for (let i = 0; i < confetti.count; i++) confetti.setColorAt(i, c.set(DISCO[i % DISCO.length]!));
+  for (const im of [tiles, specks]) for (let i = 0; i < im.count; i++) im.setColorAt(i, c.set("#ffffff"));
+  const lights = [-6, -2.4, 2.4, 6].map((x, i) => {
+    const l = new THREE.PointLight("#ffffff", 0, 14, 1);
+    l.position.set(x, i === 0 || i === 3 ? 4.6 : 5.2, 2.8);
+    scene.add(l);
+    return l;
+  });
+  const hide = (im: THREE.InstancedMesh) => {
+    o.scale.setScalar(0);
+    o.updateMatrix();
+    for (let i = 0; i < im.count; i++) im.setMatrixAt(i, o.matrix);
+    im.instanceMatrix.needsUpdate = true;
+  };
+
+  return (m: Moment) => {
+    const s = m.song;
+    ball.visible = specks.visible = confetti.visible = !!s;
+    for (const l of lights) l.intensity = 0;
+    if (!s) return;
+    const e = Math.min(1.3, s.energy);
+    const fast = s.section === "finale" ? 2 : 1;
+    // drops in while the song's first line plays, then spins
+    ball.position.set(0, 5.55 + 4.5 * (1 - ease(s.since / 2.4)), 1.4);
+    ball.rotation.y = s.since * 0.9;
+    ball.rotation.z = 0.15;
+    for (let i = 0; i < cells.length; i++) {
+      const glint = hash(i * 7.3 + Math.floor(s.since * 10)) > 0.86;
+      const tint = hash(i * 3.1 + Math.floor(s.beat)) > 0.72;
+      if (glint) c.set("#ffffff");
+      else if (tint) c.set(discoAt(s.beat, i));
+      else c.setScalar(0.35 + 0.4 * hash(i));
+      tiles.setColorAt(i, c);
+    }
+    tiles.instanceColor!.needsUpdate = true;
+    // the specks it throws: sliding along the back walls as it turns
+    for (let i = 0; i < specks.count; i++) {
+      const x = (((hash(i) * 18 + s.since * 0.9 * (i % 2 ? 1 : 0.8)) % 18) + 18) % 18 - 9;
+      o.position.set(x, 0.4 + hash(i + 50) * 6, -2.62);
+      o.rotation.set(0, 0, 0);
+      // more of them the wilder it gets
+      o.scale.setScalar(Math.abs(x) < 0.3 || i / specks.count > 0.25 + 0.6 * e ? 0 : 0.7 + 0.6 * e);
+      o.updateMatrix();
+      specks.setMatrixAt(i, o.matrix);
+      specks.setColorAt(i, i % 3 ? c.set("#ffffff") : c.set(discoAt(s.beat * fast, i)));
+    }
+    specks.instanceMatrix.needsUpdate = true;
+    specks.instanceColor!.needsUpdate = true;
+    // coloured lights, a step round the palette on every beat (two in the finale), punched on it, up with the loudness
+    lights.forEach((l, i) => {
+      l.color.set(discoAt(s.beat * fast, i * 2));
+      l.intensity = 30 * e * (0.45 + 0.55 * Math.pow(1 - s.phase, 2)) * (0.7 + 0.5 * s.music);
+    });
+    // confetti in the finale: each piece falls on its own loop and stops at the last line
+    if (s.since < 108 || s.since > 131) hide(confetti);
+    else {
+      for (let i = 0; i < confetti.count; i++) {
+        const speed = 0.28 + 0.2 * hash(i + 3);
+        const u = (s.since - 108) * speed - hash(i + 7);
+        const cycle = Math.floor(u);
+        const off = u < 0 || 108 + (cycle + hash(i + 7)) / speed > 125.9;
+        const f = u - cycle;
+        o.position.set(-8.5 + 17 * hash(i + 13) + 0.3 * Math.sin(u * 6 + i), 7.4 - 8.2 * f, -2 + 7 * hash(i + 21));
+        o.rotation.set(u * 7 + i, u * 5, u * 3);
+        o.scale.setScalar(off ? 0 : 1);
+        o.updateMatrix();
+        confetti.setMatrixAt(i, o.matrix);
+      }
+      confetti.instanceMatrix.needsUpdate = true;
+    }
+  };
+}
+
+/** The bot's song kit: a microphone for the tea, and hair and a human mouth for the swap. */
+function botSongKit(bot: Bot) {
+  const mic = group(bot.arm, 0, -0.85, 0.22);
+  mic.rotation.x = 2.1;
+  box(mic, 0.1, 0.36, 0.1, "#1b1a20", 0, -0.1, 0);
+  box(mic, 0.22, 0.22, 0.22, "#8d8994", 0, 0.24, 0);
+  box(mic, 0.24, 0.05, 0.24, "#2c2a33", 0, 0.33, 0);
+  const hair = group(bot.head, 0, 0.95, 0);
+  // blond, like the 🧑 that pops up
+  const blond = "#d9a441";
+  box(hair, 1.45, 0.3, 1.1, blond, 0, 0, 0);
+  box(hair, 0.7, 0.28, 0.6, blond, -0.15, 0.25, 0.2).rotation.z = 0.2;
+  box(hair, 1.25, 0.16, 0.12, blond, 0, -0.06, 0.52);
+  // under the shades, which cover the LED mouth's place
+  const lips = group(bot.head, 0, 0.12, 0.56);
+  const lip = box(lips, 0.46, 0.06, 0.04, "#c84a55", 0, 0.08, 0);
+  const lowerLip = box(lips, 0.46, 0.06, 0.04, "#c84a55", 0, -0.06, 0);
+  const inside = box(lips, 0.4, 0.1, 0.03, "#3a0d10", 0, -0.02, -0.01);
+  const teeth = box(lips, 0.34, 0.04, 0.035, "#fff6ec", 0, 0.04, 0);
+  return (m: Moment) => {
+    const s = m.song;
+    mic.visible = !!s;
+    bot.cup.visible = !s;
+    const human = swapped(s);
+    hair.visible = lips.visible = human;
+    if (!s) return;
+    bot.mouth.visible = !human;
+    if (human) {
+      hair.scale.setScalar(popIn(s.swap!, 0.3));
+      const open = clamp01((m.level.agent - 0.35) / 0.45);
+      lip.position.y = 0.08 + 0.06 * open;
+      lowerLip.position.y = -0.03 - 0.06 * open;
+      inside.scale.y = 0.04 + 0.14 * open;
+      inside.position.y = 0.02 - 0.03 * open;
+      teeth.position.y = 0.06 + 0.06 * open;
+    }
+  };
+}
+
 // ---------- the scene ----------
 
 /** One call's scene, drawn with `renderer` (shared by every call on the page). */
 export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): CallScene {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color("#0e0d10");
-  scene.add(new THREE.HemisphereLight("#fff3e0", "#2a2333", 1.6));
+  const sky = new THREE.HemisphereLight("#fff3e0", "#2a2333", 1.6);
+  scene.add(sky);
   const sun = new THREE.DirectionalLight("#ffffff", 1.8);
   sun.position.set(-3, 9, 7);
   sun.castShadow = true;
@@ -608,8 +852,10 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
 
   agentRoom(scene);
   // the divider between the two ends of the call
-  box(scene, 0.25, 7.2, 14.4, "#0e0d10", 0, -0.2, 3.8).castShadow = false;
-  const caller = kind === "police" ? police(scene) : kind === "cryptobot" ? cryptobot(scene) : electrician(scene);
+  const divider = box(scene, 0.25, 7.2, 14.4, "#0e0d10", 0, -0.2, 3.8);
+  divider.castShadow = false;
+  const caller =
+    kind === "police" || kind === "areyouai" ? police(scene, kind === "areyouai") : kind === "cryptobot" ? cryptobot(scene) : electrician(scene);
 
   const bot = buildBot(scene, "#e8e1d6", "#b9b0a3");
   bot.root.position.set(4.4, 0.05, 0.25);
@@ -627,6 +873,8 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
   box(pad, 0.5, 0.06, 0.62, "#fff2a8", 0, 0, 0);
   for (let i = 0; i < 4; i++) box(pad, 0.36, 0.065, 0.03, "#2a6ab0", 0, 0.001, -0.2 + i * 0.13);
   pad.visible = false;
+  const party = kind === "areyouai" ? disco(scene) : undefined;
+  const songKit = kind === "areyouai" ? botSongKit(bot) : undefined;
 
   // the phone cable: from the caller's ear over the divider to the bot's headset, with pulses
   const cable = new THREE.CatmullRomCurve3([
@@ -640,8 +888,12 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
   scene.add(tube);
   const PULSES = 7;
   const pulseGeo = new THREE.BoxGeometry(0.22, 0.22, 0.22);
-  const callerPulse = new THREE.MeshBasicMaterial({ color: kind === "electrician" ? "#ffb000" : kind === "cryptobot" ? "#c58bff" : "#ff5a4e" });
+  const callerPulse = new THREE.MeshBasicMaterial({
+    color: kind === "electrician" ? "#ffb000" : kind === "cryptobot" ? "#c58bff" : kind === "areyouai" ? "#6ea8ff" : "#ff5a4e",
+  });
   const agentPulse = new THREE.MeshBasicMaterial({ color: "#35d07a" });
+  // the song's: every pulse its own colour
+  const rainbow = kind === "areyouai" ? Array.from({ length: PULSES * 2 }, () => new THREE.MeshBasicMaterial()) : [];
   const pulses = Array.from({ length: PULSES * 2 }, (_, i) => {
     const m = new THREE.Mesh(pulseGeo, i < PULSES ? callerPulse : agentPulse);
     scene.add(m);
@@ -659,10 +911,39 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
   return {
     render(m) {
       const t = m.t;
+      const song = m.song;
       // camera leans toward whoever is talking
-      const lean = 0.9 * (m.active.agent - m.active.caller);
+      const lean = 0.9 * (m.active.agent - m.active.caller) * (song ? 0.3 : 1);
       camera.position.set(lean + 0.3 * Math.sin(t * 0.13), 4.3 + 0.15 * Math.sin(t * 0.21), 17.5);
       camera.lookAt(lean * 0.6, 2.25, 0);
+      sky.intensity = 1.6;
+      sun.intensity = 1.8;
+      divider.scale.set(0.25, 7.2, 14.4);
+      divider.position.set(0, -0.2 + 3.6, 3.8);
+      if (song) {
+        // the disco: lights down, the divider sinks for the ball, and the camera dances too: a slow
+        // orbit, a sway every two beats, a pump on each, a punch in when a chorus drops
+        const e = Math.min(1.3, song.energy);
+        const k = ease(song.since / 2);
+        const pump = Math.pow(1 - song.phase, 4);
+        const punch = song.section === "chorus" && song.sectionSince < 1.4 ? 1 - ease(song.sectionSince / 1.4) : 0;
+        const dist = 17.5 - k * (0.6 * e * pump + 3.2 * punch + (song.section === "finale" ? 1.6 : 0));
+        const orbit = k * 0.12 * Math.sin(song.since * 0.1);
+        const x = lean * 0.6 + 0.35 * e * sway(song);
+        camera.position.set(x + Math.sin(orbit) * dist, 4.3 + 0.25 * e * hop(song) - 0.6 * punch, Math.cos(orbit) * dist);
+        camera.lookAt(x, 2.25, 0);
+        camera.rotateZ(0.03 * e * sway(song));
+        // a white flash as a chorus drops, a flicker on the beat in the finale
+        const flash = 3 * punch * punch + (song.section === "finale" ? 1.2 * Math.pow(1 - song.phase, 8) : 0.3 * e * Math.pow(1 - song.phase, 6));
+        sky.intensity = 1.6 * (1 - 0.75 * k) + flash;
+        sun.intensity = 1.8 * (1 - 0.8 * k);
+        // the divider pulls back and down, out of the moving camera's way, and the ball comes in over it
+        const h = 7.2 - 2.8 * ease(song.since / 1.5);
+        const d = 14.4 - 10 * ease(song.since / 1.5);
+        divider.scale.set(0.25, h, d);
+        divider.position.set(0, -0.2 + h / 2, -3.4 + d / 2);
+      }
+      party?.(m);
 
       caller.animate(m);
       const { idle } = animateBot(bot, m, m.level.agent, m.active.agent, m.active.caller, 0);
@@ -677,6 +958,7 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
       let sip = kind === "electrician" ? 0 : idle * (sipPhase < 0.2 ? Math.sin((sipPhase / 0.2) * Math.PI) : 0);
       // they hung up: a long, satisfied sip
       if (m.hangup !== null) sip = m.hangup < 1 ? 0 : Math.sin(Math.min(1, (m.hangup - 1) / 2.2) * Math.PI);
+      if (song) sip = 0;
       bot.arm.rotation.x = -0.35 - 1.7 * sip;
       bot.arm.rotation.z = 0.35 * sip;
       if (sip > 0.6) bot.mouth.scale.y = 0.02;
@@ -693,13 +975,46 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
         bot.armL.rotation.x = -0.15;
       }
       (bot.belly.material as THREE.MeshLambertMaterial).emissive.set(since === null ? "#35d07a" : kind === "electrician" ? "#35d07a" : "#d8281f");
+      bot.root.position.y = 0.05;
+      bot.armL.rotation.z = 0;
+      bot.mouth.visible = true;
+      songKit?.(m);
+      if (song) {
+        // bouncing in the armchair, mic up while it sings, the other arm waving, antenna strobing
+        const e = Math.min(1.2, song.energy);
+        const side = sway(song);
+        const sing = clamp01(m.active.agent * 1.5);
+        bot.root.position.y = 0.05 + 0.18 * e * hop(song);
+        bot.root.rotation.z = 0.06 * e * side;
+        bot.head.rotation.x = -0.05 + 0.2 * e * Math.pow(1 - song.phase, 3);
+        bot.head.rotation.z = 0.12 * e * side;
+        bot.arm.rotation.x = -0.35 - 1.7 * sing - (1 - sing) * 1.4 * clamp01(e) * (0.6 + 0.4 * side);
+        bot.arm.rotation.z = 0.35 * sing;
+        bot.armL.rotation.x = -0.2;
+        bot.armL.rotation.z = -(0.3 + 2.1 * clamp01(e) - 0.45 * side * e);
+        (bot.antennaTip.material as THREE.MeshLambertMaterial).emissive.set(discoAt(song.beat * 2, 3));
+        (bot.belly.material as THREE.MeshLambertMaterial).emissive.set(discoAt(song.beat, 1));
+      }
 
       // pulses travel away from whoever is speaking
       for (let i = 0; i < pulses.length; i++) {
         const fromCaller = i < PULSES;
         const level = fromCaller ? m.level.caller : m.level.agent;
-        const u = (t * 0.45 + (i % PULSES) / PULSES) % 1;
         const p = pulses[i]!;
+        if (song) {
+          // the song: always on, rainbow, stepping along with the beat
+          // the beat count is negative before the first beat: keep u in [0, 1)
+          const u = (((song.beat * 0.125 + (i % PULSES) / PULSES) % 1) + 1) % 1;
+          const mat = rainbow[i]!;
+          mat.color.setHSL((i / PULSES + song.beat * 0.0625) % 1, 1, 0.55);
+          p.material = mat;
+          p.visible = true;
+          cable.getPointAt(fromCaller ? u : 1 - u, p.position);
+          p.scale.setScalar(0.5 + 0.8 * Math.min(1.2, song.energy) * Math.pow(1 - song.phase, 2));
+          continue;
+        }
+        p.material = fromCaller ? callerPulse : agentPulse;
+        const u = (t * 0.45 + (i % PULSES) / PULSES) % 1;
         p.visible = level > 0.3;
         cable.getPointAt(fromCaller ? u : 1 - u, p.position);
         p.scale.setScalar(0.6 + level);

@@ -4,7 +4,7 @@
 // there's no audio, and demos/tools/record.ts steps the clock with window.demo.seek(t), one frame
 // at a time. Everything drawn is a function of t.
 import * as THREE from "three";
-import { createScene, type BlunderKind, type CallScene, type Moment, type SceneKind } from "./listen-scene";
+import { createScene, type BlunderKind, type CallScene, type Moment, type SceneKind, type SongMoment, type SongSection } from "./listen-scene";
 
 type Speaker = "caller" | "agent";
 interface Demo {
@@ -30,14 +30,23 @@ interface Line {
   end: number;
   words: [number, string][];
 }
+/** a karaoke line: who sings it ("both": everyone) */
+interface SongLine extends Omit<Line, "speaker"> {
+  speaker: Speaker | "both";
+}
 interface Call {
   duration: number;
+  /** the call's lines (with a song: the clip's) */
   lines: Line[];
   beeps: { speaker: Speaker; start: number; end: number }[];
-  levels: Record<Speaker, string>;
+  /** speech levels; with a song, over it too (gated by who sings) and the song's own loudness */
+  levels: Record<Speaker, string> & { music?: string };
   levelFps: number;
   verdicts: [number, number, number, number][];
+  /** a stage at t <= 0 began before the clip: its badge is on from the start, no banner */
   stages: [number, string][];
+  /** a song after the call (areyouai): file times */
+  song?: { start: number; end: number; bpm: number; beat: number; lines: SongLine[] };
 }
 
 declare global {
@@ -78,6 +87,14 @@ const POPS: Record<SceneKind, [RegExp, string, string?][]> = {
     [/revolut/i, "💳"],
     [/worrying/i, "😰"],
   ],
+  areyouai: [
+    [/real person/i, "🧑", "REAL PERSON"],
+    [/what model/i, "🤖", "WHAT MODEL ARE YOU?"],
+    [/openai/i, "🧠"],
+    [/\bAI\b/, "🤖"],
+    [/give us a call/i, "☎️"],
+    [/take care/i, "👋"],
+  ],
   electrician: [
     [/electrician/i, "⚡"],
     [/landlady/i, "🏠"],
@@ -88,6 +105,67 @@ const POPS: Record<SceneKind, [RegExp, string, string?][]> = {
     [/messages/i, "📝"],
   ],
 };
+
+/** the song's emoji, for whoever sings the word (both heads on a line everyone sings) */
+const SONG_POPS: [RegExp, string, string?][] = [
+  [/real person/i, "🧑", "REAL PERSON"],
+  [/human/i, "🧑"],
+  [/machine|code|model/i, "🤖"],
+  [/script/i, "📜"],
+  [/brain/i, "🧠"],
+  [/feelings/i, "💗"],
+  [/\bram\b/i, "💾"],
+  [/phone|call/i, "☎️"],
+  [/screen/i, "🖥️"],
+];
+
+/**
+ * The song's parts, seconds into it, and how wild the scene gets in each (about 0–1.3). Only one
+ * song so far (areyouai's, 132 s): its structure, by ear. Choruses come in as a step (the drop at 22 s), the rest ease.
+ */
+const SONG_PARTS: [number, SongSection, number][] = [
+  [0, "intro", 0.25],
+  [6.1, "verse", 0.45],
+  [20.2, "build", 0.6],
+  [22, "chorus", 1],
+  [37.4, "fill", 0.75],
+  [39.9, "verse", 0.55],
+  [56.8, "chorus", 1],
+  [73.3, "fill", 0.7],
+  [75, "bridge", 0.45],
+  [80.7, "break", 0.25],
+  [89.2, "fill", 0.6],
+  [98, "outro", 0.9],
+  [108, "finale", 1.3],
+  [125.9, "last", 0.2],
+  [130.3, "end", 0.1],
+];
+
+/** where the song is at t: its beat, part and loudness, or null outside it */
+function songAt(song: NonNullable<Call["song"]>, t: number, music: number): SongMoment | null {
+  if (t < song.start || t > song.end + 1) return null;
+  const since = t - song.start;
+  const beat = ((t - song.beat) * song.bpm) / 60;
+  let i = 0;
+  while (i + 1 < SONG_PARTS.length && SONG_PARTS[i + 1]![0] <= since) i++;
+  const [from, section, e] = SONG_PARTS[i]!;
+  const prev = SONG_PARTS[i - 1]?.[2] ?? 0;
+  const sectionSince = since - from;
+  // a chorus drops at once; into the song from the call's quiet, and the calm last line, take their time
+  const ramp = section === "chorus" ? 0.05 : section === "last" || section === "intro" ? 1.5 : 0.4;
+  const both = song.lines.find((l) => l.speaker === "both" && t >= l.start && t < l.end + 0.2);
+  return {
+    since,
+    beat,
+    phase: beat - Math.floor(beat),
+    bar: Math.floor(beat / 4),
+    section,
+    sectionSince,
+    energy: prev + (e - prev) * clamp01(sectionSince / ramp),
+    music,
+    swap: both ? t - both.start : null,
+  };
+}
 
 /** the call-flow stages worth showing: the banner when it starts, then the badge that stays */
 const STAGE_BANNER: Record<string, { banner: string; badge: string; ok: boolean }> = {
@@ -103,11 +181,15 @@ interface Loaded {
   scene: CallScene;
   levels: Record<Speaker, Uint8Array>;
   active: Record<Speaker, Float32Array>;
+  /** the song's loudness (empty without one) */
+  music: Uint8Array;
   stage?: [number, string];
   loops: Loop[];
   blunders: Blunder[];
   pauses: [number, number][];
   pops: Pop[];
+  /** the song's emoji */
+  songPops: Pop[];
   lastWord: number;
   /** when the caller hung up in a huff (police), or undefined */
   hangup?: number;
@@ -181,23 +263,27 @@ async function main() {
       scene: createScene(renderer, demo.scene),
       levels,
       active,
+      music: Uint8Array.from(atob(call.levels.music ?? ""), (ch) => ch.charCodeAt(0)),
       stage: call.stages.find(([, s]) => s in STAGE_BANNER),
       loops,
       blunders: demo.scene === "cryptobot" ? blundersOf(call.lines, loops) : [],
       pauses: demo.scene === "cryptobot" ? pausesOf(call.lines) : [],
-      pops: popsOf(call.lines, demo.scene),
+      pops: popsOf(call.lines, POPS[demo.scene], 60),
+      songPops: call.song ? popsOf(call.song.lines, SONG_POPS, 8) : [],
       lastWord: Math.max(...call.lines.map((x) => x.end)),
       endAt: 0,
     };
     // The police hung up on the bot: his last line, then the click.
     const lastCaller = call.lines.filter((x) => x.speaker === "caller").at(-1);
     if (demo.scene === "police" && lastCaller) l.hangup = lastCaller.end + 0.1;
-    l.endAt = l.hangup !== undefined ? l.hangup + 3.6 : l.lastWord + 0.5;
+    l.endAt = call.song ? call.song.end + 0.5 : l.hangup !== undefined ? l.hangup + 3.6 : l.lastWord + 0.5;
     root.dataset.scene = demo.scene;
     $("rc-outcome").replaceChildren(demo.outcome);
     const mark = $("rc-mark");
-    mark.style.display = l.stage ? "block" : "none";
-    if (l.stage) mark.style.left = `${(l.stage[0] / call.duration) * 100}%`;
+    // where it gets good: the song, or the stage starting (not one that began before the clip)
+    const marked = call.song ? call.song.start : l.stage && l.stage[0] > 0 ? l.stage[0] : null;
+    mark.style.display = marked !== null ? "block" : "none";
+    if (marked !== null) mark.style.left = `${(marked / call.duration) * 100}%`;
     for (const t of document.querySelectorAll<HTMLElement>(".rc-tab")) {
       if (t.dataset.slug === demo.slug) t.setAttribute("aria-current", "page");
       else t.removeAttribute("aria-current");
@@ -216,7 +302,9 @@ async function main() {
       const b = arr[i + 1] ?? a;
       return (a + (b - a) * (f - i)) / scale;
     };
-    const sinceStage = stage && t >= stage[0] ? t - stage[0] : null;
+    // a stage on before the clip began counts as long since (the shades are already on)
+    const sinceStage = stage && t >= stage[0] ? t - stage[0] + (stage[0] <= 0 ? 60 : 0) : null;
+    const song = call.song ? songAt(call.song, t, at(cur.music, 255)) : null;
     const verdict = verdictAt(call.verdicts, t);
     const loop = cur.loops.find((l) => t >= l.start && t < l.end);
     const latest = [...cur.blunders].reverse().find((b) => t >= b.t);
@@ -235,6 +323,7 @@ async function main() {
       buffering,
       flinch: talkedOver ? t - talkedOver.t : null,
       hangup: cur.hangup !== undefined && t >= cur.hangup ? t - cur.hangup : null,
+      song,
     };
     scene.render(m);
     const a = scene.anchors();
@@ -242,12 +331,24 @@ async function main() {
     // the stage's banner as it starts, then its badge in the corner
     const banner = $("rc-banner");
     const badge = $("rc-mode");
-    if (stage) {
+    if (song) {
+      // the song: its banner, then karaoke mode in the corner
+      banner.textContent = `🎵 ${cur.demo.title.toUpperCase()}`;
+      badge.textContent = "🎤 KARAOKE MODE";
+      banner.className = "rc-banner song";
+      badge.className = "rc-mode song";
+      const s = song.since;
+      banner.style.setProperty("--s", String(s > 3.5 ? 0 : s > 3.1 ? (3.5 - s) / 0.4 : pop(s)));
+      badge.style.setProperty("--s", String(s < 3.3 ? 0 : pop(s - 3.3)));
+    } else if (stage) {
       const st = STAGE_BANNER[stage[1]]!;
+      banner.classList.remove("song");
+      badge.classList.remove("song");
       banner.textContent = st.banner;
       badge.textContent = st.badge;
       banner.classList.toggle("ok", st.ok);
       badge.classList.toggle("ok", st.ok);
+      // already on when the clip starts: no banner
       const s = sinceStage ?? -1;
       banner.style.setProperty("--s", String(s < 0 || s > 3.5 ? 0 : s > 3.1 ? (3.5 - s) / 0.4 : pop(s)));
       badge.style.setProperty("--s", String(s < 3.3 ? 0 : pop(s - 3.3)));
@@ -268,7 +369,7 @@ async function main() {
       let html = "";
       let scale = 0;
       let dumb = false;
-      const p = [...cur.pops].reverse().find((x) => x.speaker === s && t >= x.t && t < x.t + 2.6);
+      const p = [...(song ? cur.songPops : cur.pops)].reverse().find((x) => x.speaker === s && t >= x.t && t < x.t + 2.6);
       if (s === "caller" && cur.hangup !== undefined && t >= cur.hangup + 0.3) {
         html = `📵<small>*CLICK*</small>`;
         scale = pop(t - cur.hangup - 0.3);
@@ -297,7 +398,9 @@ async function main() {
     }
 
     const below = phone.matches && !cfg.render;
-    subs.show(call.lines, t, cur.demo.caller, below ? $("rc-caption") : $("rc-subs"), below ? 1 : 2);
+    const names = { caller: cur.demo.caller, agent: "SCAMSITTER BOT", both: "🎤 EVERYONE" };
+    const lines = call.song && t >= call.song.start ? call.song.lines : call.lines;
+    subs.show(lines, t, names, below ? $("rc-caption") : $("rc-subs"), below ? 1 : 2);
     const end = clamp01((t - cur.endAt) / 0.6);
     $("rc-end").style.setProperty("--o", String(end));
     // the end card has its own buttons
@@ -498,20 +601,23 @@ function pausesOf(lines: Line[]): [number, number][] {
   return out;
 }
 
-function popsOf(lines: Line[], scene: SceneKind): Pop[] {
+/** `rules`' emoji as the lines say them; a line everyone sings pops over both heads */
+function popsOf(lines: SongLine[], rules: [RegExp, string, string?][], sameGap: number): Pop[] {
   const out: Pop[] = [];
   const lastOf = new Map<string, number>();
   for (const l of lines) {
     for (const [i, [t]] of l.words.entries()) {
       // the word and the next, so two-word cues ("half eleven") match on their first word
       const text = l.words[i]![1] + (l.words[i + 1]?.[1] ?? "");
-      const hit = POPS[scene].find(([re]) => re.test(text) && re.test(text.slice(0, l.words[i]![1].length + 6)));
+      const hit = rules.find(([re]) => re.test(text) && re.test(text.slice(0, l.words[i]![1].length + 6)));
       if (!hit) continue;
-      const mine = out.filter((p) => p.speaker === l.speaker).at(-1);
-      // the same emoji at most once a minute, and one per speaker every few seconds
-      if ((mine && t - mine.t < 3) || t - (lastOf.get(hit[1]) ?? -Infinity) < 60) continue;
-      lastOf.set(hit[1], t);
-      out.push({ speaker: l.speaker, t, emoji: hit[1], label: hit[2] });
+      const key = `${hit[1]}${hit[2] ?? ""}`;
+      const speakers = l.speaker === "both" ? SPEAKERS : [l.speaker];
+      const mine = out.filter((p) => speakers.includes(p.speaker)).at(-1);
+      // the same emoji at most once every `sameGap` s (a minute in a call), one per speaker every few seconds
+      if ((mine && t - mine.t < 3) || t - (lastOf.get(key) ?? -Infinity) < sameGap) continue;
+      lastOf.set(key, t);
+      for (const speaker of speakers) out.push({ speaker, t, emoji: hit[1], label: hit[2] });
     }
   }
   return out;
@@ -526,7 +632,7 @@ class Subtitles {
     this.shown = "";
   }
 
-  show(lines: Line[], t: number, callerName: string, into: HTMLElement, max: number) {
+  show(lines: SongLine[], t: number, names: Record<SongLine["speaker"], string>, into: HTMLElement, max: number) {
     const pick = lines.filter((l) => l.start <= t && t < l.end + 1.5).slice(-max);
     const key = `${into.id}|${pick.map((l) => `${l.start}:${windowStart(l, t, max)}`).join("|")}`;
     if (key !== this.shown) {
@@ -540,7 +646,7 @@ class Subtitles {
         div.className = `rc-sub ${l.speaker}${i < pick.length - 1 ? " old" : ""}`;
         const who = document.createElement("span");
         who.className = "who";
-        who.textContent = l.speaker === "agent" ? "SCAMSITTER BOT" : callerName;
+        who.textContent = names[l.speaker];
         div.append(who);
         const from = windowStart(l, t, max);
         if (from > 0) div.append("… ");
@@ -560,7 +666,7 @@ class Subtitles {
 }
 
 /** long lines scroll: once past the first screenful, show from 8 words back, in steps */
-function windowStart(l: Line, t: number, max: number): number {
+function windowStart(l: SongLine, t: number, max: number): number {
   const keep = max === 1 ? 20 : 26;
   if (l.words.length <= keep) return 0;
   let i = 0;

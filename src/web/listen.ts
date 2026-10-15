@@ -10,7 +10,7 @@ import type { ClientAssets } from "./admin";
 //   GET listen/media/:file   <slug>.mp3 and <slug>.json from demos/calls
 //   GET assets/listen.js     the player
 
-export type DemoScene = "police" | "cryptobot" | "electrician";
+export type DemoScene = "areyouai" | "police" | "cryptobot" | "electrician";
 
 export interface Demo {
   slug: string;
@@ -24,6 +24,14 @@ export interface Demo {
 }
 
 export const DEMOS: Demo[] = [
+  {
+    // the clip, then a song made from it (the JSON's `song`): karaoke and a disco in the player
+    slug: "areyouai",
+    scene: "areyouai",
+    title: "Are you AI?",
+    caller: "“ESSEX POLICE”",
+    outcome: "The end of 8 minutes he lost.\nA real person, he can assure you.",
+  },
   {
     slug: "police-scam",
     scene: "police",
@@ -189,7 +197,7 @@ const homeCss = `
 .rc-h span{font-size:clamp(14px,1.6vw,18px);color:var(--dim)}
 .rc-wasted{margin:4px 0 0;font-size:14px;color:var(--dim)}
 .rc-wasted b{font-family:var(--disp);font-weight:400;font-size:20px;color:var(--amb);font-variant-numeric:tabular-nums}
-.rc-tabs{display:grid;grid-template-columns:repeat(3,1fr);margin-bottom:10px;box-shadow:inset 0 0 0 3px var(--line)}
+.rc-tabs{display:grid;grid-template-columns:repeat(4,1fr);margin-bottom:10px;box-shadow:inset 0 0 0 3px var(--line)}
 .rc-tab{display:flex;align-items:center;justify-content:center;min-height:48px;padding:6px 10px;text-align:center;font-family:var(--disp);font-size:clamp(17px,2.2vw,26px);line-height:1;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);text-decoration:none}
 .rc-tab+.rc-tab{box-shadow:inset 3px 0 0 var(--line)}
 .rc-tab:hover{color:var(--paper)}
@@ -207,6 +215,11 @@ const homeCss = `
 .rc-h,.rc-tabs{margin-left:16px;margin-right:16px}
 .rc-h{margin-top:6px;margin-bottom:8px}
 .rc-tab{min-height:44px;font-size:15px;padding:4px 6px}
+.rc-tabs{grid-template-columns:repeat(2,1fr)}
+.rc-tab:nth-child(n+3){box-shadow:inset 0 3px 0 var(--line)}
+.rc-tab:nth-child(even){box-shadow:inset 3px 0 0 var(--line)}
+.rc-tab:nth-child(even):nth-child(n+3){box-shadow:inset 3px 0 0 var(--line),inset 0 3px 0 var(--line)}
+.rc-tab[aria-current]{box-shadow:none}
 .rc-cta{margin:20px 16px 0}
 .rc-dial{margin:12px 16px 0}
 }
@@ -221,14 +234,16 @@ export const realCallsCss = `
 .rc-mode.ok{background:var(--grn);color:var(--grn-ink)}
 [data-scene="electrician"]{--rc-caller:var(--amb)}
 [data-scene="cryptobot"]{--rc-caller:#c58bff}
+[data-scene="areyouai"]{--rc-caller:#6ea8ff}
 .rc-pop{position:absolute;left:var(--x,0);top:var(--y,0);transform:translate(-50%,-100%) scale(var(--s,0));transform-origin:50% 100%;font-size:max(3.2cqw,16px);line-height:1;padding:.6cqw .9cqw;background:var(--paper);color:var(--ink);border:.25cqw solid #000;box-shadow:.3cqw .3cqw 0 #000;white-space:nowrap;pointer-events:none;font-family:var(--disp);text-align:center}
 .rc-pop small{font-size:.55em;display:block;letter-spacing:.04em}
 .rc-pop.dumb{background:var(--amb)}
 .rc-beep{position:absolute;left:var(--x,0);top:var(--y,0);transform:translate(-50%,-50%) rotate(-8deg) scale(var(--s,0));font-family:var(--disp);font-size:max(3cqw,15px);color:#000;background:var(--amb);padding:.2cqw 1cqw;border:.3cqw solid #000;box-shadow:.4cqw .4cqw 0 #000;pointer-events:none;letter-spacing:.08em}
 .rc-banner{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%) scale(var(--s,0));font-family:var(--disp);font-size:max(3cqw,15px);letter-spacing:.06em;padding:.4cqw 1.6cqw;background:var(--red);color:var(--paper);border:.3cqw solid #000;box-shadow:.5cqw .5cqw 0 #000;white-space:nowrap;pointer-events:none}
 .rc-banner.ok{background:var(--grn);color:var(--grn-ink)}
+.rc-banner.song,.rc-mode.song{background:#c23bd4;color:var(--paper)}
 .rc-subs{position:absolute;left:3cqw;right:3cqw;bottom:3cqw;display:flex;flex-direction:column;gap:.8cqw;pointer-events:none}
-.rc-sub{max-width:64%;padding:.8cqw 1.2cqw;font-size:max(1.85cqw,11px);line-height:1.3;background:#0e0d10ee;border:.2cqw solid var(--line);box-shadow:.3cqw .3cqw 0 #000}
+.rc-sub{max-width:64%;padding:.8cqw 1.2cqw;font-size:max(1.85cqw,11px);line-height:1.3;font-variant-ligatures:none;background:#0e0d10ee;border:.2cqw solid var(--line);box-shadow:.3cqw .3cqw 0 #000}
 .rc-sub i{font-style:normal;color:#6f6a76}
 .rc-sub i.on{color:var(--paper)}
 .rc-sub i.red{background:var(--amb);color:#000;padding:0 .2em}
@@ -236,6 +251,7 @@ export const realCallsCss = `
 .rc-sub .who{display:block;font-family:var(--disp);font-size:max(1.3cqw,10px);letter-spacing:.06em}
 .rc-sub.caller{align-self:flex-start;border-left:.6cqw solid var(--rc-caller,var(--red-hi))}.rc-sub.caller .who{color:var(--rc-caller,var(--red-hi))}
 .rc-sub.agent{align-self:flex-end;border-right:.6cqw solid var(--grn)}.rc-sub.agent .who{color:var(--grn);text-align:right}
+.rc-sub.both{align-self:center;text-align:center;border-left:.6cqw solid var(--amb);border-right:.6cqw solid var(--amb)}.rc-sub.both .who{color:var(--amb)}
 .rc-sub.old{border-color:var(--line)}.rc-sub.old i.on{color:#a8a1b0}
 .rc-end{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2cqw;background:#0e0d10d8;opacity:var(--o,0);pointer-events:none;text-align:center;padding:0 8cqw}
 .rc-end b{font-family:var(--disp);font-weight:400;font-size:max(4.4cqw,20px);line-height:1.05;text-shadow:.3cqw .3cqw 0 #000;white-space:pre-line}
@@ -259,5 +275,6 @@ export const realCallsCss = `
 .rc-caption .rc-sub{max-width:none;font-size:16px;padding:8px 12px;border-width:2px}
 .rc-caption .rc-sub .who{font-size:14px}
 .rc-caption .rc-sub.caller{border-left-width:5px}.rc-caption .rc-sub.agent{border-right-width:5px}
+.rc-caption .rc-sub.both{border-left-width:5px;border-right-width:5px}
 }
 `;
