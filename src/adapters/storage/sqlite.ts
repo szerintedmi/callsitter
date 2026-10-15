@@ -122,12 +122,12 @@ export class SqliteRepo implements Repo {
   }
 
   async addNotifySignup(s: NotifySignup) {
-    const { email: _, ...fresh } = s;
+    const { email: _, list: __, ...fresh } = s;
     // Signing up again refreshes the row and makes it pending again, even if mailed already.
     this.db
       .insert(schema.notifySignups)
       .values(s)
-      .onConflictDoUpdate({ target: schema.notifySignups.email, set: { ...fresh, notifiedAt: null } })
+      .onConflictDoUpdate({ target: [schema.notifySignups.email, schema.notifySignups.list], set: { ...fresh, notifiedAt: null } })
       .run();
   }
 }

@@ -265,7 +265,7 @@ function drawChips() {
   document.querySelectorAll<HTMLElement>("[data-chip]").forEach((c) => {
     c.innerHTML = `<small>P1</small>${esc(player || "???")}`;
     c.setAttribute("aria-label", `Player ${player || "not set"}. Change name`);
-    if (c.closest(".band")) c.hidden = !player;
+    if (c.closest(".band, .rc-top")) c.hidden = !player;
   });
 }
 
@@ -451,17 +451,6 @@ function drawClock() {
 
 $("end").addEventListener("click", () => call?.hangUp());
 
-// The screener's real number (public.yaml phone_number): a phone dials it; with a mouse, where a
-// tel: link rarely goes anywhere useful, a click copies it.
-document.getElementById("dial")?.addEventListener("click", (e) => {
-  if (!matchMedia("(pointer: fine)").matches || !navigator.clipboard) return;
-  e.preventDefault();
-  const number = (e.currentTarget as HTMLElement).textContent!;
-  navigator.clipboard.writeText(number).then(
-    () => toast(`${number} COPIED`),
-    () => {},
-  );
-});
 // Closing the tab or leaving the page hangs up too (the server would only notice later).
 addEventListener("pagehide", () => call?.hangUp());
 
