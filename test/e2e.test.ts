@@ -327,6 +327,9 @@ describe("steel thread (fake vendors)", () => {
   test("admin UI shows the call; it is not served on the hooks host", async () => {
     const list = await (await fetch(`${base()}/`)).text();
     expect(list).toContain("+447700900321");
+    expect(await (await fetch(`${base()}/?channel=phone&verdict=scam`)).text()).toContain("+447700900321");
+    expect(await (await fetch(`${base()}/?channel=public`)).text()).not.toContain("+447700900321");
+    expect(await (await fetch(`${base()}/?verdict=genuine`)).text()).not.toContain("+447700900321");
     const detail = await (await fetch(`${base()}/calls/${callId}`)).text();
     expect(detail).toContain("waste_time");
     expect(detail).toContain("Bank impersonation scam");

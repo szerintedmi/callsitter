@@ -5,7 +5,7 @@ import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { BoardEntry, Game } from "../../core/game";
-import type { CallRecord, NotifySignup, PlayRecord, Repo, StoredEvent } from "../../core/ports";
+import type { CallFilter, CallRecord, NotifySignup, PlayRecord, Repo, StoredEvent } from "../../core/ports";
 import type { Channel } from "../../core/limits";
 import type { CallEvent } from "../../core/types";
 import * as schema from "./schema";
@@ -46,8 +46,13 @@ export class SqliteRepo implements Repo {
     );
   }
 
-  async listCalls(limit: number) {
-    return this.db.select().from(schema.calls).orderBy(desc(schema.calls.startedAt)).limit(limit).all();
+  async listCalls(limit: number, filter: CallFilter = {}) {
+    const c = schema.calls;
+    const where = and(
+      filter.channel ? eq(c.channel, filter.channel) : undefined,
+      filter.verdict ? eq(c.verdict, filter.verdict) : undefined,
+    );
+    return this.db.select().from(c).where(where).orderBy(desc(c.startedAt)).limit(limit).all();
   }
 
   async listOpenCalls() {

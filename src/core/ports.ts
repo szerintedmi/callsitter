@@ -2,7 +2,7 @@ import type { AudioFormat } from "./audio";
 import type { AppConfig, GamesConfig, JevConfig, LiveAppend, LunaTool } from "./config";
 import type { BoardEntry, Game } from "./game";
 import type { Channel, LimitHit } from "./limits";
-import type { CallCosts, CallEvent, CallMeta, CallStatus, EndedBy, Classification, Speaker, Suggestion, TokenUsage, ToolCallRecord, TranscriptEntry } from "./types";
+import type { CallCosts, CallEvent, CallMeta, CallStatus, EndedBy, Classification, Speaker, Suggestion, TokenUsage, ToolCallRecord, TranscriptEntry, Verdict } from "./types";
 
 // Ports: everything core needs from the outside world. Adapters implement these.
 
@@ -223,6 +223,12 @@ export interface StoredEvent {
   event: CallEvent;
 }
 
+/** The admin call list's filters; a missing field matches every call. */
+export interface CallFilter {
+  channel?: Channel;
+  verdict?: Verdict;
+}
+
 export interface Repo {
   createCall(
     rec: Pick<CallRecord, "id" | "callControlId" | "from" | "to" | "divertedFrom" | "channel" | "startedAt"> & { callerIp?: string | null; declined?: LimitHit | null },
@@ -230,7 +236,8 @@ export interface Repo {
   updateCall(id: string, patch: Partial<Omit<CallRecord, "id">>): Promise<void>;
   getCall(id: string): Promise<CallRecord | null>;
   findByCallControlId(callControlId: string): Promise<CallRecord | null>;
-  listCalls(limit: number): Promise<CallRecord[]>;
+  /** newest first */
+  listCalls(limit: number, filter?: CallFilter): Promise<CallRecord[]>;
   /** calls not yet ended */
   listOpenCalls(): Promise<CallRecord[]>;
   /** calls on `channel` that started or ended at or after `since` */
