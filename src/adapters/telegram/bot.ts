@@ -2,8 +2,9 @@ import { logger } from "../../core/log";
 import { errMsg } from "../../core/orchestrator";
 import type { MessageLayout, OwnerButtonPress, OwnerChat, OwnerMessage } from "../../core/ports";
 
-// Telegram Bot API (https://core.telegram.org/bots/api): the bot talks to one chat, the owner's.
-// The owner has to start a chat with the bot first. Messages are plain text (no parse_mode), so
+// Telegram Bot API (https://core.telegram.org/bots/api): an instance talks to one chat (the
+// owner's, or the group for public-page calls); one bot can be in several chats, each with its own
+// instance on the same token. The owner has to start a chat with the bot first. Messages are plain text (no parse_mode), so
 // Luna's text and transcripts need no escaping. Incoming messages arrive by long polling
 // (getUpdates), which needs no public URL; it fails while a webhook is set, and only one poller
 // per bot works at a time, so dev and production need separate bots. Collapsed parts of a message
@@ -18,6 +19,14 @@ export interface TelegramOptions {
   /** the owner's chat with the bot (numeric id), or a channel's @username */
   chatId: string;
   fetch?: typeof fetch;
+}
+
+/** Where `listen` hands a chat's messages and button presses. */
+export interface ChatRoute {
+  /** numeric chat id, as in TelegramOptions.chatId */
+  chatId: string;
+  message: (m: OwnerMessage) => void | Promise<void>;
+  button: (b: OwnerButtonPress) => void | Promise<void>;
 }
 
 /** getUpdates long-poll timeout (s) */
@@ -118,13 +127,13 @@ export class TelegramBot implements OwnerChat {
   }
 
   /**
-   * Long-polls for messages and button presses in the owner's chat until `signal` aborts;
-   * anything from another chat is ignored. Failures are logged and retried with backoff.
+   * Long-polls for messages and button presses until `signal` aborts, handing each to the route
+   * for its chat; anything from another chat is ignored. One loop per token: Telegram answers a
+   * second poller with 409, so every chat the bot serves goes through one call. Failures are
+   * logged and retried with backoff.
    */
-  async listen(
-    on: { message: (m: OwnerMessage) => void | Promise<void>; button: (b: OwnerButtonPress) => void | Promise<void> },
-    signal: AbortSignal,
-  ): Promise<void> {
+  async listen(routes: ChatRoute[], signal: AbortSignal): Promise<void> {
+    const byChat = new Map(routes.map((r) => [r.chatId, r]));
     let offset: number | undefined;
     let retryMs = RETRY_MIN_MS;
     while (!signal.aborted) {
@@ -144,15 +153,17 @@ export class TelegramBot implements OwnerChat {
         try {
           const m = u.message;
           const q = u.callback_query;
-          if (m && String(m.chat.id) === this.o.chatId) {
-            await on.message({
+          const route = byChat.get(String((m ?? q?.message)?.chat.id));
+          if (!route) continue;
+          if (m) {
+            await route.message({
               messageId: m.message_id,
               date: m.date * 1000,
               ...(m.text !== undefined ? { text: m.text } : {}),
               ...(m.reply_to_message ? { replyTo: m.reply_to_message.message_id } : {}),
             });
-          } else if (q?.message && q.data !== undefined && String(q.message.chat.id) === this.o.chatId) {
-            await on.button({ pressId: q.id, messageId: q.message.message_id, data: q.data });
+          } else if (q?.message && q.data !== undefined) {
+            await route.button({ pressId: q.id, messageId: q.message.message_id, data: q.data });
           }
         } catch (err) {
           log.error("handling an update failed", { err });

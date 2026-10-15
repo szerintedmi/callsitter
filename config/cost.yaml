@@ -12,6 +12,4 @@ luna:
     priority: 2
     fast: 2
     flex: 0.5
-# Rough cost of one Luna call, for the public page's worst-case budget check only.
-luna_usd_per_call: 0.01
 jev_usd_per_mtok: 0.042   # input tokens; output is free

@@ -6,21 +6,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpenAiWebRtc } from "../src/adapters/openai-live/webrtc";
 import { FsBlobStore } from "../src/adapters/storage/fs-blob";
+import { notifySignups } from "../src/adapters/storage/schema";
 import { openSqlite, SqliteRepo } from "../src/adapters/storage/sqlite";
 import { TelnyxApi } from "../src/adapters/telnyx/api";
 import { TelnyxVerifier } from "../src/adapters/telnyx/signature";
 import { CallManager } from "../src/core/call-manager";
-import { ConfigStore, type AppConfig } from "../src/core/config";
+import { ConfigStore, type AppConfig, type ChannelLimits } from "../src/core/config";
 import { MemoryEventBus } from "../src/core/event-bus";
+import { CallGate } from "../src/core/limits";
 import { attachPersistence } from "../src/core/persist";
 import { createApp } from "../src/web/app";
-import { PublicGate, worstCaseUsd } from "../src/web/public";
 import { BrowserCalls, routeTelephony } from "../src/web/test-call";
 import { loadRepoConfig, scripted } from "./helpers";
 
 // The public page with a faked OpenAI: SDP offer → POST /v1/live/sessions → answer back to the
 // page, sideband attached, greeting once the page is connected, hangup closes the session.
-// PublicGate's limits turn calls away.
+// limits.yaml public turns calls away.
 
 const dataDir = mkdtempSync(join(tmpdir(), "scamsitter-public-"));
 /** POST /v1/live/sessions bodies */
@@ -44,9 +45,11 @@ const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => 
 const sidebands = new Map<string, { ws: ServerWebSocket<{ id: string }>; sent: any[] }>();
 let liveServer: ReturnType<typeof Bun.serve<{ id: string }>>;
 let server: ReturnType<typeof Bun.serve>;
+let db: ReturnType<typeof openSqlite>;
 let repo: SqliteRepo;
 let config: ConfigStore;
 let defaults: AppConfig["public"];
+let limitDefaults: ChannelLimits;
 let bus: MemoryEventBus;
 const base = () => `http://127.0.0.1:${server.port}`;
 
@@ -74,8 +77,10 @@ beforeAll(async () => {
   cfg.luna.summarize_on_hangup = false;
   cfg.public.greeting_wait_ms = 5000;
   defaults = { ...cfg.public };
+  limitDefaults = { ...cfg.limits.public };
   config = new ConfigStore(cfg);
-  repo = new SqliteRepo(openSqlite(":memory:"));
+  db = openSqlite(":memory:");
+  repo = new SqliteRepo(db);
   bus = new MemoryEventBus();
   attachPersistence(bus, repo);
   const telnyx = new TelnyxApi({ apiKey: "k", fetch: (async () => Response.json({ data: {} })) as unknown as typeof fetch });
@@ -108,7 +113,6 @@ beforeAll(async () => {
     publicPage: {
       host: "127.0.0.1",
       config: () => config.get(),
-      gate: new PublicGate({ repo, config: () => config.get(), clock: { now: () => Date.now() } }),
       webrtc: new OpenAiWebRtc({ apiKey: "sk-test", fetch: fakeFetch, baseURL: "https://openai.test/v1", liveUrl: `ws://127.0.0.1:${liveServer.port}` }),
       // Scam: the start once the caller says "police".
       // Get through: the message once they say they're late. Slow to judge once they say "slowly".
@@ -131,8 +135,11 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  config.set({ ...config.get(), public: { ...defaults } });
+  config.set({ ...config.get(), public: { ...defaults }, limits: { ...config.get().limits, public: { ...limitDefaults } } });
 });
+
+/** limits.yaml public, over its defaults */
+const limits = (l: Partial<ChannelLimits>) => config.set({ ...config.get(), limits: { ...config.get().limits, public: { ...limitDefaults, ...l } } });
 
 const until = async (cond: () => boolean | Promise<boolean>, ms = 3000) => {
   const end = Date.now() + ms;
@@ -142,6 +149,7 @@ const until = async (cond: () => boolean | Promise<boolean>, ms = 3000) => {
   }
 };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
 let ipSeq = 0;
 const GAME = { game: "scam", goal: "safe_account", player: "kev" };
 const call = (body: unknown = { sdp: "v=0 offer", ...GAME }, headers: Record<string, string> = {}) =>
@@ -363,7 +371,7 @@ describe("public page (fake OpenAI)", () => {
   test("scammer time wasted counts ended calls judged scam or spam, public ones too, and every scam me game", async () => {
     const before = ((await (await fetch(`${base()}/call/lobby`)).json()) as any).wasted.seconds;
     const add = async (id: string, from: string, verdict: string, secs: number) => {
-      await repo.createCall({ id, callControlId: id, from, to: "me", divertedFrom: null, startedAt: 1_000 });
+      await repo.createCall({ id, callControlId: id, from, to: "me", divertedFrom: null, channel: from === "public" ? "public" : "phone", startedAt: 1_000 });
       await repo.updateCall(id, { status: "ended", endedAt: 1_000 + secs * 1000, verdict });
     };
     await add("real-scam", "+447700900001", "scam", 90);
@@ -379,7 +387,7 @@ describe("public page (fake OpenAI)", () => {
   });
 
   test("turns calls away: busy, per IP, over budget, closed", async () => {
-    config.set({ ...config.get(), public: { ...defaults, max_concurrent: 1 } });
+    limits({ max_concurrent_calls: 1 });
     const first = (await (await call()).json()) as { callId: string };
     const busy = await call();
     expect(busy.status).toBe(503);
@@ -389,7 +397,7 @@ describe("public page (fake OpenAI)", () => {
     const again = (await (await call()).json()) as { callId: string };
     await hangUp(again.callId);
 
-    config.set({ ...config.get(), public: { ...defaults, per_ip_per_day: 1 } });
+    limits({ max_calls_per_caller_per_day: 1 });
     const ok = (await (await call(undefined, { "cf-connecting-ip": "10.9.9.9" })).json()) as { callId: string };
     await hangUp(ok.callId);
     const limited = await call(undefined, { "cf-connecting-ip": "10.9.9.9" });
@@ -399,18 +407,84 @@ describe("public page (fake OpenAI)", () => {
     expect(burst.map((r) => r.status).sort()).toEqual([200, 429, 429]);
     const [won] = await Promise.all(burst.map((r) => r.json() as Promise<{ callId?: string }>)).then((b) => b.filter((x) => x.callId));
     await hangUp(won!.callId!);
+    // Counted from the call list: a restart doesn't reset it.
+    const restarted = new CallGate({ repo, config: () => config.get(), clock: { now: () => Date.now() } });
+    expect(await restarted.admit({ callId: "after-restart", channel: "public", caller: "10.9.9.9" })).toBe("per_caller");
+    expect(await restarted.admit({ callId: "other-ip", channel: "public", caller: "10.9.9.7" })).toBeNull();
 
-    config.set({ ...config.get(), public: { ...defaults, daily_usd: worstCaseUsd(config.get()) / 2 } });
+    // 0 is a cap of 0, not "off".
+    limits({ max_spend_usd_per_day: 0 });
     expect(await (await call()).json()).toMatchObject({ error: "budget" });
+    expect(((await (await fetch(`${base()}/call/lobby`)).json()) as any).out).toBe("budget");
+    limits({});
 
     config.set({ ...config.get(), public: { ...defaults, enabled: false } });
     expect(await (await call()).json()).toMatchObject({ error: "closed" });
+    expect(((await (await fetch(`${base()}/call/lobby`)).json()) as any).out).toBe("closed");
   });
 
-  test("public calls are capped at public.max_call_seconds", async () => {
+  test("max_calls_per_day counts the day's public calls from the call list, so a restart doesn't reset it", async () => {
+    const today = (await repo.listCallsByChannel("public", Date.now() - DAY_MS)).filter((r) => r.startedAt >= Date.now() - DAY_MS).length;
+    limits({ max_calls_per_day: today + 1 });
+    expect(((await (await fetch(`${base()}/call/lobby`)).json()) as any).out).toBeNull();
+    const first = (await (await call()).json()) as { callId: string };
+    await hangUp(first.callId);
+    const refused = await call();
+    expect(refused.status).toBe(503);
+    expect(await refused.json()).toMatchObject({ error: "quota" });
+    const restarted = new CallGate({ repo, config: () => config.get(), clock: { now: () => Date.now() } });
+    expect(await restarted.admit({ callId: "after-restart", channel: "public", caller: "10.8.8.8" })).toBe("quota");
+    expect(await restarted.exhausted("public")).toBe("quota");
+    expect(((await (await fetch(`${base()}/call/lobby`)).json()) as any).out).toBe("quota");
+  });
+
+  test("notify me: stores the email once, with where it came from and what had run out; signing up again refreshes it", async () => {
+    limits({ max_calls_per_day: 0 });
+    const notify = (body: unknown, headers: Record<string, string> = {}) =>
+      fetch(`${base()}/call/notify`, {
+        method: "POST",
+        headers: { origin: base(), "content-type": "application/json", "cf-connecting-ip": "10.7.7.7", "user-agent": "phone", ...headers },
+        body: typeof body === "string" ? body : JSON.stringify(body),
+      });
+    const res = await notify({ email: "  Ann@Example.com " }, { "cf-ipcountry": "GB" });
+    expect(res.status).toBe(204);
+    expect(db.select().from(notifySignups).all()).toEqual([
+      expect.objectContaining({ email: "ann@example.com", ip: "10.7.7.7", country: "GB", userAgent: "phone", reason: "quota", notifiedAt: null }),
+    ]);
+    // Signed up already, and mailed since: the same answer, still one row, with the new details and pending again.
+    db.update(notifySignups).set({ notifiedAt: 1 }).run();
+    limits({});
+    expect((await notify({ email: "ann@example.com" }, { "cf-connecting-ip": "10.7.7.8", "user-agent": "laptop" })).status).toBe(204);
+    expect(db.select().from(notifySignups).all()).toEqual([
+      expect.objectContaining({ email: "ann@example.com", ip: "10.7.7.8", country: null, userAgent: "laptop", reason: null, notifiedAt: null }),
+    ]);
+
+    const bad = await notify({ email: "not an email" }, { "cf-connecting-ip": "10.7.7.6" });
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toMatchObject({ error: "email" });
+    expect((await notify({ email: "a@b.co" }, { origin: "https://evil.test", "cf-connecting-ip": "10.7.7.6" })).status).toBe(403);
+    expect((await notify(JSON.stringify({ email: `${"x".repeat(3000)}@b.co` }), { "cf-connecting-ip": "10.7.7.6" })).status).toBe(413);
+
+    limits({});
+    config.set({ ...config.get(), public: { ...defaults, notify_per_ip_per_day: 2 } });
+    expect((await notify({ email: "b@example.com" }, { "cf-connecting-ip": "10.7.7.5" })).status).toBe(204);
+    expect((await notify({ email: "c@example.com" }, { "cf-connecting-ip": "10.7.7.5" })).status).toBe(204);
+    expect((await notify({ email: "d@example.com" }, { "cf-connecting-ip": "10.7.7.5" })).status).toBe(429);
+    expect(db.select().from(notifySignups).all().map((r) => [r.email, r.reason])).toEqual([
+      ["ann@example.com", null],
+      ["b@example.com", null],
+      ["c@example.com", null],
+    ]);
+  });
+
+  test("public calls are capped at limits.yaml public.max_call_seconds", async () => {
     const cfg = config.get();
     // Below the schema's minimum, so the test runs quickly.
-    config.set({ ...cfg, public: { ...defaults, max_call_seconds: 0.2 }, flow: { ...cfg.flow, timing: { ...cfg.flow.timing, time_up: undefined } } });
+    config.set({
+      ...cfg,
+      limits: { ...cfg.limits, public: { ...limitDefaults, max_call_seconds: 0.2 } },
+      flow: { ...cfg.flow, timing: { ...cfg.flow.timing, time_up: undefined } },
+    });
     const { callId } = (await (await call()).json()) as { callId: string };
     await until(async () => (await repo.getCall(callId))?.status === "ended");
     expect((await repo.getCall(callId))?.endReason).toBe("max call length reached");

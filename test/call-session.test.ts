@@ -39,7 +39,7 @@ async function rig(
   });
   let handlers: VoiceSessionHandlers | null = null;
   const session = new CallSession({
-    meta: { callId: "c1", from: "+441", to: "+442", startedAt: now },
+    meta: { callId: "c1", from: "+441", to: "+442", channel: "phone", startedAt: now },
     callControlId: "cc1",
     config: () => config,
     voice: {
@@ -328,7 +328,7 @@ describe("call session: recorded greeting", () => {
     let opts: any;
     let connected!: () => void;
     const session = new CallSession({
-      meta: { callId: "c1", from: "+441", to: "+442", startedAt: 0 },
+      meta: { callId: "c1", from: "+441", to: "+442", channel: "phone", startedAt: 0 },
       callControlId: "cc1",
       config: () => config,
       voice: {
@@ -460,7 +460,7 @@ describe("call session lifecycle", () => {
     bus.subscribe((e) => void (e.type === "call.ended" && ended.push(e)));
     let signal: AbortSignal | undefined;
     const all: CallSessionDeps = {
-      meta: { callId: "c1", from: "+441", to: "+442", startedAt: Date.now() },
+      meta: { callId: "c1", from: "+441", to: "+442", channel: "phone", startedAt: Date.now() },
       callControlId: "cc1",
       config: () => config,
       voice: {

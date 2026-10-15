@@ -1,0 +1,22 @@
+# Call limits per channel (src/core/limits.ts). Leave a key out, or set it to null, to have no limit (0 is a cap of 0).
+#   phone   the real number (Telnyx media stream, or direct OpenAI SIP)
+#   test    admin test calls (WebSocket and browser SIP), behind Cloudflare Access
+#   public  the public game page: anyone with the link can call
+# Counted over a rolling 24 h from the call list (a restart doesn't reset them), plus calls being
+# set up. Declined calls don't count.
+#   max_spend_usd_per_day         new calls are refused once the last 24 h's ended calls add up to
+#                                 this (their stored cost); the call that crosses it runs to its end
+#   max_calls_per_day             calls over the last 24 h, live ones included
+#   max_concurrent_calls          calls at once
+#   max_calls_per_caller_per_day  per caller: the number (phone; withheld numbers aren't counted)
+#                                 or the client IP (public, CF-Connecting-IP)
+#   max_call_seconds              caps call-flow.yaml timing.max_call_seconds lower
+phone:
+  max_spend_usd_per_day: 20      # past it, calls are declined as busy (the owner gets a Telegram line)
+public:
+  max_spend_usd_per_day: 10
+  max_calls_per_day: 100         # past it (or the spend), the page offers "notify me"
+  max_concurrent_calls: 3
+  max_calls_per_caller_per_day: 20
+  max_call_seconds: 600
+test: {}                         # the owner, authenticated: a cap would only lock them out of testing

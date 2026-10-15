@@ -1,9 +1,11 @@
 # Telegram to the owner (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env; nothing here applies
-# without them). Every call gets one status message, sent as the call comes in (so it notifies)
-# and edited in place as the call goes on (edits don't notify): verdict, stage, Luna's rolling
-# summary, the caller's open questions and suggested replies (luna.yaml progress), your steering,
-# and the transcript, newest first and collapsed to its first lines (tap to expand). Once the call
-# ends, Luna's summary replaces the rolling one and the call's cost is added.
+# without them). With TELEGRAM_PUBLIC_CHAT_ID, public-page calls go to that chat (a group, same
+# bot) instead, with `public` below; phone and test calls stay in TELEGRAM_CHAT_ID. Every call
+# gets one status message, sent as the call comes in (so it notifies) and edited in place as the
+# call goes on (edits don't notify): verdict, stage, Luna's rolling summary, the caller's open
+# questions and suggested replies (luna.yaml progress), your steering, and the transcript, newest
+# first and collapsed to its first lines (tap to expand). Once the call ends, Luna's summary
+# replaces the rolling one and the call's cost is added.
 status:
   enabled: true
   # Telegram allows about one message per second in a chat, edits included.
@@ -19,7 +21,8 @@ status:
     luna: true
 
 # Your messages steer the call: reply to a call's status message, or send a message while a call
-# is live (it goes to the newest one). Needs a numeric TELEGRAM_CHAT_ID; only that chat is heard.
+# is live (it goes to the newest one in that chat). Needs a numeric chat id; only TELEGRAM_CHAT_ID
+# and TELEGRAM_PUBLIC_CHAT_ID are heard, each steering its own calls.
 steering:
   enabled: true
   # Your messages older than this are ignored (sent while the server was down).
@@ -63,3 +66,10 @@ steering:
   suggestions:
     enabled: true
     as: commentary
+
+# Public-page calls, when TELEGRAM_PUBLIC_CHAT_ID is set (a group): Telegram allows ~20
+# messages a minute in a group, and game callers fake urgency. These replace
+# status.min_edit_interval_ms and status.urgent_alert.enabled there.
+public:
+  min_edit_interval_ms: 10000
+  urgent_alert: false

@@ -12,7 +12,7 @@ describe("orchestrator", () => {
     const sent: Steer[] = [];
     let runs = 0;
     const orch = new Orchestrator({
-      meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+      meta: { callId: "c", from: "+441", to: "+442", channel: "phone", startedAt: 0 },
       config: () => config,
       classifier: scripted({}),
       agent: { run: async () => (runs++, { toolCalls: [] }), summarize: async () => ({ text: "" }) },
@@ -32,7 +32,7 @@ describe("orchestrator", () => {
     config.flow.rules.find((r) => r.stage === "waste_time")!.then!.when_live_asks_for_help = help.text;
     const sent: Steer[] = [];
     const orch = new Orchestrator({
-      meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+      meta: { callId: "c", from: "+441", to: "+442", channel: "phone", startedAt: 0 },
       config: () => config,
       classifier: scripted({}),
       agent: { run: async () => ({ toolCalls: [] }), summarize: async () => ({ text: "" }) },
@@ -52,7 +52,7 @@ describe("orchestrator", () => {
     const bus = new MemoryEventBus();
     bus.subscribe((e) => void (e.type === "stage" && stages.push(e.stage)));
     const orch = new Orchestrator({
-      meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+      meta: { callId: "c", from: "+441", to: "+442", channel: "phone", startedAt: 0 },
       config: () => config,
       classifier: scripted({}),
       agent: {
@@ -87,7 +87,7 @@ describe("orchestrator", () => {
       let release: (() => void) | null = null;
       let calls = 0;
       const orch = new Orchestrator({
-        meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+        meta: { callId: "c", from: "+441", to: "+442", channel: "phone", startedAt: 0 },
         config: () => config,
         classifier: {
           async classify() {
@@ -166,7 +166,7 @@ describe("orchestrator", () => {
     const attempts: number[] = [];
     let failures = 3;
     const orch = new Orchestrator({
-      meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+      meta: { callId: "c", from: "+441", to: "+442", channel: "phone", startedAt: 0 },
       config: () => config,
       classifier: {
         async classify() {
@@ -202,7 +202,7 @@ describe("orchestrator", () => {
       async () => ({ toolCalls: [], responseId: "resp_3" }),
     ];
     const orch = new Orchestrator({
-      meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+      meta: { callId: "c", from: "+441", to: "+442", channel: "phone", startedAt: 0 },
       config: () => config,
       classifier: scripted({}),
       agent: { run: async (input) => (seen.push(input.previousResponseId), results.shift()!()), summarize: async () => ({ text: "" }) },
@@ -228,7 +228,7 @@ describe("orchestrator", () => {
       const releases: (() => void)[] = [];
       const seen: number[] = [];
       const orch = new Orchestrator({
-        meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+        meta: { callId: "c", from: "+441", to: "+442", channel: "phone", startedAt: 0 },
         config: () => config,
         classifier: scripted({ verdict: "genuine", confidence: 0.3 }),
         agent: {
@@ -343,7 +343,7 @@ describe("orchestrator", () => {
         if (e.type === "luna" && e.dropped) notes.push(`Luna's guidance dropped: ${e.dropped}`);
       });
       const orch = new Orchestrator({
-        meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+        meta: { callId: "c", from: "+441", to: "+442", channel: "phone", startedAt: 0 },
         config: () => config,
         classifier: scripted(...jev),
         agent: {
@@ -439,7 +439,7 @@ describe("progress summaries for the owner (luna.yaml progress)", () => {
       if (e.type === "classification") ownerUpdates.push(e.ownerUpdate);
     });
     const orch = new Orchestrator({
-      meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+      meta: { callId: "c", from: "+441", to: "+442", channel: "phone", startedAt: 0 },
       config: () => config,
       classifier: {
         async classify(input) {
@@ -604,7 +604,7 @@ describe("call costs", () => {
     const bus = new MemoryEventBus();
     bus.subscribe((e) => void (e.type === "luna" && lunaEvents.push(e.usage)));
     const orch = new Orchestrator({
-      meta: { callId: "c", from: "+441", to: "+442", startedAt: 0 },
+      meta: { callId: "c", from: "+441", to: "+442", channel: "phone", startedAt: 0 },
       config: () => config,
       classifier: scripted({}),
       agent: {

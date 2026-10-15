@@ -14,16 +14,17 @@ import { TelnyxApi } from "../adapters/telnyx/api";
 import { TelnyxVerifier } from "../adapters/telnyx/signature";
 import { CallManager } from "../core/call-manager";
 import { GreetingCache } from "../core/greeting";
-import { ConfigStore, loadConfig } from "../core/config";
+import { ConfigStore, loadConfig, publicChatConfig, type AppConfig } from "../core/config";
 import { MemoryEventBus } from "../core/event-bus";
 import { logger } from "../core/log";
 import { OwnerDesk } from "../core/owner-desk";
+import type { OwnerButtonPress, OwnerMessage } from "../core/ports";
+import type { CallMeta } from "../core/types";
 import { attachPersistence } from "../core/persist";
 import { createApp } from "../web/app";
 import { controlRoutes } from "../web/control";
 import { LogBuffer } from "../web/debug-log";
 import { BrowserSipCalls } from "../web/openai-sip";
-import { PublicGate } from "../web/public";
 import { BrowserCalls, routeTelephony, type BrowserSipDeps } from "../web/test-call";
 import { clientAssets } from "./client-assets";
 import { demoMedia } from "./demo-media";
@@ -64,35 +65,47 @@ pruneLogs();
 setInterval(pruneLogs, 24 * 60 * 60 * 1000);
 
 // Telegram to the owner (env.ts checks both are set, or neither); otherwise there are no status
-// messages or steering, and Luna isn't offered the tool.
+// messages or steering, and Luna isn't offered the tool. With TELEGRAM_PUBLIC_CHAT_ID, the same
+// bot also talks to a second chat, for public-page calls; otherwise they go to the main one.
 const telegram =
   env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID
     ? new TelegramBot({ botToken: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID })
     : undefined;
+const publicTelegram =
+  env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_PUBLIC_CHAT_ID
+    ? new TelegramBot({ botToken: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_PUBLIC_CHAT_ID })
+    : undefined;
 if (!telegram) log.warn("Telegram to owner disabled (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID not set)");
 else if (!telegram.canListen) log.warn("Telegram steering off: TELEGRAM_CHAT_ID is a channel, which can't message the bot");
+if (publicTelegram && !publicTelegram.canListen) {
+  log.warn("Telegram steering off for public calls: TELEGRAM_PUBLIC_CHAT_ID is a channel, which can't message the bot");
+}
 const callLink = env.ADMIN_HOST ? (id: string) => `https://${env.ADMIN_HOST}/calls/${encodeURIComponent(id)}` : undefined;
 
 const repo = new SqliteRepo(openSqlite(join(env.DATA_DIR, "scamsitter.db")));
 const blobs = new FsBlobStore(env.DATA_DIR);
 const bus = new MemoryEventBus();
 const persistence = attachPersistence(bus, repo);
-// Status messages and steering (telegram.yaml). `manager` is only read once a message arrives.
-const desk = telegram
-  ? new OwnerDesk({
-      bus,
-      chat: telegram,
-      config: () => config.get(),
-      clock: { now: () => Date.now() },
-      callLink,
-      canSteer: telegram.canListen,
-      steer: (callId, text, as) => manager.get(callId)?.steerFromOwner(text, as) ?? { ok: false, reason: "the call isn't connected yet" },
-      enterStage: (callId, stage, label) =>
-        manager.get(callId)?.stageFromOwner(stage, label) ?? { ok: false, reason: "the call isn't connected yet" },
-      hangUp: (callId) => manager.get(callId)?.hangUpFromOwner() ?? { ok: false, reason: "the call isn't connected yet" },
-      extend: (callId, minutes) => manager.get(callId)?.extendFromOwner(minutes) ?? { ok: false, reason: "the call isn't connected yet" },
-    })
-  : undefined;
+// Status messages and steering (telegram.yaml), one desk per chat. `manager` is only read once a
+// message arrives.
+const isPublic = (m: CallMeta) => m.channel === "public";
+const deskFor = (chat: TelegramBot, cfg: () => AppConfig, accepts?: (m: CallMeta) => boolean) =>
+  new OwnerDesk({
+    bus,
+    chat,
+    config: cfg,
+    clock: { now: () => Date.now() },
+    callLink,
+    canSteer: chat.canListen,
+    ...(accepts ? { accepts } : {}),
+    steer: (callId, text, as) => manager.get(callId)?.steerFromOwner(text, as) ?? { ok: false, reason: "the call isn't connected yet" },
+    enterStage: (callId, stage, label) =>
+      manager.get(callId)?.stageFromOwner(stage, label) ?? { ok: false, reason: "the call isn't connected yet" },
+    hangUp: (callId) => manager.get(callId)?.hangUpFromOwner() ?? { ok: false, reason: "the call isn't connected yet" },
+    extend: (callId, minutes) => manager.get(callId)?.extendFromOwner(minutes) ?? { ok: false, reason: "the call isn't connected yet" },
+  });
+const mainDesk = telegram ? deskFor(telegram, () => config.get(), publicTelegram ? (m) => !isPublic(m) : undefined) : undefined;
+const publicDesk = telegram && publicTelegram ? deskFor(publicTelegram, () => publicChatConfig(config.get()), isPublic) : undefined;
 
 const telnyx = new TelnyxApi({ apiKey: env.TELNYX_API_KEY });
 
@@ -129,7 +142,7 @@ const manager = new CallManager({
   classifier: new JevClassifier({ apiKey: env.TYPESAFE_API_KEY }),
   agent: new LunaAgent({ apiKey: env.OPENAI_API_KEY, config: () => config.get().luna }),
   bus,
-  ownerStatus: desk ? () => desk.showsStatus : undefined,
+  ownerStatus: mainDesk ? () => mainDesk.showsStatus : undefined,
   telephony: routeTelephony(telnyx, browserCalls, sip),
   clock: { now: () => Date.now() },
   repo,
@@ -155,7 +168,6 @@ const app = createApp({
   publicPage: {
     host: publicHostOf(env),
     config: () => config.get(),
-    gate: new PublicGate({ repo, config: () => config.get(), clock: { now: () => Date.now() } }),
     webrtc: new OpenAiWebRtc({ apiKey: env.OPENAI_API_KEY }),
     referee: new JevReferee({ apiKey: env.TYPESAFE_API_KEY }),
     demoMedia,
@@ -168,7 +180,11 @@ await manager.reapOrphans(0, "server restarted");
 setInterval(() => void manager.reapOrphans(60_000, "no media connected within 60 s").catch((err) => logger("calls").error("reaping orphans failed", { err })), 30_000);
 
 const listening = new AbortController();
-if (telegram?.canListen && desk) void telegram.listen({ message: (m) => desk.onMessage(m), button: (b) => desk.onButton(b) }, listening.signal);
+// One poll loop for the token, handing each chat's updates to its desk.
+const route = (chatId: string | undefined, chat: TelegramBot | undefined, d: OwnerDesk | undefined) =>
+  chatId && chat?.canListen && d ? [{ chatId, message: (m: OwnerMessage) => d.onMessage(m), button: (b: OwnerButtonPress) => d.onButton(b) }] : [];
+const routes = [...route(env.TELEGRAM_CHAT_ID, telegram, mainDesk), ...route(env.TELEGRAM_PUBLIC_CHAT_ID, publicTelegram, publicDesk)];
+if (telegram && routes.length) void telegram.listen(routes, listening.signal);
 
 const server = Bun.serve({ port: env.PORT, hostname: env.BIND_HOST, fetch: app.fetch, websocket });
 // Always loopback, whatever BIND_HOST is: in the container only `docker compose exec` reaches it.
@@ -187,7 +203,7 @@ const shutdown = async (sig: string) => {
   // Hangs up live calls and waits for Luna, summaries and recordings, then for them to be stored.
   await manager.stopAll("server shutting down");
   listening.abort();
-  await desk?.flush();
+  await Promise.all([mainDesk?.flush(), publicDesk?.flush()]);
   await persistence.flush();
   server.stop();
   control.stop();

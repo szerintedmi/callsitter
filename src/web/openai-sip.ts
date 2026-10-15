@@ -125,20 +125,30 @@ export function openAiSipRoutes(d: SipRoutesDeps) {
       await d.sip.reject(sessionId, 486);
       return;
     }
+    // Claimed first, so a test call isn't counted (or declined) as a phone call.
     const callId = crypto.randomUUID();
     const test = d.browserSip.claim(sipHeader(headers, TEST_HEADER), callId);
+    const channel = test ? "test" : "phone";
     // Logged until the header mapping is confirmed on real calls (From/To/Diversion from Telnyx).
     log.info(`incoming call (${headers.length} SIP headers, media ${mediaSecurity ?? "unknown"})`, { callId, sipSession: sessionId });
     // Telnyx sends national numbers over SIP; calls are stored with E.164 ones, as over call control.
     const cc = d.config.get().connection.country_code;
     const e164 = (n: string | undefined) => n && toE164(n, cc);
-    await d.manager.registerIncoming({
+    const from = e164(sipUser(sipHeader(headers, "From"))) ?? "";
+    const call = {
       callId,
       callControlId: ccid,
-      from: test ? "browser (SIP)" : (e164(sipUser(sipHeader(headers, "From"))) ?? ""),
+      from: test ? "browser (SIP)" : from,
       to: test ? "test call" : (sipUser(sipHeader(headers, "To")) ?? ""),
       divertedFrom: test ? undefined : e164(divertedFrom(headers)),
-    });
+    };
+    const hit = await d.manager.registerIncoming({ ...call, channel, caller: test ? undefined : from });
+    if (hit) {
+      // Over a limit (limits.yaml): 486 Busy Here. Only the accept (attachMedia) starts a Live session.
+      await d.sip.reject(sessionId, 486);
+      if (!test) await d.manager.declineIncoming({ ...call, channel, declined: hit, reason: await d.manager.declineReason(channel, hit) });
+      return;
+    }
     await d.manager.sipHeaders(callId, "openai", headers, { mediaSecurity });
     const record = sc.record;
     // OpenAI answers before the browser's WebRTC leg can play audio: hold the greeting until

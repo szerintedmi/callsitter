@@ -48,7 +48,7 @@ defaults:
     max_hold_ms: 8000
 
 timing:
-  # Hang up after this long, whatever the rules say (public calls: public.yaml caps it lower).
+  # Hang up after this long, whatever the rules say (a channel can cap it lower: limits.yaml).
   max_call_seconds: 1200
   # When seconds_left remain, the call enters the time_up stage and Live is told to say
   # goodbye. At max_call_seconds it ends once the goodbye has played (at most

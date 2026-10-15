@@ -63,7 +63,7 @@ export async function replay(opts: {
   });
   const appended: TellLive[] = [];
   const orch = new Orchestrator({
-    meta: { callId: "replay", from: "+440000000000", to: "+440000000001", startedAt },
+    meta: { callId: "replay", from: "+440000000000", to: "+440000000001", channel: "phone", startedAt },
     config: () => opts.config,
     classifier: opts.classifier,
     agent: opts.agent ?? stubAgent,

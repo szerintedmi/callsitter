@@ -276,6 +276,29 @@ describe("OpenAI SIP (fake OpenAI)", () => {
     expect(manager.accepting).toBe(true);
   });
 
+  test("over the phone's daily spend → rejected with 486 and a declined call stored; browser SIP tests still start", async () => {
+    const phone = config.get().limits.phone;
+    const max = phone.max_spend_usd_per_day;
+    phone.max_spend_usd_per_day = 0;
+    try {
+      await webhook("live_budget", headers);
+      await until(() => rest.some((r) => r.path === "/v1/live/sessions/live_budget/reject"));
+      expect(rest.find((r) => r.path === "/v1/live/sessions/live_budget/reject")!.body).toEqual({ status_code: 486 });
+      expect(rest.some((r) => r.path === "/v1/live/sessions/live_budget/accept")).toBe(false);
+      await until(async () => (await repo.findByCallControlId("sip:live_budget"))?.status === "ended");
+      expect(await repo.findByCallControlId("sip:live_budget")).toMatchObject({ channel: "phone", declined: "budget", from: "+447700900321" });
+
+      const nonce = browserSip.create(true);
+      await webhook("live_budget_test", [...headers, { name: TEST_HEADER, value: nonce }]);
+      await until(() => sidebands.has("live_budget_test"));
+      expect(await repo.findByCallControlId("sip:live_budget_test")).toMatchObject({ channel: "test", declined: null });
+      send("live_budget_test", { type: "session.closed" });
+      await until(async () => (await repo.findByCallControlId("sip:live_budget_test"))?.status === "ended");
+    } finally {
+      phone.max_spend_usd_per_day = max;
+    }
+  });
+
   test("browser SIP test: token + nonce from the UI, webhook with the nonce header → labelled dry-run test call", async () => {
     const res = await fetch(`${base()}/test-call/sip`, {
       method: "POST",

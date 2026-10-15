@@ -87,11 +87,10 @@ describe("demo media", () => {
 describe("public page with the real calls", async () => {
   const config = await loadRepoConfig();
   const page = publicRoutes({
-    manager: { bus: { subscribe: () => () => {} } } as unknown as PublicDeps["manager"],
+    manager: { bus: { subscribe: () => () => {} }, gate: { exhausted: async () => null } } as unknown as PublicDeps["manager"],
     repo: { scores: async () => [], junkCallSeconds: async () => 0 } as unknown as PublicDeps["repo"],
     referee: {} as PublicDeps["referee"],
     config: () => config,
-    gate: {} as PublicDeps["gate"],
     webrtc: {} as PublicDeps["webrtc"],
     clientAssets: async () => undefined,
     realCalls: true,

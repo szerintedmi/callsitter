@@ -6,7 +6,7 @@ describe("Jev adapter", () => {
   test("builds one systemOne request with every jev.yaml question", async () => {
     const cfg = await loadRepoConfig();
     const req = buildRequest({
-      meta: { callId: "c", from: "+441234", to: "+445678", startedAt: 0 },
+      meta: { callId: "c", from: "+441234", to: "+445678", channel: "phone", startedAt: 0 },
       transcript: [
         { seq: 1, speaker: "agent", text: "Hello?", at: 0, final: true },
         { seq: 2, speaker: "caller", text: "This is your bank.", at: 1000, final: false },
@@ -32,7 +32,7 @@ describe("Jev adapter", () => {
       { seq: 2, speaker: "agent" as const, text: "Hi Sarah.", at: 1000, final: true },
       { seq: 3, speaker: "caller" as const, text: "Is he free Tuesday?", at: 2000, final: true },
     ];
-    const meta = { callId: "c", from: "+441", to: "+442", startedAt: 0 };
+    const meta = { callId: "c", from: "+441", to: "+442", channel: "phone" as const, startedAt: 0 };
     const req = buildRequest({ meta, transcript, config: cfg.jev, ownerUpdatedThrough: 2 });
     expect(req.state.transcript).toBe(`caller: It's Sarah.\nagent: Hi Sarah.\n${cfg.jev.owner_update_marker}\ncaller: Is he free Tuesday?`);
     expect(buildRequest({ meta, transcript, config: cfg.jev, ownerUpdatedThrough: 3 }).state.transcript.endsWith(cfg.jev.owner_update_marker)).toBe(true);
