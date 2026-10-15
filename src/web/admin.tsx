@@ -3,7 +3,9 @@ import { raw } from "hono/html";
 import type { UpgradeWebSocket } from "hono/ws";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { describeCosts, describeLunaTokens } from "../core/cost";
-import type { BlobStore, CallRecord, EventBus, Repo } from "../core/ports";
+import { CHANNELS, type Channel } from "../core/limits";
+import type { BlobStore, CallFilter, CallRecord, EventBus, Repo } from "../core/ports";
+import type { Verdict as VerdictName } from "../core/types";
 import type { LogBuffer } from "./debug-log";
 
 /** The call list's cost tooltip: by vendor, with Luna's tokens; calls from before only have the estimate. */
@@ -93,6 +95,8 @@ table.sip{font:12px/1.4 ui-monospace,monospace}table.sip th{white-space:nowrap;c
 .bar{display:inline-block;width:44px;height:6px;background:var(--line);border-radius:3px;vertical-align:middle;overflow:hidden}
 .bar i{display:block;height:100%;background:var(--muted)}.bar.scam i{background:var(--scam)}.bar.spam i{background:var(--spam)}.bar.genuine i{background:var(--genuine)}
 .tag.live{color:var(--genuine);border-color:var(--genuine)}
+.filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 8px}.filters>span{width:64px;font-size:13px}.filters a{text-decoration:none}.filters a.on{background:var(--card);border-color:currentColor;font-weight:600}
+.tag.ch-public{color:var(--agent)}
 .ended{max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tag.by-live,.tag.by-system{color:var(--spam)}
 .ev.has-tip .g{cursor:help}
 .tip{position:fixed;z-index:10;display:none;max-width:min(520px,calc(100vw - 16px));max-height:70vh;overflow:hidden;padding:8px 10px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.3);font-size:12px;line-height:1.45;pointer-events:none;overflow-wrap:anywhere}
@@ -128,6 +132,34 @@ const Ended: FC<{ r: CallRecord }> = ({ r }) => (
     {r.endedBy && <span class={`tag by-${r.endedBy}`}>{r.endedBy}</span>} {r.endReason ?? ""}
   </>
 );
+const VERDICTS: readonly VerdictName[] = ["scam", "spam", "genuine", "unclear"];
+
+/** The call list's filters from its query string; unknown values are ignored. */
+function parseFilter(q: Record<string, string>): CallFilter {
+  const pick = <T extends string>(v: string | undefined, all: readonly T[]) => all.find((x) => x === v);
+  return { channel: pick(q.channel, CHANNELS), verdict: pick(q.verdict, VERDICTS) };
+}
+
+function filterHref(f: CallFilter): string {
+  const q = new URLSearchParams();
+  if (f.channel) q.set("channel", f.channel);
+  if (f.verdict) q.set("verdict", f.verdict);
+  const s = q.toString();
+  return s ? `/?${s}` : "/";
+}
+
+/** One row of filter links: "all", then each value; the current one is marked. */
+const FilterRow: FC<{ label: string; f: CallFilter; k: keyof CallFilter; values: readonly string[] }> = ({ label, f, k, values }) => (
+  <div class="filters">
+    <span class="muted">{label}</span>
+    {[undefined, ...values].map((v) => (
+      <a href={filterHref({ ...f, [k]: v })} class={`tag ${v ?? ""} ${f[k] === v ? "on" : ""}`}>
+        {v ?? "all"}
+      </a>
+    ))}
+  </div>
+);
+
 const Verdict: FC<{ v: string | null }> = ({ v }) => (v ? <span class={`tag ${v}`}>{v}</span> : <span class="muted">–</span>);
 
 /** JSON for embedding in <script type="application/json">. */
@@ -206,18 +238,22 @@ export function adminRoutes(d: AdminDeps) {
   const app = new Hono();
 
   app.get("/", async (c) => {
-    const calls = await d.repo.listCalls(200);
+    const f = parseFilter(c.req.query());
+    const calls = await d.repo.listCalls(200, f);
     return c.html(
       <Layout title="ScamSitter">
         <nav>
           <h1>Calls</h1>
           <a href="/test-call">Test call from this computer →</a>
         </nav>
+        <FilterRow label="Channel" f={f} k="channel" values={CHANNELS} />
+        <FilterRow label="Verdict" f={f} k="verdict" values={VERDICTS} />
         <div class="wrap">
           <table>
             <thead>
               <tr>
                 <th>Started</th>
+                <th>Channel</th>
                 <th>From</th>
                 <th>Verdict</th>
                 <th>Stage</th>
@@ -232,6 +268,9 @@ export function adminRoutes(d: AdminDeps) {
                 <tr>
                   <td>
                     <a href={`/calls/${r.id}`}>{fmtTime(r.startedAt)}</a>
+                  </td>
+                  <td>
+                    <span class={`tag ch-${r.channel}`}>{r.channel}</span>
                   </td>
                   <td>
                     {r.from || "unknown"}
@@ -252,7 +291,7 @@ export function adminRoutes(d: AdminDeps) {
               ))}
             </tbody>
           </table>
-          {calls.length === 0 && <p class="muted">No calls yet.</p>}
+          {calls.length === 0 && <p class="muted">{f.channel || f.verdict ? "No calls match." : "No calls yet."}</p>}
         </div>
         <script src={`/assets/calls.js?v=${BUILD}`} />
       </Layout>,
