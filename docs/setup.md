@@ -1,0 +1,49 @@
+# Setup
+
+What a dev machine (or a fresh production) needs besides `.env` (`.env.example` lists every key). Production itself: [deploy.md](deploy.md).
+
+## Telnyx
+
+Real calls reach gpt-live-1 over OpenAI SIP ([below](#openai-sip)). The Call Control application is still needed: the browser SIP test sends its webhooks there, and it's the fallback media-stream path (Telnyx answers, the app relays the audio to Live).
+
+- Create a Call Control application with webhook URL `https://hooks.<domain>/telnyx/webhook` and assign the number to it.
+- Copy the webhook public key into `TELNYX_PUBLIC_KEY`.
+
+## Telegram
+
+Optional: without it there are no status messages, rolling summaries or steering.
+
+- Create a bot with [@BotFather](https://t.me/BotFather) and put its token in `TELEGRAM_BOT_TOKEN`.
+- Message the bot from the owner's account, then read `message.chat.id` from `https://api.telegram.org/bot<token>/getUpdates` into `TELEGRAM_CHAT_ID` (a bot can't message someone who hasn't started a chat with it). Only that chat is heard.
+- The app long-polls `getUpdates`, so no public URL is needed. Only one process can poll a bot, so dev needs its own bot.
+- Optional: public-page calls can go to a group with `TELEGRAM_PUBLIC_CHAT_ID` (blank: everything goes to `TELEGRAM_CHAT_ID`). Add the bot to the group, send a message there, and read the negative chat id from `getUpdates`; if Telegram upgrades it to a supergroup, the id changes to `-100…`. The group gets fewer edits and no urgent alerts (`telegram.yaml → public`), since a group allows about 20 messages a minute.
+- In a group, replies to the bot and its buttons work as they are. For a plain message to steer the newest public call (or a bare `/hangup`), turn privacy mode off (@BotFather → `/setprivacy` → Disable, then re-add the bot) or make the bot an admin.
+- `/help` to the bot explains steering.
+
+## Cloudflare tunnel
+
+Copy [deploy/cloudflared.example.yml](../deploy/cloudflared.example.yml) to `deploy/cloudflared.yml` (gitignored) and run `bun run tunnel`.
+
+- `hooks.<domain>` is public, but only the webhook, media and public-page paths are routed.
+- `admin.<domain>` serves the admin UI behind Cloudflare Access. The app verifies the Access JWT itself (`ADMIN_AUTH=access`, with `ADMIN_HOST`, `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`), so a direct `127.0.0.1` request gets 403. It has its own hostname so it never shares a browser origin with the public page.
+- Offline dev: `ADMIN_AUTH=none` serves the admin UI on loopback only (Host and Origin still checked).
+
+## Divert the mobile
+
+Divert your mobile to the Telnyx number (a phone setting).
+
+## OpenAI SIP
+
+gpt-live-1 answers the SIP leg itself ([voice-sip](https://developers.openai.com/api/docs/guides/voice-sip?api=live)). Telnyx sends the call to `sip:<project>@sip.api.openai.com;transport=tls`, OpenAI posts a signed `live.transport.incoming` webhook to `/openai/webhook`, and the app accepts the call with the `live.yaml` prompt and voice, then attaches a **sideband** WebSocket (`/v1/live/sessions/{id}/attach`). The rest is the normal call session:
+
+- Steering goes out over the sideband as `session.instructions.append`, `session.thinking.append` or `session.commentary.append`.
+- Audio doesn't pass through the app. The sideband reflects both directions (mono PCM16 24 kHz), recorded as a stereo WAV: caller left, agent right (`connection.yaml → sip.record`).
+- Hangups go to `POST /v1/live/sessions/{id}/hangup`. When Live closes the session itself (`remote_hangup`, `connection_lost`), the call just ends: a hangup for a closed session stalls for over 5 s.
+- Live keeps running through silence on its own; the silence watchdog listens to the reflected caller audio. Each call's log has the speech segments the watchdog heard and any gaps in that audio (`src/core/speech-trace.ts`).
+
+To set it up:
+
+1. `bun scripts/setup-sip.ts` (`--dry-run` first) creates the OpenAI webhook, a Telnyx credential connection that parks calls and sends webhooks to `/telnyx/webhook`, and a telephony credential for the browser test. It writes `OPENAI_PROJECT_ID`, `OPENAI_WEBHOOK_SECRET`, `TELNYX_SIP_CONNECTION_ID` and `TELNYX_SIP_CREDENTIAL_ID` to `.env`; restart the server (`--watch` doesn't reload `.env`).
+2. For real calls, `bun scripts/direct-sip.ts on` (`status`, `off`, `--dry-run`), following [Telnyx's GPT-Live guide](https://developers.telnyx.com/docs/voice/sip-trunking/gpt-live-configuration-guide): an FQDN connection to `sip.api.openai.com:5061` with TLS, SRTP mandatory, G.711, media anchored in London; the number on it with "Translated Number" set to the project ID and Telnyx's dual-channel recording on; the OpenAI webhook pointed at `PUBLIC_WS_BASE`'s host (`PUBLIC_WS_BASE=wss://<production host> bun scripts/direct-sip.ts on` points it at production).
+
+   This takes the number off the Call Control app. `off` restores what `on` saved in `DATA_DIR/direct-sip-restore.json`.
