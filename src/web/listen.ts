@@ -139,9 +139,9 @@ export const head = (title: string, description: string, css: string) => `<!doct
  * `player`: the game page's player chip, first on the right (topCss; public.ts moves it on a phone).
  */
 export const top = (base: string, wastedSeconds: number, o: { botLink: boolean; player?: string }) =>
-  `<header class="rc-top"><a class="rc-brand" href="${base}">SCAMSITTER</a><p class="rc-wasted">Scammer time wasted: <b id="wasted">${hms(wastedSeconds)}</b></p><div class="rc-right">${
+  `<header class="rc-top"><a class="rc-brand" href="${base}">CALLSITTER</a><p class="rc-wasted">Scammer time wasted: <b id="wasted">${hms(wastedSeconds)}</b></p><div class="rc-right">${
     o.player ?? ""
-  }${o.botLink ? `<a class="rc-own" href="${base}bot">GET YOUR OWN BOT</a>` : ""}<a class="rc-gh" href="https://github.com/szerintedmi/scamsitter" aria-label="ScamSitter on GitHub">${github}</a></div></header>`;
+  }${o.botLink ? `<a class="rc-own" href="${base}bot">GET YOUR OWN BOT</a>` : ""}<a class="rc-gh" href="https://github.com/szerintedmi/callsitter" aria-label="CallSitter on GitHub">${github}</a></div></header>`;
 
 /** The public pages' last line: the terms and the privacy notice (legal.ts; topCss). */
 export const legal = (base: string) =>
@@ -156,7 +156,7 @@ export function realCallsPage(
   const tabs = DEMOS.map(
     (x) => `<a class="rc-tab s-${x.scene}" href="${base}listen/${x.slug}" data-slug="${x.slug}" data-notrack>${esc(x.title)}</a>`,
   ).join("");
-  return `${head("ScamSitter", "Real calls to my phone, answered by ScamSitter, the bot that wastes scammers' time.", rootCss + topCss + homeCss + realCallsCss)}
+  return `${head("CallSitter", "Real calls to my phone, answered by CallSitter, the bot that wastes scammers' time.", rootCss + topCss + homeCss + realCallsCss)}
 <body${o.analytics ? ` data-analytics="1"` : ""}>
 <div class="rc-col">
 ${top(base, o.wastedSeconds, { botLink: true })}
@@ -191,7 +191,7 @@ const pixelIcon = (rows: string[]) =>
 
 /** "Get your own bot": not open yet, a waitlist (POST call/waitlist). Its few lines of script are inline. */
 export function botPage(base: string, o: { wastedSeconds: number }): string {
-  return `${head("Get your own bot · ScamSitter", "Get ScamSitter on your own phone: forward your calls to your own bot, get them on Telegram. Join the waitlist.", rootCss + topCss + homeCss + botCss)}
+  return `${head("Get your own bot · CallSitter", "Get CallSitter on your own phone: forward your calls to your own bot, get them on Telegram. Join the waitlist.", rootCss + topCss + homeCss + botCss)}
 <body>
 <div class="rc-col">
 ${top(base, o.wastedSeconds, { botLink: false })}
@@ -251,7 +251,7 @@ ${legal(base)}
 }
 
 function renderPage(base: string, demo: Demo, poster: boolean) {
-  const config: PlayerConfig = { demos: DEMOS, selected: demo.slug, autoplay: false, render: true, poster, base, site: "scamsitter.geekmango.com" };
+  const config: PlayerConfig = { demos: DEMOS, selected: demo.slug, autoplay: false, render: true, poster, base, site: "callsitter.org" };
   return `<!doctype html>
 <html lang="en">
 <head>

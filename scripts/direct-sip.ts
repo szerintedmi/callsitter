@@ -21,7 +21,7 @@ const DRY = process.argv.includes("--dry-run");
 const flag = (name: string) => (process.argv.includes(name) ? process.argv[process.argv.indexOf(name) + 1] : undefined);
 const numberArg = flag("--number");
 const region = (flag("--region") ?? "global") as keyof typeof SIP_HOSTS;
-const CONNECTION_NAME = "scamsitter-openai-sip";
+const CONNECTION_NAME = "callsitter-openai-sip";
 const OPENAI_SIP = { fqdn: SIP_HOSTS[region], port: 5061 };
 const TELNYX = "https://api.telnyx.com/v2";
 if (!["status", "on", "off"].includes(cmd ?? "") || !(region in SIP_HOSTS)) {

@@ -400,7 +400,7 @@ async function main() {
     }
 
     const below = phone.matches && !cfg.render;
-    const names = { caller: cur.demo.caller, agent: "SCAMSITTER BOT", both: "🎤 EVERYONE" };
+    const names = { caller: cur.demo.caller, agent: "CALLSITTER BOT", both: "🎤 EVERYONE" };
     const lines = call.song && t >= call.song.start ? call.song.lines : call.lines;
     subs.show(lines, t, names, below ? $("rc-caption") : $("rc-subs"), below ? 1 : 2);
     const end = clamp01((t - cur.endAt) / 0.6);

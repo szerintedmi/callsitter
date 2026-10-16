@@ -1,5 +1,5 @@
 // The 3D half of the real-call player (listen.ts): two rooms joined by a phone cable, the caller
-// on the left and the ScamSitter bot on the right, built from boxes (voxels, to match the arcade
+// on the left and the CallSitter bot on the right, built from boxes (voxels, to match the arcade
 // page). Every frame is a function of the call time alone (no state carried between frames), so
 // the video recorder can render any frame in any order.
 import * as THREE from "three";
@@ -201,7 +201,7 @@ const hash = (n: number) => {
   return s - Math.floor(s);
 };
 
-// ---------- the ScamSitter bot ----------
+// ---------- the CallSitter bot ----------
 
 interface Bot {
   root: THREE.Group;

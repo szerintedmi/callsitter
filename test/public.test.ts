@@ -23,7 +23,7 @@ import { loadRepoConfig, scripted } from "./helpers";
 // page, sideband attached, greeting once the page is connected, hangup closes the session.
 // limits.yaml public turns calls away.
 
-const dataDir = mkdtempSync(join(tmpdir(), "scamsitter-public-"));
+const dataDir = mkdtempSync(join(tmpdir(), "callsitter-public-"));
 /** POST /v1/live/sessions bodies */
 const created: any[] = [];
 /** session ids hung up with POST /v1/live/sessions/:id/hangup */
@@ -488,7 +488,7 @@ describe("public page (fake OpenAI)", () => {
     expect(html).toContain('<form class="wl" id="wl" method="post"');
     expect(html).toContain('id="wl-ok" disabled');
     expect(html).toContain('<a class="rc-brand" href="/"');
-    expect(html).not.toContain("ScamSitter answers your phone");
+    expect(html).not.toContain("CallSitter answers your phone");
     expect(html).not.toContain("tel:");
   });
 

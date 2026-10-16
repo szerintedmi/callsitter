@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Prepares a fresh OVH VPS (Debian 13) for ScamSitter; safe to re-run (docs/deploy.md). Copy this
+# Prepares a fresh OVH VPS (Debian 13) for CallSitter; safe to re-run (docs/deploy.md). Copy this
 # directory to the VPS and run it as root from there:
 #
 #   sudo ./bootstrap.sh                      Docker, cloudflared, deploy user, dirs, backups, hardening
 #   sudo ./bootstrap.sh lock-ssh --confirm   after SSH through the tunnel works: sshd on loopback only
 #   sudo ./bootstrap.sh unlock-ssh           undo lock-ssh (from the OVH KVM console if the tunnel is down)
 #
-# Settings: /etc/scamsitter/deploy.conf (created from deploy.conf.example on the first run).
+# Settings: /etc/callsitter/deploy.conf (created from deploy.conf.example on the first run).
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-CONF=/etc/scamsitter/deploy.conf
+CONF=/etc/callsitter/deploy.conf
 APP_UID=1000 # the image's `bun` user
-LISTEN_CONF=/etc/ssh/sshd_config.d/20-scamsitter-listen.conf
+LISTEN_CONF=/etc/ssh/sshd_config.d/20-callsitter-listen.conf
 
 log() { printf '\n==> %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
@@ -58,7 +58,7 @@ esac
 [[ ${VERSION_CODENAME:-} == trixie ]] || warn "written for Debian 13 (trixie); this is ${PRETTY_NAME:-unknown}"
 
 log "settings ($CONF)"
-install -d -m 0700 /etc/scamsitter
+install -d -m 0700 /etc/callsitter
 if [[ ! -f $CONF ]]; then
   install -m 0600 "$HERE/deploy.conf.example" "$CONF"
   die "created $CONF: fill in DEPLOY_PUBKEY (and TUNNEL_ID once the tunnel exists), then re-run"
@@ -102,14 +102,14 @@ systemctl enable --now qemu-guest-agent 2>/dev/null || warn "qemu-guest-agent no
 # - Only kernel errors go to the console (routine Docker bridge/veth messages stay in the journal).
 install -d -m 0755 /etc/systemd/system-generators
 ln -sfn /dev/null /etc/systemd/system-generators/systemd-ssh-generator
-echo 'kernel.printk = 3 4 1 3' >/etc/sysctl.d/90-scamsitter-console.conf
-sysctl -q -p /etc/sysctl.d/90-scamsitter-console.conf
+echo 'kernel.printk = 3 4 1 3' >/etc/sysctl.d/90-callsitter-console.conf
+sysctl -q -p /etc/sysctl.d/90-callsitter-console.conf
 # systemd-resolved answers LLMNR (port 5355) on all interfaces by default; nothing here needs it.
 if systemctl is-active --quiet systemd-resolved; then
   install -d -m 0755 /etc/systemd/resolved.conf.d
   tmp=$(mktemp)
   printf '[Resolve]\nLLMNR=no\nMulticastDNS=no\n' >"$tmp"
-  if put "$tmp" /etc/systemd/resolved.conf.d/10-scamsitter.conf 0644; then systemctl restart systemd-resolved; fi
+  if put "$tmp" /etc/systemd/resolved.conf.d/10-callsitter.conf 0644; then systemctl restart systemd-resolved; fi
   rm -f "$tmp"
 fi
 
@@ -125,14 +125,14 @@ fi
 systemctl enable --now docker
 
 log "directories"
-install -d -m 0755 /opt/scamsitter
-install -d -m 0700 /opt/scamsitter/compose.d
-install -d -m 0750 -o "$APP_UID" -g "$APP_UID" /var/lib/scamsitter /var/lib/scamsitter/backups
-if [[ ! -f /etc/scamsitter/scamsitter.env ]]; then
-  install -m 0600 "$HERE/scamsitter.env.example" /etc/scamsitter/scamsitter.env
-  warn "created /etc/scamsitter/scamsitter.env from the example: fill it in before the first deploy"
+install -d -m 0755 /opt/callsitter
+install -d -m 0700 /opt/callsitter/compose.d
+install -d -m 0750 -o "$APP_UID" -g "$APP_UID" /var/lib/callsitter /var/lib/callsitter/backups
+if [[ ! -f /etc/callsitter/callsitter.env ]]; then
+  install -m 0600 "$HERE/callsitter.env.example" /etc/callsitter/callsitter.env
+  warn "created /etc/callsitter/callsitter.env from the example: fill it in before the first deploy"
 fi
-chmod 0600 /etc/scamsitter/scamsitter.env "$CONF"
+chmod 0600 /etc/callsitter/callsitter.env "$CONF"
 
 log "deploy user and commands"
 if ! id deploy >/dev/null 2>&1; then
@@ -140,15 +140,15 @@ if ! id deploy >/dev/null 2>&1; then
 fi
 install -d -m 0700 -o deploy -g deploy /home/deploy/.ssh
 tmp=$(mktemp)
-printf 'restrict,command="/usr/local/bin/scamsitter-deploy-ssh" %s\n' "$DEPLOY_PUBKEY" >"$tmp"
+printf 'restrict,command="/usr/local/bin/callsitter-deploy-ssh" %s\n' "$DEPLOY_PUBKEY" >"$tmp"
 put "$tmp" /home/deploy/.ssh/authorized_keys 0600 deploy:deploy || true
 rm -f "$tmp"
-put "$HERE/scamsitter-deploy" /usr/local/bin/scamsitter-deploy 0755 || true
-put "$HERE/scamsitter-deploy-ssh" /usr/local/bin/scamsitter-deploy-ssh 0755 || true
+put "$HERE/callsitter-deploy" /usr/local/bin/callsitter-deploy 0755 || true
+put "$HERE/callsitter-deploy-ssh" /usr/local/bin/callsitter-deploy-ssh 0755 || true
 tmp=$(mktemp)
-echo 'deploy ALL=(root) NOPASSWD: /usr/local/bin/scamsitter-deploy' >"$tmp"
+echo 'deploy ALL=(root) NOPASSWD: /usr/local/bin/callsitter-deploy' >"$tmp"
 visudo -cqf "$tmp" || die "sudoers rule failed validation"
-put "$tmp" /etc/sudoers.d/scamsitter-deploy 0440 || true
+put "$tmp" /etc/sudoers.d/callsitter-deploy 0440 || true
 rm -f "$tmp"
 
 log "sshd hardening"
@@ -156,8 +156,8 @@ admin=${SUDO_USER:-}
 admin_keys=$(getent passwd "${admin:-root}" | cut -d: -f6)/.ssh/authorized_keys
 if [[ -s $admin_keys ]]; then
   tmp=$(mktemp)
-  printf '# ScamSitter bootstrap: keys only.\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n' >"$tmp"
-  if put "$tmp" /etc/ssh/sshd_config.d/10-scamsitter.conf 0644; then sshd -t && systemctl reload ssh; fi
+  printf '# CallSitter bootstrap: keys only.\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n' >"$tmp"
+  if put "$tmp" /etc/ssh/sshd_config.d/10-callsitter.conf 0644; then sshd -t && systemctl reload ssh; fi
   rm -f "$tmp"
 else
   warn "no SSH key in $admin_keys: password login left as it is (add a key, then re-run)"
@@ -186,10 +186,10 @@ else
 fi
 
 log "nightly backup timer"
-put "$HERE/scamsitter-backup.service" /etc/systemd/system/scamsitter-backup.service 0644 || true
-put "$HERE/scamsitter-backup.timer" /etc/systemd/system/scamsitter-backup.timer 0644 || true
+put "$HERE/callsitter-backup.service" /etc/systemd/system/callsitter-backup.service 0644 || true
+put "$HERE/callsitter-backup.timer" /etc/systemd/system/callsitter-backup.timer 0644 || true
 systemctl daemon-reload
-systemctl enable --now scamsitter-backup.timer
+systemctl enable --now callsitter-backup.timer
 
 log "done"
 echo "Listening TCP sockets (only sshd should be public; the app is on 127.0.0.1:8787):"

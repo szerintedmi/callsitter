@@ -3,7 +3,7 @@
 // the GitHub repository. Every statement here follows what the code does; change them together.
 import { head, legal, rootCss, top, topCss } from "./listen";
 
-const REPO = "https://github.com/szerintedmi/scamsitter";
+const REPO = "https://github.com/szerintedmi/callsitter";
 const UPDATED = "16 October 2026";
 
 const css = `
@@ -18,7 +18,7 @@ const css = `
 `;
 
 const page = (base: string, title: string, description: string, wastedSeconds: number, body: string) =>
-  `${head(`${title} · ScamSitter`, description, rootCss + topCss + css)}
+  `${head(`${title} · CallSitter`, description, rootCss + topCss + css)}
 <body>
 <div class="rc-col">
 ${top(base, wastedSeconds, { botLink: false })}
@@ -36,9 +36,9 @@ export const termsPage = (base: string, o: { wastedSeconds: number }) =>
   page(
     base,
     "Terms",
-    "The terms of use of ScamSitter, a hobby project.",
+    "The terms of use of CallSitter, a hobby project.",
     o.wastedSeconds,
-    `<p>ScamSitter is a hobby project run by one person. By using this site you agree to these terms. If you don't, please don't use it.</p>
+    `<p>CallSitter is a hobby project run by one person. By using this site you agree to these terms. If you don't, please don't use it.</p>
 <h2>WHAT THIS IS</h2>
 <p>The site plays recordings of real calls answered by a bot, and lets you call the bot from your browser as a game. It is provided as is, for fun, with no warranty of any kind, and it may change, break or go away at any time.</p>
 <h2>CALLING THE BOT</h2>
@@ -60,9 +60,9 @@ export const privacyPage = (base: string, o: { wastedSeconds: number }) =>
   page(
     base,
     "Privacy",
-    "What ScamSitter keeps about its visitors and why.",
+    "What CallSitter keeps about its visitors and why.",
     o.wastedSeconds,
-    `<p>ScamSitter is a hobby project run by one person. This is what the site keeps about you, and why.</p>
+    `<p>CallSitter is a hobby project run by one person. This is what the site keeps about you, and why.</p>
 <h2>CALLS TO THE BOT</h2>
 <p>When you call the bot from your browser, the call is recorded and transcribed, and kept with the player name you typed, the time, the outcome of the game and your IP address (used to limit calls). The audio is processed live by OpenAI and the transcript by other AI vendors to run the bot. I may listen to calls to improve it. Calls are kept for as long as the project runs; I won't publish them with anything that identifies you.</p>
 <h2>VISITS</h2>

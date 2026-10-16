@@ -1,7 +1,7 @@
 # Runs before the OVH automated backup (schedule that for 03:00 UTC or later), so the VPS backup
 # holds a clean SQLite copy as well as the live database files.
 [Unit]
-Description=ScamSitter nightly SQLite backup
+Description=CallSitter nightly SQLite backup
 
 [Timer]
 OnCalendar=*-*-* 02:30:00 UTC

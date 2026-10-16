@@ -76,7 +76,7 @@ describe("fromConsole", () => {
 describe("LogFiles", () => {
   let dir: string;
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
-  const make = () => new LogFiles((dir = mkdtempSync(join(tmpdir(), "scamsitter-logs-"))));
+  const make = () => new LogFiles((dir = mkdtempSync(join(tmpdir(), "callsitter-logs-"))));
   const lines = (name: string) =>
     readFileSync(join(dir, name), "utf8")
       .trim()

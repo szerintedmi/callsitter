@@ -1,7 +1,7 @@
 # Installed to /etc/systemd/system by bootstrap.sh. Updates come from Cloudflare's apt repo, by hand
 # (docs/deploy.md → Maintenance): a restart drops live calls' media streams and SSH sessions.
 [Unit]
-Description=Cloudflare Tunnel (ScamSitter)
+Description=Cloudflare Tunnel (CallSitter)
 After=network-online.target
 Wants=network-online.target
 

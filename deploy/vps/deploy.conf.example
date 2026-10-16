@@ -1,7 +1,7 @@
-# /etc/scamsitter/deploy.conf: read by bootstrap.sh and scamsitter-deploy (shell syntax).
+# /etc/callsitter/deploy.conf: read by bootstrap.sh and callsitter-deploy (shell syntax).
 
 # Image the deploy key may deploy (the GitHub Actions workflow pushes it by digest).
-IMAGE_REPO=ghcr.io/szerintedmi/scamsitter
+IMAGE_REPO=ghcr.io/szerintedmi/callsitter
 GHCR_USER=szerintedmi
 
 # Public key of the GitHub Actions deploy key (private half: DEPLOY_SSH_KEY secret).
