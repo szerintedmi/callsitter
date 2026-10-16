@@ -180,11 +180,10 @@ describe("public page (fake OpenAI)", () => {
     expect((await fetch(`${base()}/calls`)).status).toBe(404);
   });
 
-  test("shows the screener's real number as a call link, when public.yaml has one", async () => {
-    config.set({ ...config.get(), public: { ...defaults, phone_number: "+44 20 4620 6827" } });
-    expect(await (await fetch(`${base()}/`)).text()).toContain('<a href="tel:+442046206827" id="dial" draggable="false">+44 20 4620 6827</a>');
-    config.set({ ...config.get(), public: { ...defaults, phone_number: "" } });
-    expect(await (await fetch(`${base()}/`)).text()).not.toContain('href="tel:');
+  test("shows no phone number", async () => {
+    const html = await (await fetch(`${base()}/`)).text();
+    expect(html).not.toContain("tel:");
+    expect(html).not.toContain('id="dial"');
   });
 
   test("only this page may start or end calls", async () => {
@@ -462,6 +461,7 @@ describe("public page (fake OpenAI)", () => {
     const bad = await notify({ email: "not an email" }, { "cf-connecting-ip": "10.7.7.6" });
     expect(bad.status).toBe(400);
     expect(await bad.json()).toMatchObject({ error: "email" });
+    for (const body of ["null", "1", '"a@b.co"']) expect((await notify(body, { "cf-connecting-ip": "10.7.7.6" })).status).toBe(400);
     expect((await notify({ email: "a@b.co" }, { origin: "https://evil.test", "cf-connecting-ip": "10.7.7.6" })).status).toBe(403);
     expect((await notify(JSON.stringify({ email: `${"x".repeat(3000)}@b.co` }), { "cf-connecting-ip": "10.7.7.6" })).status).toBe(413);
 
@@ -475,6 +475,60 @@ describe("public page (fake OpenAI)", () => {
       ["b@example.com", null],
       ["c@example.com", null],
     ]);
+  });
+
+  test("the bot page: a waitlist form that posts to call/waitlist, under the page's own path", async () => {
+    const res = await fetch(`${base()}/bot`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("GET YOUR OWN BOT");
+    expect(html).toContain('id="wl-in" type="email"');
+    expect(html).toContain('"/call/waitlist"');
+    // without the script the form can't submit: a GET would put the email in the URL
+    expect(html).toContain('<form class="wl" id="wl" method="post"');
+    expect(html).toContain('id="wl-ok" disabled');
+    expect(html).toContain('<a class="rc-brand" href="/"');
+    expect(html).not.toContain("ScamSitter answers your phone");
+    expect(html).not.toContain("tel:");
+  });
+
+  test("waitlist: stores the email once on its own list, refreshes it on a repeat, and the same email can be on both lists", async () => {
+    db.delete(notifySignups).run();
+    config.set({ ...config.get(), public: { ...defaults } });
+    const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
+      fetch(`${base()}/call/${path}`, {
+        method: "POST",
+        headers: { origin: base(), "content-type": "application/json", "cf-connecting-ip": "10.6.6.6", "user-agent": "phone", ...headers },
+        body: JSON.stringify(body),
+      });
+    expect((await post("waitlist", { email: " Bo@Example.com" }, { "cf-ipcountry": "HU" })).status).toBe(204);
+    expect(db.select().from(notifySignups).all()).toEqual([
+      expect.objectContaining({ email: "bo@example.com", list: "waitlist", ip: "10.6.6.6", country: "HU", userAgent: "phone", reason: null, notifiedAt: null }),
+    ]);
+    db.update(notifySignups).set({ notifiedAt: 1 }).run();
+    expect((await post("waitlist", { email: "bo@example.com" }, { "cf-connecting-ip": "10.6.6.7", "user-agent": "laptop" })).status).toBe(204);
+    expect(db.select().from(notifySignups).all()).toEqual([
+      expect.objectContaining({ email: "bo@example.com", list: "waitlist", ip: "10.6.6.7", country: null, userAgent: "laptop", notifiedAt: null }),
+    ]);
+    // the same email on the "notify me" list too: a row of its own
+    expect((await post("notify", { email: "bo@example.com" })).status).toBe(204);
+    expect(db.select().from(notifySignups).all().map((r) => [r.email, r.list])).toEqual([
+      ["bo@example.com", "waitlist"],
+      ["bo@example.com", "notify"],
+    ]);
+
+    const bad = await post("waitlist", { email: "nope" }, { "cf-connecting-ip": "10.6.6.5" });
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toMatchObject({ error: "email" });
+    expect((await post("waitlist", { email: "a@b.co" }, { origin: "https://evil.test" })).status).toBe(403);
+
+    config.set({ ...config.get(), public: { ...defaults, notify_per_ip_per_day: 1 } });
+    expect((await post("waitlist", { email: "c@example.com" }, { "cf-connecting-ip": "10.6.6.4" })).status).toBe(204);
+    const limited = await post("waitlist", { email: "d@example.com" }, { "cf-connecting-ip": "10.6.6.4" });
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toMatchObject({ error: "limit" });
+    expect(db.select().from(notifySignups).all().filter((r) => r.list === "waitlist").map((r) => r.email)).toEqual(["bo@example.com", "c@example.com"]);
+    config.set({ ...config.get(), public: { ...defaults } });
   });
 
   test("public calls are capped at limits.yaml public.max_call_seconds", async () => {

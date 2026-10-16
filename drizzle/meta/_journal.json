@@ -54,8 +54,15 @@
     {
       "idx": 7,
       "version": "6",
-      "when": 1792114661433,
-      "tag": "0007_page_events",
+      "when": 1792083231152,
+      "tag": "0007_signup_lists",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1792115144851,
+      "tag": "0008_page_events",
       "breakpoints": true
     }
   ]

@@ -19,21 +19,24 @@ const app = listenRoutes({
 const get = (path: string, init?: RequestInit) => app.request(`http://x${path}`, init);
 
 describe("listen routes", () => {
-  test("the home page: a tab per recording, the player, the game's link", () => {
-    const html = realCallsPage("/", { selected: "electrician", autoplay: true, wastedSeconds: 3725, phone: "+44 20 4620 6827" });
+  test("the home page: a tab per recording, the player, the bot to try and the bot page's links", () => {
+    const html = realCallsPage("/", { selected: "electrician", autoplay: true, wastedSeconds: 3725 });
     for (const d of DEMOS) expect(html).toContain(`href="/listen/${d.slug}"`);
     expect(html).toContain('"selected":"electrician"');
     expect(html).toContain('"autoplay":true');
     expect(html).toContain(">1:02:05</b>");
-    expect(html).toContain('href="/play"');
-    expect(html).toContain('href="tel:+442046206827"');
+    expect(html).toContain("REAL CALLS.");
+    expect(html).toMatch(/<a class="rc-cta" href="\/play">PLAY THE BOT <i>▶<\/i><\/a><span>Call from your browser<\/span>/);
+    expect(html).toContain('href="/bot"');
+    expect(html).not.toContain("tel:");
+    expect(html).not.toContain("4620 6827");
     expect(html).toContain('href="https://github.com/szerintedmi/scamsitter"');
   });
 
   test("the song demo comes first, of four tabs", () => {
     expect(DEMOS.map((d) => d.slug)).toEqual(["areyouai", "police-scam", "crypto-bot", "electrician"]);
     expect(DEMOS[0]!.scene).toBe("areyouai");
-    const html = realCallsPage("/", { selected: "areyouai", autoplay: false, wastedSeconds: 0, phone: "" });
+    const html = realCallsPage("/", { selected: "areyouai", autoplay: false, wastedSeconds: 0 });
     expect(html.match(/class="rc-tab /g)).toHaveLength(4);
     expect(html).toContain("grid-template-columns:repeat(4,1fr)");
   });
@@ -111,11 +114,30 @@ describe("public page with the real calls", async () => {
 
   test("the home page is the recordings, on the first, waiting for a tap; the games are at /play", async () => {
     const html = await (await page.request("http://x/")).text();
-    expect(html).toContain("REAL CALL RECORDINGS");
+    expect(html).toContain("REAL CALLS.");
     expect(config_(html)).toMatchObject({ selected: DEMOS[0]!.slug, autoplay: false, base: "/" });
     const games = await (await page.request("http://x/play")).text();
     expect(games).toContain(">SCAM ME<");
-    expect(games).toContain('<a class="pbrand" href="/"');
+  });
+
+  test("/play has the home page's top bar, with the player's chip, and no phone number", async () => {
+    const games = await (await page.request("http://x/play")).text();
+    expect(games).toContain('<header class="rc-top"><a class="rc-brand" href="/">SCAMSITTER</a>');
+    expect(games).toContain('<b id="wasted">0:00:00</b>');
+    expect(games).toContain('<a class="rc-own" href="/bot">GET YOUR OWN BOT</a>');
+    expect(games).toMatch(/<div class="rc-right"><button class="chip" type="button" data-chip hidden><\/button><a class="rc-own"/);
+    expect(games).toContain(".rc-top{");
+    expect(games).not.toContain("tel:");
+    expect(games).not.toContain("4620 6827");
+    expect(games).not.toContain('id="dial"');
+  });
+
+  test("the bot page: the headline and the form, no blurb, no phone number", async () => {
+    const html = await (await page.request("http://x/bot")).text();
+    expect(html).toContain("GET YOUR OWN BOT.");
+    expect(html).not.toContain("ScamSitter answers your phone");
+    expect(html).not.toContain('class="rc-own"');
+    expect(html).not.toContain("tel:");
   });
 
   test("a recording's link opens the page on that call, playing", async () => {

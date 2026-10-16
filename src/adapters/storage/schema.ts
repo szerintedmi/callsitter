@@ -1,4 +1,4 @@
-import { integer, real, sqliteTable, text, index } from "drizzle-orm/sqlite-core";
+import { integer, real, sqliteTable, text, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 import type { Device, PageEventType, PropValue } from "../../core/analytics";
 import type { CallCosts, EndedBy } from "../../core/types";
 
@@ -68,23 +68,29 @@ export const plays = sqliteTable(
   (t) => [index("plays_board_idx").on(t.game, t.goal, t.scoreMs)],
 );
 
-// Public page visitors who asked to hear when there's game again (POST call/notify).
-export const notifySignups = sqliteTable("notify_signups", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  // trimmed, lowercased
-  email: text("email").notNull().unique(),
-  createdAt: integer("created_at").notNull(),
-  // Cloudflare's CF-Connecting-IP
-  ip: text("ip"),
-  // Cloudflare's CF-IPCountry, if it sends it
-  country: text("country"),
-  // cut to 300 characters
-  userAgent: text("user_agent"),
-  // what had run out then; null: nothing
-  reason: text("reason", { enum: ["closed", "quota", "budget"] }),
-  // for whoever sends the "we're back" mail later; cleared when the email signs up again
-  notifiedAt: integer("notified_at"),
-});
+// Public page visitors who left their email: to hear when there's game again (POST call/notify),
+// or when they can get their own bot (POST call/waitlist). One row per email and list.
+export const notifySignups = sqliteTable(
+  "notify_signups",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    // trimmed, lowercased
+    email: text("email").notNull(),
+    list: text("list", { enum: ["notify", "waitlist"] }).notNull().default("notify"),
+    createdAt: integer("created_at").notNull(),
+    // Cloudflare's CF-Connecting-IP
+    ip: text("ip"),
+    // Cloudflare's CF-IPCountry, if it sends it
+    country: text("country"),
+    // cut to 300 characters
+    userAgent: text("user_agent"),
+    // notify: what had run out then; null: nothing, and always on the waitlist
+    reason: text("reason", { enum: ["closed", "quota", "budget"] }),
+    // for whoever sends the mail later; cleared when the email signs up again
+    notifiedAt: integer("notified_at"),
+  },
+  (t) => [uniqueIndex("notify_signups_email_list_unique").on(t.email, t.list)],
+);
 
 // The public site's page analytics (src/core/analytics.ts).
 export const pageEvents = sqliteTable(

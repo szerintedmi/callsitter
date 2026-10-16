@@ -255,7 +255,7 @@ export interface Repo {
   scores(game: Game, goal: string): Promise<BoardEntry[]>;
   /** total seconds of ended calls whose verdict is scam or spam, and of every "Scam me" game */
   junkCallSeconds(): Promise<number>;
-  /** stores a "notify me" sign-up; an email signed up before gets the new details and is pending (not notified) again */
+  /** stores a "notify me" or waitlist sign-up; an email already on that list gets the new details and is pending (not notified) again */
   addNotifySignup(s: NotifySignup): Promise<void>;
   /** the public site's page analytics (src/core/analytics.ts) */
   addPageEvents(rows: PageEventRecord[]): Promise<void>;
@@ -269,14 +269,15 @@ export interface Repo {
   prunePageEvents(before: number): Promise<number>;
 }
 
-/** A public page visitor who asked to hear when there's game again (POST call/notify). */
+/** A public page visitor who left their email: to hear when there's game again (POST call/notify), or on the waitlist for their own bot (POST call/waitlist). */
 export interface NotifySignup {
   email: string;
+  list: "notify" | "waitlist";
   createdAt: number;
   ip: string | null;
   country: string | null;
   userAgent: string | null;
-  /** what had run out then; null: nothing */
+  /** notify: what had run out then; null: nothing, and always on the waitlist */
   reason: "closed" | "quota" | "budget" | null;
 }
 
