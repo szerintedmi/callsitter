@@ -140,6 +140,24 @@ describe("public page with the real calls", async () => {
     expect(html).not.toContain("tel:");
   });
 
+  test("the terms and the privacy notice, linked from every public page", async () => {
+    for (const path of ["/", "/bot", "/play"]) {
+      const html = await (await page.request(`http://x${path}`)).text();
+      expect(html).toContain('<p class="rc-legal"><a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p>');
+    }
+    const terms = await (await page.request("http://x/terms")).text();
+    expect(terms).toContain("<h1>TERMS</h1>");
+    expect(terms).toContain('href="/privacy"');
+    const privacy = await (await page.request("http://x/privacy")).text();
+    expect(privacy).toContain("<h1>PRIVACY</h1>");
+    expect(privacy).toContain("180 days");
+    for (const html of [terms, privacy]) {
+      expect(html).toContain('<header class="rc-top"><a class="rc-brand" href="/">SCAMSITTER</a>');
+      expect(html).not.toContain('class="rc-own"');
+      expect(html).not.toContain("tel:");
+    }
+  });
+
   test("a recording's link opens the page on that call, playing", async () => {
     const html = await (await page.request("http://x/listen/crypto-bot")).text();
     expect(config_(html)).toMatchObject({ selected: "crypto-bot", autoplay: true, base: "/" });

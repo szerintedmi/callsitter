@@ -118,7 +118,7 @@ export const github = `<svg viewBox="0 0 16 16" width="28" height="28" aria-hidd
 /** "14:26:40": hours, minutes, seconds */
 const hms = (s: number) => [Math.floor(s / 3600), Math.floor(s / 60) % 60, Math.floor(s) % 60].map((n, i) => (i ? String(n).padStart(2, "0") : String(n))).join(":");
 
-const head = (title: string, description: string, css: string) => `<!doctype html>
+export const head = (title: string, description: string, css: string) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -143,6 +143,10 @@ export const top = (base: string, wastedSeconds: number, o: { botLink: boolean; 
     o.player ?? ""
   }${o.botLink ? `<a class="rc-own" href="${base}bot">GET YOUR OWN BOT</a>` : ""}<a class="rc-gh" href="https://github.com/szerintedmi/scamsitter" aria-label="ScamSitter on GitHub">${github}</a></div></header>`;
 
+/** The public pages' last line: the terms and the privacy notice (legal.ts; topCss). */
+export const legal = (base: string) =>
+  `<p class="rc-legal"><a href="${base}terms">Terms</a> · <a href="${base}privacy">Privacy</a></p>`;
+
 /** The home page: the recordings, and a call to try the bot from the browser (the games at /play). */
 export function realCallsPage(
   base: string,
@@ -163,6 +167,7 @@ ${top(base, o.wastedSeconds, { botLink: true })}
   <div class="rc-caption" id="rc-caption"></div>
   <div class="rc-try"><a class="rc-cta" href="${base}play">PLAY THE BOT <i>▶</i></a><span>Call from your browser</span></div>
 </main>
+${legal(base)}
 </div>
 <audio id="rc-audio" preload="metadata" playsinline></audio>
 <script type="application/json" id="rc-config">${json(config)}</script>
@@ -218,6 +223,7 @@ ${top(base, o.wastedSeconds, { botLink: false })}
   <p class="wl-done" id="wl-done" role="status" hidden>THANKS! YOU'RE ON THE LIST.</p>
   <div class="bot-try"><a class="bot-play" href="${base}play">PLAY THE BOT <i>▶</i></a><span>Call it from your browser</span></div>
 </main>
+${legal(base)}
 </div>
 <script>
 (() => {
@@ -266,7 +272,7 @@ ${stage}
 }
 
 // The game page's palette and fonts (public.ts).
-const rootCss = `
+export const rootCss = `
 :root{color-scheme:dark;--ink:#0e0d10;--ink2:#1b1a20;--line:#2c2a33;--paper:#fff6ec;--dim:#8d8994;--red:#d8281f;--red-hi:#ff5a4e;--grn:#35d07a;--grn-ink:#04230f;--amb:#ffb000;
 --disp:"Jersey 10",ui-monospace,monospace;--text:"Pixelify Sans",ui-monospace,monospace}
 *{box-sizing:border-box}
@@ -288,6 +294,8 @@ export const topCss = `
 .rc-own{font-family:var(--disp);font-size:22px;line-height:1;letter-spacing:.04em;padding:7px 12px 8px;background:var(--amb);color:var(--ink);text-decoration:none;box-shadow:4px 4px 0 #000;white-space:nowrap}
 .rc-own:hover{transform:translate(-1px,-1px);box-shadow:5px 5px 0 #000}
 .rc-gh{color:var(--dim);display:flex}
+.rc-legal{margin:0;padding:8px 0 16px;text-align:center;font-family:var(--text);font-size:13px;letter-spacing:0;color:var(--dim)}
+.rc-legal a{color:var(--dim);text-decoration:none}.rc-legal a:hover{color:var(--paper);text-decoration:underline}
 .rc-gh:hover{color:var(--paper)}
 .rc-own:active{transform:translate(2px,2px);box-shadow:2px 2px 0 #000}
 @media (max-width:640px){
