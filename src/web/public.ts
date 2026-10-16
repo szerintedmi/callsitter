@@ -12,7 +12,8 @@ import { GoalWatch } from "../core/referee";
 import type { OpenAiWebRtc, WebRtcAnswer } from "../adapters/openai-live/webrtc";
 import { hostOf } from "./admin-guard";
 import type { ClientAssets } from "./admin";
-import { botPage, DEMOS, findDemo, realCallsPage, top, topCss } from "./listen";
+import { privacyPage, termsPage } from "./legal";
+import { botPage, DEMOS, findDemo, legal, realCallsPage, top, topCss } from "./listen";
 
 // The public game page, at the root of the public host (and at /public on the admin host, as a
 // preview), or at /play when the real call recordings (listen.ts) take the root: two games (config/games.yaml, src/core/game.ts). "Scam me": the visitor plays a
@@ -34,6 +35,7 @@ import { botPage, DEMOS, findDemo, realCallsPage, top, topCss } from "./listen";
 //                             until the call ends
 //   GET  call/:id/result      the game's score, rank and leaderboard once the call has ended
 //   GET  bot                  "Get your own bot": a waitlist form (listen.ts botPage)
+//   GET  terms, privacy       the terms and the privacy notice (legal.ts)
 //   POST call/notify          {email} → 204: tell me when there's game again (shown once the
 //                             day's calls or budget have run out, or the page is closed)
 //   POST call/waitlist        {email} → 204: the bot page's waitlist (same table, list "waitlist")
@@ -218,6 +220,8 @@ export function publicRoutes(d: PublicDeps) {
     });
   } else app.get("/", async (c) => c.html(await game(c.req.path.replace(/\/?$/, "/"))));
   app.get("/bot", async (c) => c.html(botPage(c.req.path.slice(0, c.req.path.lastIndexOf("bot")), { wastedSeconds: (await wasted()).seconds })));
+  app.get("/terms", async (c) => c.html(termsPage(c.req.path.slice(0, c.req.path.lastIndexOf("terms")), { wastedSeconds: (await wasted()).seconds })));
+  app.get("/privacy", async (c) => c.html(privacyPage(c.req.path.slice(0, c.req.path.lastIndexOf("privacy")), { wastedSeconds: (await wasted()).seconds })));
   app.get("/call/lobby", async (c) => c.json(await lobby(), 200, { "Cache-Control": "no-store" }));
 
   app.get("/assets/public.js", async (c) => {
@@ -721,7 +725,7 @@ ${
       <ol class="board" id="r-board"></ol>
       <div class="r-btns"><button class="btn" type="button" id="again" data-track="play_again">PLAY AGAIN</button><button class="btn ghost" type="button" id="menu" data-track="change_game">CHANGE GAME</button></div>
     </div>
-    <footer class="band foot">PLAY NOW. REAL SCAMMERS PAY LATER.</footer>
+    <footer class="band foot">PLAY NOW. REAL SCAMMERS PAY LATER.${legal(base)}</footer>
   </section>
 
   <section class="scr modebg" id="s-out" hidden>
