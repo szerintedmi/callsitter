@@ -119,7 +119,8 @@ export const Layout: FC<PropsWithChildren<{ title: string }>> = ({ title, childr
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width,initial-scale=1" />
       <title>{title}</title>
-      <link rel="icon" href={favicon} />
+      <link rel="icon" type="image/svg+xml" href={favicon} />
+      <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
       <style>{raw(css)}</style>
     </head>
     <body>

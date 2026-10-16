@@ -134,7 +134,8 @@ export const head = (title: string, description: string, css: string) => `<!doct
 <meta name="description" content="${description}">
 <meta name="theme-color" content="#0e0d10">
 <title>${title}</title>
-<link rel="icon" href="${favicon}">
+<link rel="icon" type="image/svg+xml" href="${favicon}">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jersey+10&family=Pixelify+Sans:wght@500;600&display=swap">

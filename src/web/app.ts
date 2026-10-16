@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { adminGuard, adminHosts, hostOf, type AdminAuth, type AdminGuardDeps } from "./admin-guard";
 import { adminRoutes, type AdminDeps } from "./admin";
 import { analyticsAdminRoutes, analyticsRoutes } from "./analytics";
+import { iconRoutes } from "./favicon";
 import { BrowserSipCalls, openAiSipRoutes, type SipRoutesDeps } from "./openai-sip";
 import { listenRoutes, type DemoMedia } from "./listen";
 import { publicRoutes, type PublicDeps } from "./public";
@@ -25,8 +26,9 @@ export interface AppDeps extends TelnyxRoutesDeps, AdminDeps {
 export function createApp(d: AppDeps) {
   const app = new Hono();
 
-  // Webhooks, media and health: on any host (the tunnel only routes these paths on the public host).
+  // Webhooks, media, health and the icons: on any host (the tunnel only routes these paths on the public host).
   app.get("/healthz", (c) => c.text("ok"));
+  app.route("/", iconRoutes());
   app.route("/", telnyxRoutes(d));
   if (d.openAiSip) {
     app.route("/", openAiSipRoutes({ ...d.openAiSip, manager: d.manager, repo: d.repo, config: d.config, browserSip: d.browserSip?.calls ?? new BrowserSipCalls() }));
