@@ -16,7 +16,7 @@ ENV NODE_ENV=production \
     DATA_DIR=/data \
     CONFIG_DIR=/app/config
 COPY --from=deps /app/node_modules node_modules
-COPY package.json bun.lock tsconfig.json ./
+COPY package.json bun.lock tsconfig.json LICENSE NOTICE ./
 # src includes src/web/client: the browser code is compiled at startup (src/runtime/client-assets.ts).
 COPY src src
 COPY config config

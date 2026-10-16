@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { ClientAssets } from "./admin";
+import { favicon, logo } from "./favicon";
 
 // Real call recordings, the public site's home page: each recording with its transcript and an
 // animation of the two sides (src/web/client/listen.ts). Names and personal details are already
@@ -10,7 +11,7 @@ import type { ClientAssets } from "./admin";
 //   GET listen/media/:file   <slug>.mp3 and <slug>.json from demos/calls
 //   GET assets/listen.js     the player
 
-export type DemoScene = "areyouai" | "police" | "cryptobot" | "electrician";
+export type DemoScene = "areyouai" | "police" | "cryptobot" | "electrician" | "coldcall";
 
 export interface Demo {
   slug: string;
@@ -31,6 +32,13 @@ export const DEMOS: Demo[] = [
     title: "Are you AI?",
     caller: "“ESSEX POLICE”",
     outcome: "The end of 8 minutes he lost.\nA real person, he can assure you.",
+  },
+  {
+    slug: "cold-call",
+    scene: "coldcall",
+    title: "The cold call",
+    caller: "THE SALES REP",
+    outcome: "A sales pitch, politely declined.\nNumber off the list.",
   },
   {
     slug: "police-scam",
@@ -126,7 +134,8 @@ export const head = (title: string, description: string, css: string) => `<!doct
 <meta name="description" content="${description}">
 <meta name="theme-color" content="#0e0d10">
 <title>${title}</title>
-<link rel="icon" href="data:,">
+<link rel="icon" type="image/svg+xml" href="${favicon}">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jersey+10&family=Pixelify+Sans:wght@500;600&display=swap">
@@ -139,7 +148,7 @@ export const head = (title: string, description: string, css: string) => `<!doct
  * `player`: the game page's player chip, first on the right (topCss; public.ts moves it on a phone).
  */
 export const top = (base: string, wastedSeconds: number, o: { botLink: boolean; player?: string }) =>
-  `<header class="rc-top"><a class="rc-brand" href="${base}">CALLSITTER</a><p class="rc-wasted">Scammer time wasted: <b id="wasted">${hms(wastedSeconds)}</b></p><div class="rc-right">${
+  `<header class="rc-top"><a class="rc-brand" href="${base}">${logo}CALLSITTER</a><p class="rc-wasted">Scammer time wasted: <b id="wasted">${hms(wastedSeconds)}</b></p><div class="rc-right">${
     o.player ?? ""
   }${o.botLink ? `<a class="rc-own" href="${base}bot">GET YOUR OWN BOT</a>` : ""}<a class="rc-gh" href="https://github.com/szerintedmi/callsitter" aria-label="CallSitter on GitHub">${github}</a></div></header>`;
 
@@ -287,7 +296,8 @@ export const topCss = `
 .rc-col{--rc-chrome:318px;width:min(1132px,100% - 32px,max(560px,(100svh - var(--rc-chrome)) * 16 / 9));margin:0 auto}
 .rc-top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px 20px;padding:14px 0 12px;border-bottom:3px solid var(--line)}
 .rc-brand{justify-self:start}
-.rc-brand{font-family:var(--disp);font-size:34px;line-height:1;letter-spacing:.03em;color:var(--paper);text-decoration:none}
+.logo{flex:none;width:24px;height:24px}
+.rc-brand{display:inline-flex;align-items:center;gap:10px;font-family:var(--disp);font-size:34px;line-height:1;letter-spacing:.03em;color:var(--paper);text-decoration:none}
 .rc-wasted{margin:0;text-align:center;font-size:15px;color:var(--dim);white-space:nowrap}
 .rc-wasted b{font-family:var(--disp);font-weight:400;font-size:24px;color:var(--amb);font-variant-numeric:tabular-nums;vertical-align:-2px;margin-left:4px}
 .rc-right{display:flex;align-items:center;gap:16px;justify-self:end;min-height:37px}
@@ -314,7 +324,7 @@ const homeCss = `
 .rc-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 16px;margin:14px 0 12px;font-weight:400}
 .rc-h b{font-family:var(--disp);font-weight:400;font-size:56px;line-height:.85;letter-spacing:.03em;color:var(--amb);text-shadow:3px 3px 0 #000}
 .rc-h span{font-size:18px;color:var(--paper)}
-.rc-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+.rc-tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:10px}
 .rc-tab{display:flex;align-items:center;justify-content:center;min-height:42px;padding:6px 10px;text-align:center;font-family:var(--disp);font-size:24px;line-height:1;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);text-decoration:none;box-shadow:inset 0 0 0 3px var(--line)}
 .rc-tab:hover{color:var(--paper)}
 .rc-tab[aria-current]{background:var(--amb);color:var(--ink);box-shadow:4px 4px 0 #000}
@@ -330,7 +340,7 @@ const homeCss = `
 .rc-h{flex-direction:column;gap:6px;margin-top:12px;margin-bottom:12px}
 .rc-h b{font-size:48px}
 .rc-h span{font-size:15px}
-.rc-tabs{grid-template-columns:repeat(2,1fr);gap:6px}
+.rc-tabs{grid-template-columns:repeat(3,1fr);gap:6px}
 .rc-tab{min-height:40px;font-size:18px;padding:4px 6px}
 .rc-try{margin:20px 16px 0}
 }
@@ -394,6 +404,7 @@ export const realCallsCss = `
 [data-scene="electrician"]{--rc-caller:var(--amb)}
 [data-scene="cryptobot"]{--rc-caller:#c58bff}
 [data-scene="areyouai"]{--rc-caller:#6ea8ff}
+[data-scene="coldcall"]{--rc-caller:#4fd1c5}
 .rc-pop{position:absolute;left:var(--x,0);top:var(--y,0);transform:translate(-50%,-100%) scale(var(--s,0));transform-origin:50% 100%;font-size:max(3.2cqw,16px);line-height:1;padding:.6cqw .9cqw;background:var(--paper);color:var(--ink);border:.25cqw solid #000;box-shadow:.3cqw .3cqw 0 #000;white-space:nowrap;pointer-events:none;font-family:var(--disp);text-align:center}
 .rc-pop small{font-size:.55em;display:block;letter-spacing:.04em}
 .rc-pop.dumb{background:var(--amb)}

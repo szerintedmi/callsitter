@@ -1,6 +1,6 @@
 # CallSitter
 
-AI call screener: Telnyx media stream ↔ OpenAI Live (gpt-live-1), TypeSafe Jev classification on caller pauses, a deterministic call flow (`config/call-flow.yaml` rules over Jev answers), GPT-6 Luna for guidance/tools. See README.md.
+AI call screener: Telnyx → OpenAI SIP (gpt-live-1, steered over a sideband; the Telnyx media stream is the fallback), TypeSafe Jev classification on caller pauses, a deterministic call flow (`config/call-flow.yaml` rules over Jev answers), GPT-6 Luna for the owner's summaries. See README.md and `docs/` (development, setup, public site, vendor APIs, deploy).
 
 ## Commands
 

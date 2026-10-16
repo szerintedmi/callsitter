@@ -7,6 +7,7 @@ import { CHANNELS, type Channel } from "../core/limits";
 import type { BlobStore, CallFilter, CallRecord, EventBus, Repo } from "../core/ports";
 import type { Verdict as VerdictName } from "../core/types";
 import type { LogBuffer } from "./debug-log";
+import { favicon } from "./favicon";
 
 /** The call list's cost tooltip: by vendor, with Luna's tokens; calls from before only have the estimate. */
 function costTitle(r: CallRecord): string | undefined {
@@ -118,7 +119,8 @@ export const Layout: FC<PropsWithChildren<{ title: string }>> = ({ title, childr
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width,initial-scale=1" />
       <title>{title}</title>
-      <link rel="icon" href="data:," />
+      <link rel="icon" type="image/svg+xml" href={favicon} />
+      <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
       <style>{raw(css)}</style>
     </head>
     <body>

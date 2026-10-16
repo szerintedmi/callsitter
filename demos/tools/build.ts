@@ -329,7 +329,9 @@ const levels: DemoCall["levels"] = { caller: level(voice.caller), agent: level(v
 const outDir = "demos/calls";
 const pcm = new Uint8Array(audio.buffer, audio.byteOffset, audio.byteLength);
 const raw = ["-f", "f32le", "-ar", String(RATE), "-ac", "2", "-i", "-"];
-await ffmpeg([...raw, "-c:a", "libmp3lame", "-b:a", "128k", `${outDir}/${slug}.mp3`], { stdin: pcm });
+// The ID3 copyright tag (TCOP) carries demos/LICENSE with a downloaded file.
+const tags = ["-metadata", `title=CallSitter: ${slug}`, "-metadata", "copyright=© 2026 szerintedmi. All rights reserved. https://callsitter.org"];
+await ffmpeg([...raw, "-c:a", "libmp3lame", "-b:a", "128k", ...tags, `${outDir}/${slug}.mp3`], { stdin: pcm });
 // Lossless, for the video (record.ts); it holds only the redacted audio, but is big: kept out of git.
 await ffmpeg([...raw, "-c:a", "flac", `${values.words}/final.flac`], { stdin: pcm });
 

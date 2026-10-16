@@ -1,0 +1,11 @@
+Copyright 2026 szerintedmi. All rights reserved.
+
+The recordings, transcripts and images in demos/calls/ and demos/posters/ are
+NOT covered by the Apache License that covers the rest of this repository.
+They are recordings of real phone calls, edited to protect the people in them.
+
+You may link to them. You may not copy, modify, redistribute, publish or use
+them to train or evaluate models without written permission.
+
+The code in demos/tools/ is covered by the Apache License, Version 2.0
+(see ../LICENSE).

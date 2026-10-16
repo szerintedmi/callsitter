@@ -4,6 +4,8 @@
 !package.json
 !bun.lock
 !tsconfig.json
+!LICENSE
+!NOTICE
 !src/
 !config/
 !drizzle/

@@ -97,6 +97,14 @@ const POPS: Record<SceneKind, [RegExp, string, string?][]> = {
     [/give us a call/i, "☎️"],
     [/take care/i, "👋"],
   ],
+  coldcall: [
+    [/steal a minute/i, "⏱️", "STEAL A MINUTE"],
+    [/product managers/i, "📋"],
+    [/documentation/i, "📄"],
+    [/three different/i, "3️⃣"],
+    [/not interested/i, "🙅"],
+    [/off your list/i, "📵"],
+  ],
   electrician: [
     [/electrician/i, "⚡"],
     [/landlady/i, "🏠"],
@@ -193,7 +201,7 @@ interface Loaded {
   /** the song's emoji */
   songPops: Pop[];
   lastWord: number;
-  /** when the caller hung up in a huff (police), or undefined */
+  /** when the call ended on a hang-up (the caller's in police, the bot's in coldcall), or undefined */
   hangup?: number;
   /** when the end card comes up */
   endAt: number;
@@ -278,6 +286,8 @@ async function main() {
     // The police hung up on the bot: his last line, then the click.
     const lastCaller = call.lines.filter((x) => x.speaker === "caller").at(-1);
     if (demo.scene === "police" && lastCaller) l.hangup = lastCaller.end + 0.1;
+    // The sales rep got told no: the bot's goodbye, then he crosses the number off.
+    if (demo.scene === "coldcall") l.hangup = l.lastWord + 0.1;
     l.endAt = call.song ? call.song.end + 0.5 : l.hangup !== undefined ? l.hangup + 3.6 : l.lastWord + 0.5;
     root.dataset.scene = demo.scene;
     $("rc-outcome").replaceChildren(demo.outcome);
@@ -373,7 +383,7 @@ async function main() {
       let dumb = false;
       const p = [...(song ? cur.songPops : cur.pops)].reverse().find((x) => x.speaker === s && t >= x.t && t < x.t + 2.6);
       if (s === "caller" && cur.hangup !== undefined && t >= cur.hangup + 0.3) {
-        html = `📵<small>*CLICK*</small>`;
+        html = cur.demo.scene === "coldcall" ? `✏️<small>OFF THE LIST</small>` : `📵<small>*CLICK*</small>`;
         scale = pop(t - cur.hangup - 0.3);
       } else if (s === "caller" && pause) {
         // never quite gets there
