@@ -251,7 +251,7 @@ ${legal(base)}
 }
 
 function renderPage(base: string, demo: Demo, poster: boolean) {
-  const config: PlayerConfig = { demos: DEMOS, selected: demo.slug, autoplay: false, render: true, poster, base, site: "scamsitter.geekmango.com" };
+  const config: PlayerConfig = { demos: DEMOS, selected: demo.slug, autoplay: false, render: true, poster, base, site: "callsitter.org" };
   return `<!doctype html>
 <html lang="en">
 <head>

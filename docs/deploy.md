@@ -4,9 +4,9 @@ ScamSitter runs on an OVHcloud VPS (Debian 13) as one Docker container. GitHub A
 
 - **App**: `deploy/compose.yaml`, image `ghcr.io/szerintedmi/scamsitter` (private) pinned by digest. It listens on `127.0.0.1:8787`, with no public ports. SQLite, recordings, greetings and log files live in `/var/lib/scamsitter` (`/data` in the container).
 - **Tunnel**: `cloudflared` runs on the host as a systemd service (`deploy/vps/cloudflared.yml`):
-  - `scamsitter.geekmango.com` (public): the Telnyx/OpenAI webhooks, media streams, `/healthz`, the real call recordings (`/`, `/listen…`, `/assets/listen.js`), the "Get your own bot" waitlist (`/bot`) and the game (`/play`, `/call…`, `/assets/public.js`).
-  - `scamsitter-admin.geekmango.com`: the admin UI behind Cloudflare Access. The app also verifies the Access JWT.
-  - `scamsitter-ssh.geekmango.com`: SSH behind Cloudflare Access. Once `lock-ssh` has run, sshd listens on loopback only, so SSH works only through the tunnel.
+  - `callsitter.org` (public): the Telnyx/OpenAI webhooks, media streams, `/healthz`, the real call recordings (`/`, `/listen…`, `/assets/listen.js`), the "Get your own bot" waitlist (`/bot`) and the game (`/play`, `/call…`, `/assets/public.js`).
+  - `admin.callsitter.org`: the admin UI behind Cloudflare Access. The app also verifies the Access JWT.
+  - `ssh.callsitter.org`: SSH behind Cloudflare Access. Once `lock-ssh` has run, sshd listens on loopback only, so SSH works only through the tunnel.
 - **Deploys**: `.github/workflows/deploy.yml` runs CI, builds the image (tagged `sha-<commit>`), then SSHes in with a deploy key. The key can only run `scamsitter-deploy`, with a GitHub Access service token.
 - **Secrets**: the app's settings and keys are in `/etc/scamsitter/scamsitter.env` (root, 0600), never in the image or GitHub. GitHub only holds the deploy credentials.
 
@@ -37,17 +37,19 @@ You need your `cert.pem` (`--origincert`, as in `deploy/cloudflared.yml`).
 
 ```sh
 cloudflared tunnel create scamsitter-prod        # writes ~/.cloudflared/<PROD_ID>.json
-cloudflared tunnel route dns <PROD_ID> scamsitter-ssh.geekmango.com
+cloudflared tunnel route dns <PROD_ID> ssh.callsitter.org
 ```
+
+`route dns` only works in the zone `cert.pem` was issued for (geekmango.com). The callsitter.org records were made in the dashboard or the API instead: a proxied CNAME to `<PROD_ID>.cfargotunnel.com`.
 
 Pass the tunnel **ID**, not the name: a default `~/.cloudflared/config.yml` can override the name.
 
 Zero Trust → Access → Applications:
 
-- **Add** a self-hosted app for `scamsitter-ssh.geekmango.com` with two policies:
+- **Add** a self-hosted app for `ssh.callsitter.org` with two policies:
   - *Allow*, with your email. This is for you from the laptop.
   - *Service Auth*, with a new service token `github-deploy`. Its Client ID and Secret become GitHub secrets. Note when it expires.
-- **Keep** the existing Access app for `scamsitter-admin.geekmango.com`. Production keeps its AUD.
+- **Keep** the existing Access app for `admin.callsitter.org`. Production keeps its AUD.
 
 Don't move the public and admin hostnames yet; that's step 5.
 
@@ -82,7 +84,7 @@ Don't move the public and admin hostnames yet; that's step 5.
 
    ```
    Host scamsitter-vps
-     HostName scamsitter-ssh.geekmango.com
+     HostName ssh.callsitter.org
      User debian
      ProxyCommand cloudflared access ssh --hostname %h
    ```
@@ -98,10 +100,10 @@ Don't move the public and admin hostnames yet; that's step 5.
 
 ```sh
 gh secret set DEPLOY_SSH_KEY < ~/.ssh/scamsitter-github-deploy
-gh secret set DEPLOY_KNOWN_HOSTS --body 'scamsitter-ssh.geekmango.com ssh-ed25519 AAAA…'   # printed by bootstrap.sh
+gh secret set DEPLOY_KNOWN_HOSTS --body 'ssh.callsitter.org ssh-ed25519 AAAA…'             # printed by bootstrap.sh
 gh secret set CF_ACCESS_CLIENT_ID --body '<id>.access'
 gh secret set CF_ACCESS_CLIENT_SECRET                                                     # paste when prompted
-gh variable set DEPLOY_SSH_HOST --body scamsitter-ssh.geekmango.com                       # enables the deploy job
+gh variable set DEPLOY_SSH_HOST --body ssh.callsitter.org                                 # enables the deploy job
 ```
 
 - `DEPLOY_SSH_USER` is optional and defaults to `deploy`.
@@ -123,9 +125,11 @@ ssh scamsitter-vps curl -s 127.0.0.1:8787/healthz
 2. Point the hostnames at the production tunnel:
 
    ```sh
-   cloudflared tunnel route dns --overwrite-dns <PROD_ID> scamsitter.geekmango.com
-   cloudflared tunnel route dns --overwrite-dns <PROD_ID> scamsitter-admin.geekmango.com
+   cloudflared tunnel route dns --overwrite-dns <PROD_ID> callsitter.org
+   cloudflared tunnel route dns --overwrite-dns <PROD_ID> admin.callsitter.org
    ```
+
+   (Production moved from `scamsitter[-admin|-ssh].geekmango.com` to callsitter.org on 2026-10-16. The old public and admin hostnames 301 to the new ones through geekmango.com redirect rules; admin.callsitter.org and ssh.callsitter.org are extra destinations on the same Access apps, so `CF_ACCESS_AUD` didn't change.)
 
 3. Place a test call, and open the admin UI.
 
@@ -133,9 +137,9 @@ Telnyx, and the OpenAI webhook if SIP is set up, already point at these hostname
 
 ### 6. Dev after the cutover
 
-- The old tunnel (`scamsitter`, `b190c780…`) is dev, with its own hostnames:
-  - `scamsitter-dev.geekmango.com`: public, same paths as production;
-  - `scamsitter-dev-admin.geekmango.com`: its own Access app, so its own `CF_ACCESS_AUD` in `.env`.
+- Dev has its own tunnel (`callsitter-dev`, `3280b78c…`) and hostnames:
+  - `dev.callsitter.org`: public, same paths as production;
+  - `dev-admin.callsitter.org`: its own Access app, so its own `CF_ACCESS_AUD` in `.env`.
 - `deploy/cloudflared.yml` and `.env` (`PUBLIC_WS_BASE`, `ADMIN_HOST`, `CF_ACCESS_AUD`) point at them. Dev needs no service token.
 - Dev gets no real phone calls. Use the browser test call (`/test-call`).
 - Dev needs its own Telegram bot (`TELEGRAM_BOT_TOKEN`): the app long-polls for the owner's messages, and Telegram lets only one process poll a bot, so sharing production's would steal its messages. The same goes for `TELEGRAM_PUBLIC_CHAT_ID`: production's one bot serves both chats from one poll loop, so leave dev's blank, or point it at a group with dev's own bot in it.

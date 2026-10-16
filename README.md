@@ -4,15 +4,15 @@ An AI that answers my phone. Scammers get their time wasted, sales calls get a p
 
 ## Hear it on real calls
 
-| [![Are you AI?](demos/posters/areyouai.jpg)](https://scamsitter.geekmango.com/listen/areyouai) | [![The police](demos/posters/police-scam.jpg)](https://scamsitter.geekmango.com/listen/police-scam) | [![Bot vs bot](demos/posters/crypto-bot.jpg)](https://scamsitter.geekmango.com/listen/crypto-bot) | [![The electrician](demos/posters/electrician.jpg)](https://scamsitter.geekmango.com/listen/electrician) |
+| [![Are you AI?](demos/posters/areyouai.jpg)](https://callsitter.org/listen/areyouai) | [![The police](demos/posters/police-scam.jpg)](https://callsitter.org/listen/police-scam) | [![Bot vs bot](demos/posters/crypto-bot.jpg)](https://callsitter.org/listen/crypto-bot) | [![The electrician](demos/posters/electrician.jpg)](https://callsitter.org/listen/electrician) |
 | :-: | :-: | :-: | :-: |
 | **Are you AI?** (¾ min + the song) | **The police** (13 min) | **Bot vs bot** (4 min) | **The electrician** (1½ min) |
 
 ## Try it
 
-<a href="https://scamsitter.geekmango.com/play"><img src="demos/posters/play.gif" alt="Scam me: tap to play" width="280"></a>
+<a href="https://callsitter.org/play"><img src="demos/posters/play.gif" alt="Scam me: tap to play" width="280"></a>
 
-Try to scam the bot, or get a message through to me, from your browser: [scamsitter.geekmango.com/play](https://scamsitter.geekmango.com/play).
+Try to scam the bot, or get a message through to me, from your browser: [callsitter.org/play](https://callsitter.org/play).
 
 ## How it works
 
