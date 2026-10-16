@@ -4,7 +4,7 @@
 // the video recorder can render any frame in any order.
 import * as THREE from "three";
 
-export type SceneKind = "areyouai" | "police" | "cryptobot" | "electrician";
+export type SceneKind = "areyouai" | "police" | "cryptobot" | "electrician" | "coldcall";
 /** the scam bot's mistakes: talking over, giving up mid-sentence, an off-script question */
 export type BlunderKind = "talkover" | "cutoff" | "ignored";
 
@@ -51,7 +51,7 @@ export interface Moment {
   buffering: boolean;
   /** seconds since the caller talked over the bot, or null */
   flinch: number | null;
-  /** seconds since the caller hung up in a huff (police), or null */
+  /** seconds since the call ended on a hang-up, or null: the caller's, in a huff (police), or the bot's (coldcall) */
   hangup: number | null;
   /** the song after the call (areyouai), or null outside it */
   song: SongMoment | null;
@@ -633,6 +633,138 @@ function cryptobot(scene: THREE.Scene): Caller {
   };
 }
 
+/** The call list on the sales rep's wall: numbers from the drama range, three already crossed off. */
+function callList(): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 192;
+  c.height = 256;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "#fff2a8";
+  g.fillRect(0, 0, 192, 256);
+  g.fillStyle = "#1b1a20";
+  g.font = '34px "Jersey 10", monospace';
+  g.textAlign = "center";
+  g.fillText("CALL LIST", 96, 34);
+  g.font = '26px "Jersey 10", monospace';
+  g.textAlign = "left";
+  for (let i = 0; i < 6; i++) {
+    const y = 76 + i * 32;
+    g.fillStyle = "#1b1a20";
+    g.fillText(`07700 900${String(113 + i * 97).slice(-3)}`, 18, y);
+    g.fillStyle = "#c42b22";
+    if (i < 3) g.fillRect(12, y - 9, 168, 4);
+  }
+  // today's: the 4th, ringed
+  g.strokeStyle = "#2a6ab0";
+  g.lineWidth = 3;
+  g.strokeRect(10, 76 + 3 * 32 - 24, 172, 32);
+  const t = new THREE.CanvasTexture(c);
+  t.magFilter = THREE.NearestFilter;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/**
+ * The cold caller: a startup sales rep at a standing desk, headset, vest and quiff, all grin and
+ * gestures. The bot hangs up on him: he crosses the number off his list and deflates.
+ */
+function coldcall(scene: THREE.Scene): Caller {
+  floorAndWall(scene, -9, 0, "#5b6170", "#d8d2c4");
+  // the motivational poster, the call list, the gong that never rings
+  sign(scene, textTexture(["ALWAYS", "BE", "CALLING"], 120, 150, "#1b1a20", "#ffcc00", 40), 1.5, 1.9, -6.0, 3.9, -2.82);
+  const list = group(scene, -2.4, 3.4, -2.82);
+  sign(list, callList(), 1.5, 2.0, 0, 0, 0);
+  // the strike through today's number, drawn when the bot hangs up
+  const strike = box(list, 1.32, 0.06, 0.02, "#c42b22", 0, -0.3, 0.02);
+  strike.castShadow = false;
+  const gong = group(scene, -7.6, 0, -1.6);
+  for (const x of [-0.8, 0.8]) box(gong, 0.12, 2.6, 0.12, "#4a3b2c", x, 0, 0);
+  box(gong, 1.8, 0.12, 0.14, "#4a3b2c", 0, 2.55, 0);
+  const brass = mat("#d6a73a", "#3a2a08");
+  box(gong, 1.1, 0.7, 0.06, brass, 0, 1.45, 0);
+  box(gong, 0.7, 1.1, 0.06, brass, 0, 1.25, 0);
+  box(gong, 0.3, 0.3, 0.08, "#b8892a", 0, 1.65, 0);
+  sign(scene, textTexture(["MEETINGS", "BOOKED: 0"], 128, 64, "#fff6ec", "#1b1a20", 26), 1.1, 0.55, -7.6, 0.55, -1.5);
+  // the standing desk: laptop, a mug
+  const desk = group(scene, -2.0, 0, 0.9);
+  box(desk, 0.1, 1.45, 0.1, "#2c2a33", -0.8, 0, 0);
+  box(desk, 0.1, 1.45, 0.1, "#2c2a33", 0.8, 0, 0);
+  box(desk, 2.0, 0.08, 1.0, "#e8e1d6", 0, 1.45, 0);
+  box(desk, 0.7, 0.04, 0.5, "#8d8994", -0.3, 1.53, 0);
+  const screen = box(desk, 0.7, 0.48, 0.04, mat("#9fe0c8", "#2a6a58"), -0.3, 1.55, -0.25);
+  screen.rotation.x = -0.25;
+  box(desk, 0.22, 0.26, 0.22, "#ff5a4e", 0.55, 1.53, 0.1);
+  box(desk, 0.06, 0.14, 0.1, "#ff5a4e", 0.69, 1.58, 0.1);
+
+  const p = buildPerson(scene, { top: "#9cc4f0", legs: "#c9b58a", skin: "#d9a47e", hair: "#3a2414" });
+  p.root.position.set(-3.9, 0.1, 0.3);
+  p.root.rotation.y = 0.45;
+  // the vest, open over the shirt
+  for (const x of [-0.33, 0.33]) box(p.torso, 0.42, 1.1, 0.66, "#1f2a44", x, 0.02, 0);
+  // the quiff
+  const quiff = group(p.head, 0, 0.98, 0.25);
+  box(quiff, 0.7, 0.24, 0.32, "#3a2414", 0, 0, 0);
+  box(quiff, 0.5, 0.14, 0.26, "#4a3020", 0, 0.2, 0.04);
+  // a headset instead of a phone: band, the ear cup the cable runs to, the mic boom
+  p.phone.visible = false;
+  box(p.head, 0.9, 0.08, 0.14, "#2c2a33", 0, 0.94, -0.05);
+  for (const x of [-0.45, 0.45]) box(p.head, 0.08, 0.5, 0.12, "#2c2a33", x, 0.45, -0.05);
+  box(p.head, 0.14, 0.3, 0.3, "#2c2a33", -0.47, 0.35, 0);
+  const boom = box(p.head, 0.05, 0.05, 0.42, "#2c2a33", -0.4, 0.3, 0.22);
+  boom.rotation.y = 0.5;
+  box(p.head, 0.1, 0.08, 0.08, "#d8281f", -0.24, 0.3, 0.42);
+  // the grin: teeth over the mouth
+  const grin = box(p.head, 0.4, 0.1, 0.055, "#fff6ec", 0, 0.36, 0.4);
+  const pen = group(p.arm, 0, -1.1, 0.12);
+  box(pen, 0.06, 0.06, 0.34, "#c42b22", 0, 0, 0);
+  return {
+    root: p.root,
+    head: p.head,
+    animate(m) {
+      const t = m.t;
+      const lv = m.level.caller;
+      const h = m.hangup;
+      const talk = clamp01((lv - 0.35) / 0.45);
+      p.mouth.scale.y = 0.06 + 0.22 * talk;
+      grin.visible = true;
+      grin.scale.y = 0.1 - 0.05 * talk;
+      // on his toes, nodding along, the free hand pitching
+      p.root.position.y = 0.1 + 0.04 * Math.abs(Math.sin(t * 3.2)) * m.active.caller;
+      p.torso.rotation.x = 0;
+      p.torso.rotation.z = 0.04 * Math.sin(t * 1.8);
+      p.head.rotation.x = 0.09 * Math.sin(t * 6.4) * lv - 0.03;
+      p.head.rotation.y = 0.14 * Math.sin(t * 0.8);
+      p.arm.rotation.x = -0.5 - 1.0 * m.active.caller * (0.5 + 0.5 * Math.sin(t * 3.4));
+      p.arm.rotation.z = 0.15 + 0.35 * m.active.caller * Math.max(0, Math.sin(t * 2.1));
+      // the other hand on the desk
+      p.phoneArm.rotation.z = -0.25;
+      p.phoneArm.rotation.x = -0.8;
+      quiff.rotation.x = 0;
+      strike.scale.x = 1e-3;
+      strike.visible = false;
+      pen.visible = false;
+      if (h === null) return;
+      // crosses the number off, then slumps: the grin gone, the quiff wilting
+      const reach = h < 1.4 ? Math.sin(Math.min(1, h / 1.4) * Math.PI) : 0;
+      pen.visible = h < 1.4;
+      p.arm.rotation.x = -0.4 - 1.9 * reach;
+      p.arm.rotation.z = 0.5 * reach;
+      const draw = ease((h - 0.3) / 0.6);
+      strike.visible = draw > 0;
+      strike.scale.x = 1.32 * Math.max(1e-3, draw);
+      strike.position.x = -0.66 + 0.66 * draw;
+      const slump = ease((h - 1.2) / 0.8);
+      p.torso.rotation.x = 0.22 * slump;
+      p.head.rotation.x = 0.3 * slump;
+      p.head.rotation.y = h > 1.2 ? 0 : 0.14 * Math.sin(t * 0.8);
+      p.root.position.y = 0.1;
+      quiff.rotation.x = 0.7 * slump;
+      grin.visible = slump < 0.5;
+      p.mouth.scale.y = 0.06;
+    },
+  };
+}
+
 function electrician(scene: THREE.Scene): Caller {
   floorAndWall(scene, -9, 0, "#3a3a3a", "#6b8fb0");
   // street: a van, a ladder, a giant light bulb
@@ -855,7 +987,11 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
   const divider = box(scene, 0.25, 7.2, 14.4, "#0e0d10", 0, -0.2, 3.8);
   divider.castShadow = false;
   const caller =
-    kind === "police" || kind === "areyouai" ? police(scene, kind === "areyouai") : kind === "cryptobot" ? cryptobot(scene) : electrician(scene);
+    kind === "police" || kind === "areyouai" ? police(scene, kind === "areyouai") : kind === "cryptobot"
+        ? cryptobot(scene)
+        : kind === "coldcall"
+          ? coldcall(scene)
+          : electrician(scene);
 
   const bot = buildBot(scene, "#e8e1d6", "#b9b0a3");
   bot.root.position.set(4.4, 0.05, 0.25);
@@ -889,7 +1025,7 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
   const PULSES = 7;
   const pulseGeo = new THREE.BoxGeometry(0.22, 0.22, 0.22);
   const callerPulse = new THREE.MeshBasicMaterial({
-    color: kind === "electrician" ? "#ffb000" : kind === "cryptobot" ? "#c58bff" : kind === "areyouai" ? "#6ea8ff" : "#ff5a4e",
+    color: kind === "electrician" ? "#ffb000" : kind === "cryptobot" ? "#c58bff" : kind === "areyouai" ? "#6ea8ff" : kind === "coldcall" ? "#4fd1c5" : "#ff5a4e",
   });
   const agentPulse = new THREE.MeshBasicMaterial({ color: "#35d07a" });
   // the song's: every pulse its own colour

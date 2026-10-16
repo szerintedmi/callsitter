@@ -12,6 +12,7 @@ import { GoalWatch } from "../core/referee";
 import type { OpenAiWebRtc, WebRtcAnswer } from "../adapters/openai-live/webrtc";
 import { hostOf } from "./admin-guard";
 import type { ClientAssets } from "./admin";
+import { favicon } from "./favicon";
 import { privacyPage, termsPage } from "./legal";
 import { botPage, DEMOS, findDemo, legal, realCallsPage, top, topCss } from "./listen";
 
@@ -682,7 +683,7 @@ const page = (base: string, lobby: Lobby, realCalls?: boolean, analytics?: boole
 <meta name="description" content="Scam my phone's AI, or get through to me. Every game helps it waste real scammers' time.">
 <meta name="theme-color" content="#0e0d10">
 <title>ScamSitter</title>
-<link rel="icon" href="data:,">
+<link rel="icon" href="${favicon}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jersey+10&family=Pixelify+Sans:wght@500;600&display=swap">

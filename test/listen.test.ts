@@ -33,12 +33,12 @@ describe("listen routes", () => {
     expect(html).toContain('href="https://github.com/szerintedmi/scamsitter"');
   });
 
-  test("the song demo comes first, of four tabs", () => {
-    expect(DEMOS.map((d) => d.slug)).toEqual(["areyouai", "police-scam", "crypto-bot", "electrician"]);
+  test("the song demo comes first, of five tabs", () => {
+    expect(DEMOS.map((d) => d.slug)).toEqual(["areyouai", "cold-call", "police-scam", "crypto-bot", "electrician"]);
     expect(DEMOS[0]!.scene).toBe("areyouai");
     const html = realCallsPage("/", { selected: "areyouai", autoplay: false, wastedSeconds: 0 });
-    expect(html.match(/class="rc-tab /g)).toHaveLength(4);
-    expect(html).toContain("grid-template-columns:repeat(4,1fr)");
+    expect(html.match(/class="rc-tab /g)).toHaveLength(5);
+    expect(html).toContain("grid-template-columns:repeat(5,1fr)");
   });
 
   test("the recorder's page has the stage only", async () => {
