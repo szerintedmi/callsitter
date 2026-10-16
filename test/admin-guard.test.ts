@@ -6,7 +6,7 @@ import { adminGuard, type AdminAuth } from "../src/web/admin-guard";
 
 const TEAM = "myteam.cloudflareaccess.com";
 const AUD = "aud-tag-123";
-const ADMIN = "scamsitter-admin.example.com";
+const ADMIN = "callsitter-admin.example.com";
 
 async function rsaKey(kid: string) {
   const kp = (await crypto.subtle.generateKey(

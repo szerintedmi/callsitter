@@ -84,7 +84,7 @@ function page(opts: { tokenStatus?: number } = {}) {
       const status = opts.tokenStatus ?? 200;
       const body =
         status === 200
-          ? { token: "t", nonce: "n1", header: "X-ScamSitter-Test", dial: "scamsittertestn1", sipUri: "sip:proj_x@sip.api.openai.com;transport=tls" }
+          ? { token: "t", nonce: "n1", header: "X-CallSitter-Test", dial: "callsittertestn1", sipUri: "sip:proj_x@sip.api.openai.com;transport=tls" }
           : { error: "no credential" };
       return { ok: status === 200, status, json: async () => body };
     }
@@ -154,7 +154,7 @@ describe("test-call page, SIP route", () => {
     p.el("start").onclick!({ preventDefault() {} });
     await tick();
     FakeRtc.last!.emit("telnyx.ready");
-    expect(FakeRtc.last!.call!.opts).toMatchObject({ destinationNumber: "scamsittertestn1", customHeaders: [{ name: "X-ScamSitter-Test", value: "n1" }] });
+    expect(FakeRtc.last!.call!.opts).toMatchObject({ destinationNumber: "callsittertestn1", customHeaders: [{ name: "X-CallSitter-Test", value: "n1" }] });
     p.el("hangup").onclick!({ preventDefault() {} });
     p.done();
   });

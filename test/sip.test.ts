@@ -22,7 +22,7 @@ import { loadRepoConfig, scripted } from "./helpers";
 // OpenAI SIP with a faked OpenAI: signed live.transport.incoming webhook → accept → sideband
 // (transcripts in, steering out, reflected audio recorded) → session.closed → call ended.
 
-const dataDir = mkdtempSync(join(tmpdir(), "scamsitter-sip-"));
+const dataDir = mkdtempSync(join(tmpdir(), "callsitter-sip-"));
 const secretKey = crypto.getRandomValues(new Uint8Array(24));
 const WEBHOOK_SECRET = `whsec_${b64encode(secretKey)}`;
 
@@ -308,7 +308,7 @@ describe("OpenAI SIP (fake OpenAI)", () => {
     expect(res.status).toBe(200);
     const j = (await res.json()) as { token: string; nonce: string; header: string; dial: string; sipUri: string };
     expect(j).toMatchObject({ token: "jwt-token", header: TEST_HEADER, sipUri: "sip:proj_test@sip.api.openai.com;transport=tls" });
-    expect(j.dial).toBe(`scamsittertest${j.nonce}`);
+    expect(j.dial).toBe(`callsittertest${j.nonce}`);
 
     // The WebRTC call parks at Telnyx; our webhook transfers it to OpenAI over TLS + SRTP.
     await telnyxWebhook("call.initiated", {
@@ -316,7 +316,7 @@ describe("OpenAI SIP (fake OpenAI)", () => {
       connection_id: "conn_test",
       direction: "incoming",
       state: "parked",
-      from: "scamsittertest",
+      from: "callsittertest",
       to: `sip:${j.dial}@sip.telnyx.com`,
     });
     await until(() => telnyxRest.some((r) => r.path.endsWith("/actions/transfer")));
@@ -378,7 +378,7 @@ describe("browser SIP test legs", () => {
       connection_id: "conn_test",
       direction: "incoming",
       state: "parked",
-      to: `scamsittertest${"0".repeat(32)}`,
+      to: `callsittertest${"0".repeat(32)}`,
     });
     await until(() => telnyxRest.some((r) => r.path === "/v2/calls/v3%3Astranger/actions/hangup"));
     expect(telnyxRest.filter((r) => r.path.endsWith("/actions/transfer")).length).toBe(before);

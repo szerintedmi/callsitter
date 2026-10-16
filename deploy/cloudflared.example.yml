@@ -2,7 +2,7 @@
 # `bun run tunnel`. This is for dev; production uses deploy/vps/cloudflared.yml (docs/deploy.md).
 #   hooks.example.com   public, Telnyx/OpenAI webhooks + media, and the public page
 #   admin.example.com   admin UI, behind a Cloudflare Access application (the app also verifies the Access JWT)
-# Create with: cloudflared tunnel create scamsitter
+# Create with: cloudflared tunnel create callsitter
 #              cloudflared tunnel route dns <tunnel-id> <hostname>   (use the ID: a default
 #              ~/.cloudflared/config.yml naming another tunnel wins over the name argument)
 # Credentials stay outside the repo.

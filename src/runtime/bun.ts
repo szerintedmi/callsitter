@@ -82,7 +82,7 @@ if (publicTelegram && !publicTelegram.canListen) {
 }
 const callLink = env.ADMIN_HOST ? (id: string) => `https://${env.ADMIN_HOST}/calls/${encodeURIComponent(id)}` : undefined;
 
-const repo = new SqliteRepo(openSqlite(join(env.DATA_DIR, "scamsitter.db")));
+const repo = new SqliteRepo(openSqlite(join(env.DATA_DIR, "callsitter.db")));
 // The public site's page analytics are kept for analytics.yaml retention_days.
 const prunePageEvents = () => {
   const days = config.get().analytics.retention_days;

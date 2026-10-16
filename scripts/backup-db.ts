@@ -11,7 +11,7 @@ if (!dest) {
   console.error("usage: bun scripts/backup-db.ts <dest.db>");
   process.exit(2);
 }
-const src = join(process.env.DATA_DIR ?? "./data", "scamsitter.db");
+const src = join(process.env.DATA_DIR ?? "./data", "callsitter.db");
 if (!existsSync(src)) {
   console.log(`no database at ${src} yet: nothing to back up`);
   process.exit(0);

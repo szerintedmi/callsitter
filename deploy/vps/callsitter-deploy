@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Deploys and operates ScamSitter on the VPS (docs/deploy.md). Installed to /usr/local/bin by
-# bootstrap.sh and run as root: by the GitHub Actions deploy key (through scamsitter-deploy-ssh and
+# Deploys and operates CallSitter on the VPS (docs/deploy.md). Installed to /usr/local/bin by
+# bootstrap.sh and run as root: by the GitHub Actions deploy key (through callsitter-deploy-ssh and
 # sudo), by you over SSH, and by the nightly backup timer.
 #
 #   deploy <IMAGE_REPO>@sha256:<digest>   pull (registry token on stdin, optional), drain calls,
@@ -9,13 +9,13 @@
 #   rollback                              redeploy the previous release (its image is kept locally)
 #   status                                current release, container state, active calls
 #   drain | resume                        stop / restart taking calls (e.g. around host maintenance)
-#   backup                                nightly SQLite copy to /var/lib/scamsitter/backups
+#   backup                                nightly SQLite copy to /var/lib/callsitter/backups
 #
 # Exit 75: calls didn't end within DRAIN_WAIT seconds; nothing changed, try again later.
 set -euo pipefail
 umask 077
 
-CONF=/etc/scamsitter/deploy.conf
+CONF=/etc/callsitter/deploy.conf
 # shellcheck source=/dev/null
 [[ -r $CONF ]] && . "$CONF"
 : "${IMAGE_REPO:?set IMAGE_REPO in $CONF}"
@@ -24,19 +24,19 @@ DRAIN_WAIT=${DRAIN_WAIT:-1260}
 KEEP_RELEASES=${KEEP_RELEASES:-5}
 KEEP_BACKUPS=${KEEP_BACKUPS:-10}
 
-DIR=/opt/scamsitter
+DIR=/opt/callsitter
 RELEASES=$DIR/releases        # image refs, oldest first; the last line is the current release
 COMPOSES=$DIR/compose.d       # each release's compose.yaml, by digest
 DRAINED=""                            # set while the old container is draining
-BACKUPS=/var/lib/scamsitter/backups   # /data/backups in the container
+BACKUPS=/var/lib/callsitter/backups   # /data/backups in the container
 FAILED_LOGS=$DIR/failed               # logs of releases that never became healthy (root-only)
 APP_UID=1000                          # the image's `bun` user, which writes /data
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
 die() { log "error: $*" >&2; exit 1; }
 compose() { docker compose --project-directory "$DIR" -f "$DIR/compose.yaml" "$@"; }
-running() { [[ -f $DIR/compose.yaml && -n $(compose ps -q --status running scamsitter 2>/dev/null) ]]; }
-control() { compose exec -T scamsitter bun scripts/control.ts "$@"; }
+running() { [[ -f $DIR/compose.yaml && -n $(compose ps -q --status running callsitter 2>/dev/null) ]]; }
+control() { compose exec -T callsitter bun scripts/control.ts "$@"; }
 digest_of() { local d=${1##*@sha256:}; printf '%s' "${d:0:16}"; }
 current() { if [[ -s $RELEASES ]]; then tail -n1 "$RELEASES"; fi; }
 # The newest release before the current one (skipping repeats from earlier rollbacks).
@@ -44,8 +44,8 @@ previous() { if [[ -s $RELEASES ]]; then tac "$RELEASES" | awk '!seen[$0]++' | s
 revision() { docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1" 2>/dev/null || true; }
 
 lock() {
-  exec 9>/run/scamsitter-deploy.lock
-  flock -n 9 || die "another scamsitter-deploy is running"
+  exec 9>/run/callsitter-deploy.lock
+  flock -n 9 || die "another callsitter-deploy is running"
 }
 
 # Points compose.yaml and .env at a release; the compose file comes from the release's image.
@@ -60,7 +60,7 @@ activate() {
     mv "$saved.tmp" "$saved"
   fi
   install -m 0644 "$saved" "$DIR/compose.yaml"
-  printf 'SCAMSITTER_IMAGE=%s\n' "$ref" >"$DIR/.env"
+  printf 'CALLSITTER_IMAGE=%s\n' "$ref" >"$DIR/.env"
 }
 
 pull() {
@@ -119,7 +119,7 @@ cmd_deploy() {
 
   activate "$ref"
   log "starting the new release"
-  if compose up -d --wait --wait-timeout 180 scamsitter; then
+  if compose up -d --wait --wait-timeout 180 callsitter; then
     DRAINED=""
     echo "$ref" >>"$RELEASES"
     prune
@@ -133,12 +133,12 @@ cmd_deploy() {
   local failed
   failed="$FAILED_LOGS/$(date -u +%Y%m%dT%H%M%SZ)-$(digest_of "$ref").log"
   mkdir -p "$FAILED_LOGS"
-  compose logs --no-log-prefix --tail 200 scamsitter >"$failed" 2>&1 || true
+  compose logs --no-log-prefix --tail 200 callsitter >"$failed" 2>&1 || true
   log "the new release didn't become healthy; its logs: sudo cat $failed"
   if [[ -n $prev ]]; then
     log "rolling back to $prev"
     activate "$prev"
-    compose up -d --wait --wait-timeout 180 scamsitter || log "rollback didn't become healthy either"
+    compose up -d --wait --wait-timeout 180 callsitter || log "rollback didn't become healthy either"
     DRAINED=""
   fi
   exit 1
@@ -146,7 +146,7 @@ cmd_deploy() {
 
 control_backup() {
   running || { log "not running: backup skipped"; return 0; }
-  compose exec -T scamsitter bun scripts/backup-db.ts "/data/backups/$1"
+  compose exec -T callsitter bun scripts/backup-db.ts "/data/backups/$1"
 }
 
 cmd_rollback() {
@@ -165,7 +165,7 @@ cmd_status() {
   echo "release:  ${cur:-none}"
   [[ -n $cur ]] && echo "revision: $(revision "$cur")"
   if [[ -f $DIR/compose.yaml ]]; then
-    compose ps --format '{{.Name}}: {{.Status}}' scamsitter
+    compose ps --format '{{.Name}}: {{.Status}}' callsitter
     if running; then control status || true; fi
   fi
 }
@@ -193,5 +193,5 @@ case ${1:-} in
   drain) cmd_drain ;;
   resume) cmd_resume ;;
   backup) cmd_backup ;;
-  *) die "usage: scamsitter-deploy deploy <image@sha256:…> | rollback | status | drain | resume | backup" ;;
+  *) die "usage: callsitter-deploy deploy <image@sha256:…> | rollback | status | drain | resume | backup" ;;
 esac

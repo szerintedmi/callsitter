@@ -1,4 +1,4 @@
-# ScamSitter
+# CallSitter
 
 AI call screener: Telnyx media stream ↔ OpenAI Live (gpt-live-1), TypeSafe Jev classification on caller pauses, a deterministic call flow (`config/call-flow.yaml` rules over Jev answers), GPT-6 Luna for guidance/tools. See README.md.
 
@@ -8,7 +8,7 @@ AI call screener: Telnyx media stream ↔ OpenAI Live (gpt-live-1), TypeSafe Jev
 - `bun run typecheck`, `bun run check-config`
 - `bun run replay <transcript> --fake`: offline Jev/call-flow replay
 - Production: `Dockerfile`, `deploy/compose.yaml`, VPS scripts in `deploy/vps/`, `.github/workflows/`; runbook in `docs/deploy.md`. A deploy drains calls through the loopback control API (`src/web/control.ts`, `scripts/control.ts`) before replacing the container. Files the image needs must also be allowed in `.dockerignore`.
-- `bun run prod get-db | get-logs [--days n] | get-call-log <id> | get-recording <id>`: copy production data into `data/prod/` for bug investigations (read-only, over `ssh scamsitter-vps`; docs/deploy.md). Query the copies locally with `sqlite3`/`jq`.
+- `bun run prod get-db | get-logs [--days n] | get-call-log <id> | get-recording <id>`: copy production data into `data/prod/` for bug investigations (read-only, over `ssh callsitter-vps`; docs/deploy.md). Query the copies locally with `sqlite3`/`jq`.
 - `bun run eval [names…] [--runs N]`: on-demand evals against the real vendors (`evals/cases.yaml`); run after prompt or Jev changes, not every time. Eval-only code stays in `evals/`, not in `src/`.
 
 ## Conventions

@@ -248,7 +248,7 @@ export function adminRoutes(d: AdminDeps) {
     const f = parseFilter(c.req.query());
     const calls = await d.repo.listCalls(200, f);
     return c.html(
-      <Layout title="ScamSitter">
+      <Layout title="CallSitter">
         <nav>
           <h1>Calls</h1>
           <a href="/analytics">Page analytics</a>

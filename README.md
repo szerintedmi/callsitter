@@ -1,4 +1,4 @@
-# ScamSitter
+# CallSitter
 
 An AI that answers my phone. Scammers get their time wasted, sales calls get a polite no, and real callers get their message taken.
 
@@ -75,7 +75,7 @@ Replay examples:
 
 **SIP test call** (same page, route "SIP"): the call reaches OpenAI over SIP, the way a real call arrives with OpenAI SIP.
 
-- A Telnyx WebRTC client can't dial an external SIP URI: Telnyx answers `404 Invalid destination number D11`. So the page dials `scamsittertest<nonce>` on a credential connection that parks calls. `/telnyx/webhook` then `transfer`s the parked call to `sip:<project>@sip.api.openai.com` with TLS and SRTP, forwarding the nonce in `X-ScamSitter-Test`.
+- A Telnyx WebRTC client can't dial an external SIP URI: Telnyx answers `404 Invalid destination number D11`. So the page dials `callsittertest<nonce>` on a credential connection that parks calls. `/telnyx/webhook` then `transfer`s the parked call to `sip:<project>@sip.api.openai.com` with TLS and SRTP, forwarding the nonce in `X-CallSitter-Test`.
 - It needs the setup in [OpenAI SIP](#openai-sip). Test calls show up as `browser (SIP)`.
 - The page's **Debug log** shows the Telnyx call states (with SIP codes) and the server's log lines.
 
@@ -223,7 +223,7 @@ These differ from the original plan:
   - Verified on 2026-09-24: Telnyx Call Control → `sip:<project>@sip.api.openai.com` with TLS and SRTP reaches OpenAI. The webhook, accept, sideband, greeting, recording and hangup all worked.
   - Verified on 2026-09-27 with the number on an FQDN connection (8 calls from a UK mobile): no gaps in the sideband's caller audio; on the three checked, the watchdog heard the same speech as Telnyx's recording; silence prompts and the silent-line hangup worked. Turn gaps in Telnyx's recording (caller stops → agent starts): median 2.10 s over the media stream, 1.78–1.86 s over SIP. Telnyx ↔ OpenAI took 640–740 ms per turn with the default anchor, 520–580 ms anchored in London.
   - `sip-eu.api.openai.com` refuses our project: "401 This endpoint is only accessible by projects with geography restrictions enabled" (an EU data-residency project).
-  - Whether Telnyx passes the `X-ScamSitter-Test` header from a `transfer` through to OpenAI.
+  - Whether Telnyx passes the `X-CallSitter-Test` header from a `transfer` through to OpenAI.
   - Which From/To/Diversion headers arrive. They're logged on every SIP call.
   - Whether the sideband gets `session.started` on attach. The adapter treats an open socket as ready.
 - Interruptions: how much already-sent agent audio still plays after the caller cuts in, and whether that's acceptable.

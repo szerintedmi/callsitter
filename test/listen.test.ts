@@ -30,7 +30,7 @@ describe("listen routes", () => {
     expect(html).toContain('href="/bot"');
     expect(html).not.toContain("tel:");
     expect(html).not.toContain("4620 6827");
-    expect(html).toContain('href="https://github.com/szerintedmi/scamsitter"');
+    expect(html).toContain('href="https://github.com/szerintedmi/callsitter"');
   });
 
   test("the song demo comes first, of four tabs", () => {
@@ -122,7 +122,7 @@ describe("public page with the real calls", async () => {
 
   test("/play has the home page's top bar, with the player's chip, and no phone number", async () => {
     const games = await (await page.request("http://x/play")).text();
-    expect(games).toContain('<header class="rc-top"><a class="rc-brand" href="/">SCAMSITTER</a>');
+    expect(games).toContain('<header class="rc-top"><a class="rc-brand" href="/">CALLSITTER</a>');
     expect(games).toContain('<b id="wasted">0:00:00</b>');
     expect(games).toContain('<a class="rc-own" href="/bot">GET YOUR OWN BOT</a>');
     expect(games).toMatch(/<div class="rc-right"><button class="chip" type="button" data-chip hidden><\/button><a class="rc-own"/);
@@ -135,7 +135,7 @@ describe("public page with the real calls", async () => {
   test("the bot page: the headline and the form, no blurb, no phone number", async () => {
     const html = await (await page.request("http://x/bot")).text();
     expect(html).toContain("GET YOUR OWN BOT.");
-    expect(html).not.toContain("ScamSitter answers your phone");
+    expect(html).not.toContain("CallSitter answers your phone");
     expect(html).not.toContain('class="rc-own"');
     expect(html).not.toContain("tel:");
   });
@@ -152,7 +152,7 @@ describe("public page with the real calls", async () => {
     expect(privacy).toContain("<h1>PRIVACY</h1>");
     expect(privacy).toContain("180 days");
     for (const html of [terms, privacy]) {
-      expect(html).toContain('<header class="rc-top"><a class="rc-brand" href="/">SCAMSITTER</a>');
+      expect(html).toContain('<header class="rc-top"><a class="rc-brand" href="/">CALLSITTER</a>');
       expect(html).not.toContain('class="rc-own"');
       expect(html).not.toContain("tel:");
     }

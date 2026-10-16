@@ -22,16 +22,16 @@ export const isSipCall = (callControlId: string) => callControlId.startsWith(PRE
 export const sipSessionId = (callControlId: string) => callControlId.slice(PREFIX.length);
 
 /** SIP header the browser SIP test sends with its nonce (headers are untrusted, so it can only make a call dry-run). */
-export const TEST_HEADER = "X-ScamSitter-Test";
+export const TEST_HEADER = "X-CallSitter-Test";
 
 /**
  * What the browser SIP test dials: the WebRTC call parks at Telnyx (a WebRTC client can't dial
  * an external SIP URI: Telnyx answers 404 D11), our Telnyx webhook reads the nonce from the
  * dialled destination and transfers the call to OpenAI's SIP endpoint.
  */
-export const TEST_DIAL_PREFIX = "scamsittertest";
+export const TEST_DIAL_PREFIX = "callsittertest";
 export const testDial = (nonce: string) => `${TEST_DIAL_PREFIX}${nonce}`;
-/** The nonce in a parked call's `to` (e.g. `scamsittertest<hex>` or `sip:scamsittertest<hex>@…`). */
+/** The nonce in a parked call's `to` (e.g. `callsittertest<hex>` or `sip:callsittertest<hex>@…`). */
 export function nonceFromDialled(to: string | undefined): string | undefined {
   return to?.match(new RegExp(`${TEST_DIAL_PREFIX}([0-9a-f]{32})`))?.[1];
 }

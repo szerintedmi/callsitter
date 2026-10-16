@@ -27,9 +27,9 @@ jobs:
       - name: Dockerfile uses the Bun version in .bun-version
         run: grep -q "^FROM oven/bun:$(cat .bun-version)-slim@sha256:" Dockerfile
       - name: shellcheck VPS scripts
-        run: shellcheck deploy/vps/bootstrap.sh deploy/vps/scamsitter-deploy deploy/vps/scamsitter-deploy-ssh
+        run: shellcheck deploy/vps/bootstrap.sh deploy/vps/callsitter-deploy deploy/vps/callsitter-deploy-ssh
       - name: Compose file is valid
-        run: SCAMSITTER_IMAGE=scamsitter:ci SCAMSITTER_ENV_FILE=/dev/null docker compose -f deploy/compose.yaml config -q
+        run: CALLSITTER_IMAGE=callsitter:ci CALLSITTER_ENV_FILE=/dev/null docker compose -f deploy/compose.yaml config -q
 
   image:
     # On main, deploy.yml builds and pushes the image itself.
