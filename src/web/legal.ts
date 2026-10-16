@@ -49,7 +49,7 @@ export const termsPage = (base: string, o: { wastedSeconds: number }) =>
 <li>The bot is an AI. What it says is not advice, and it may say odd or wrong things.</li>
 </ul>
 <h2>CONTENT</h2>
-<p>The recordings on this site are of real scam calls, edited to protect the people in them. You may link to them, but don't claim them as your own or use them to harass anyone.</p>
+<p>The recordings on this site are of real calls, edited to protect the people in them. All rights reserved: you may link to them, but don't copy, republish or reuse them, or use them to harass anyone. The site's code is open source under the <a href="${REPO}/blob/main/LICENSE">Apache License 2.0</a>; the recordings, the CallSitter name and the logo are not part of it.</p>
 <h2>LIABILITY</h2>
 <p>To the extent the law allows, I am not liable for any loss or damage from using this site. You use it at your own risk.</p>
 <h2>CHANGES AND CONTACT</h2>

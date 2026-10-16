@@ -58,3 +58,7 @@ bun run dev               # http://127.0.0.1:8787/ (admin UI), config hot-reload
 - [Vendor APIs](docs/vendor-apis.md): how the design maps to Live, Jev and Telnyx, and what's been verified on real calls.
 - [Production deploy](docs/deploy.md): the VPS, deploys, backups, copying prod data.
 - [Real-call demos](demos/README.md): making a new recording for the public page.
+
+## License
+
+The code is [Apache-2.0](LICENSE). The call recordings in `demos/` and the logo in `assets/` are not: all rights reserved ([NOTICE](NOTICE)).
