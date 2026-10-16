@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { ClientAssets } from "./admin";
-import { favicon } from "./favicon";
+import { favicon, logo } from "./favicon";
 
 // Real call recordings, the public site's home page: each recording with its transcript and an
 // animation of the two sides (src/web/client/listen.ts). Names and personal details are already
@@ -147,7 +147,7 @@ export const head = (title: string, description: string, css: string) => `<!doct
  * `player`: the game page's player chip, first on the right (topCss; public.ts moves it on a phone).
  */
 export const top = (base: string, wastedSeconds: number, o: { botLink: boolean; player?: string }) =>
-  `<header class="rc-top"><a class="rc-brand" href="${base}">CALLSITTER</a><p class="rc-wasted">Scammer time wasted: <b id="wasted">${hms(wastedSeconds)}</b></p><div class="rc-right">${
+  `<header class="rc-top"><a class="rc-brand" href="${base}">${logo}CALLSITTER</a><p class="rc-wasted">Scammer time wasted: <b id="wasted">${hms(wastedSeconds)}</b></p><div class="rc-right">${
     o.player ?? ""
   }${o.botLink ? `<a class="rc-own" href="${base}bot">GET YOUR OWN BOT</a>` : ""}<a class="rc-gh" href="https://github.com/szerintedmi/callsitter" aria-label="CallSitter on GitHub">${github}</a></div></header>`;
 
@@ -295,7 +295,8 @@ export const topCss = `
 .rc-col{--rc-chrome:318px;width:min(1132px,100% - 32px,max(560px,(100svh - var(--rc-chrome)) * 16 / 9));margin:0 auto}
 .rc-top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px 20px;padding:14px 0 12px;border-bottom:3px solid var(--line)}
 .rc-brand{justify-self:start}
-.rc-brand{font-family:var(--disp);font-size:34px;line-height:1;letter-spacing:.03em;color:var(--paper);text-decoration:none}
+.logo{flex:none;width:24px;height:24px}
+.rc-brand{display:inline-flex;align-items:center;gap:10px;font-family:var(--disp);font-size:34px;line-height:1;letter-spacing:.03em;color:var(--paper);text-decoration:none}
 .rc-wasted{margin:0;text-align:center;font-size:15px;color:var(--dim);white-space:nowrap}
 .rc-wasted b{font-family:var(--disp);font-weight:400;font-size:24px;color:var(--amb);font-variant-numeric:tabular-nums;vertical-align:-2px;margin-left:4px}
 .rc-right{display:flex;align-items:center;gap:16px;justify-self:end;min-height:37px}

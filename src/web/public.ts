@@ -12,7 +12,7 @@ import { GoalWatch } from "../core/referee";
 import type { OpenAiWebRtc, WebRtcAnswer } from "../adapters/openai-live/webrtc";
 import { hostOf } from "./admin-guard";
 import type { ClientAssets } from "./admin";
-import { favicon } from "./favicon";
+import { favicon, logo } from "./favicon";
 import { privacyPage, termsPage } from "./legal";
 import { botPage, DEMOS, findDemo, legal, realCallsPage, top, topCss } from "./listen";
 
@@ -487,7 +487,8 @@ canvas.sprite{image-rendering:pixelated;display:block;flex:none;height:auto}
 .scr{position:absolute;inset:0;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden}
 .band{flex:none;display:flex;align-items:center;justify-content:center;gap:12px;padding:10px 16px;padding-top:max(10px,env(safe-area-inset-top));background:var(--ink);color:var(--paper);position:relative}
 .band h1{margin:0;font-family:var(--disp);font-weight:400;font-size:clamp(28px,5vh,40px);line-height:1;letter-spacing:.03em}
-.band h1 button{font:inherit;letter-spacing:inherit}
+.band h1 button{font:inherit;letter-spacing:inherit;display:inline-flex;align-items:center;gap:10px}
+.logo{flex:none;width:24px;height:24px}
 .band .back{position:absolute;left:12px;bottom:10px;font-family:var(--disp);font-size:28px;padding:0 10px}
 .chip{font-family:var(--disp);font-size:22px;line-height:1;letter-spacing:.06em;padding:5px 9px 6px;color:var(--amb);box-shadow:inset 0 0 0 2px var(--line);white-space:nowrap}
 .chip small{font-size:18px;color:var(--dim);margin-right:6px}
@@ -595,7 +596,7 @@ body[data-mode="scam"] .modebg h2{text-shadow:3px 3px 0 rgba(0,0,0,.18)}
 .ch.cur.empty::after{content:"";position:absolute;left:25%;right:25%;bottom:10px;height:10px;background:var(--m-fg);animation:blink 1s steps(2) infinite}
 #name-in{position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;font-size:16px}
 .cbar{flex:none;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;padding-top:max(12px,env(safe-area-inset-top))}
-.cbrand{font-family:var(--disp);font-size:24px;letter-spacing:.03em;color:var(--dim)}
+.cbrand{display:inline-flex;align-items:center;gap:8px;font-family:var(--disp);font-size:24px;letter-spacing:.03em;color:var(--dim)}
 .cstage{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:safe center;gap:clamp(22px,5vh,48px);padding:0 16px 20px;padding-bottom:max(20px,env(safe-area-inset-bottom));width:100%;max-width:440px;margin-inline:auto;text-align:center}
 .mission{width:100%;position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 14px 26px;margin-bottom:14px;background:var(--ink2);box-shadow:inset 0 0 0 3px var(--m);color:var(--paper);text-align:center}
 .mtab{position:absolute;left:50%;top:100%;transform:translate(-50%,-50%);font-family:var(--disp);font-size:clamp(22px,3.6vh,28px);line-height:1;letter-spacing:.04em;padding:5px 14px 6px;background:var(--m);color:var(--m-fg);white-space:nowrap;text-transform:uppercase}
@@ -696,7 +697,7 @@ ${
   realCalls
     ? `    <div class="ptop"><div class="rc-col">${top(base, lobby.wasted.seconds, { botLink: true, player: `<button class="chip" type="button" data-chip hidden></button>` })}</div></div>`
     : `    <header class="band hero">
-      <h1><button type="button" data-home>CALLSITTER</button></h1><button class="chip" type="button" data-chip hidden></button>
+      <h1><button type="button" data-home>${logo}CALLSITTER</button></h1><button class="chip" type="button" data-chip hidden></button>
       <p class="tagline">WASTE THE TIME OF SCAMMERS WHO CALL YOU</p>
       <p class="wasted"><b id="wasted">0:00:00</b><span>SCAMMER TIME WASTED SO FAR</span></p>
     </header>`
@@ -707,7 +708,7 @@ ${
   </section>
 
   <section class="scr callbg" id="s-call" hidden>
-    <header class="cbar"><span class="cbrand">CALLSITTER</span><button class="chip" type="button" data-chip></button></header>
+    <header class="cbar"><span class="cbrand">${logo}CALLSITTER</span><button class="chip" type="button" data-chip></button></header>
     <div class="cstage">
       <div class="mission" id="mission"><span class="mtab" id="m-tab"></span><span class="card-top"><b id="m-name"></b><span class="hard" id="m-hard" hidden>HARD</span></span><p id="m-brief"></p></div>
       <div class="clock"><span class="lbl" id="c-lbl">CALLING…</span><div class="cnum"><b id="c-time">00:00</b><span class="cside" id="c-side" hidden><span class="xb" id="c-x"></span><span class="pts">PTS</span></span></div></div>
@@ -718,7 +719,7 @@ ${
   </section>
 
   <section class="scr modebg" id="s-result" hidden>
-    <header class="band"><h1><button type="button" data-home>CALLSITTER</button></h1><button class="chip" type="button" data-chip hidden></button></header>
+    <header class="band"><h1><button type="button" data-home>${logo}CALLSITTER</button></h1><button class="chip" type="button" data-chip hidden></button></header>
     <div class="stage">
       <h2 id="r-title"></h2>
       <div class="r-score"><span class="r-lbl" id="r-lbl" hidden></span><b id="r-time"></b><span id="r-rank"></span></div>
@@ -730,7 +731,7 @@ ${
   </section>
 
   <section class="scr modebg" id="s-out" hidden>
-    <header class="band"><h1><button type="button" data-home>CALLSITTER</button></h1><button class="chip" type="button" data-chip hidden></button></header>
+    <header class="band"><h1><button type="button" data-home>${logo}CALLSITTER</button></h1><button class="chip" type="button" data-chip hidden></button></header>
     <div class="stage">
       <h2 id="out-title">OUT OF GAME</h2>
       <p class="out-msg" id="out-msg">WE'VE RUN OUT OF GAME FOR TODAY. CHECK BACK LATER!</p>
@@ -746,7 +747,7 @@ ${
   </section>
 
   <section class="scr modebg overlay" id="s-name" hidden>
-    <header class="band"><button class="back" type="button" id="name-x" aria-label="Close">✕</button><h1><button type="button" data-home>CALLSITTER</button></h1></header>
+    <header class="band"><button class="back" type="button" id="name-x" aria-label="Close">✕</button><h1><button type="button" data-home>${logo}CALLSITTER</button></h1></header>
     <div class="stage">
       <span class="tag" id="name-tag"></span>
       <h2>PLAYER NAME</h2>

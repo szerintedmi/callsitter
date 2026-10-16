@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { demoMedia } from "../src/runtime/demo-media";
+import { logo } from "../src/web/favicon";
 import { DEMOS, listenRoutes, realCallsPage } from "../src/web/listen";
 import { publicRoutes, type PublicDeps } from "../src/web/public";
 import { loadRepoConfig } from "./helpers";
@@ -122,7 +123,7 @@ describe("public page with the real calls", async () => {
 
   test("/play has the home page's top bar, with the player's chip, and no phone number", async () => {
     const games = await (await page.request("http://x/play")).text();
-    expect(games).toContain('<header class="rc-top"><a class="rc-brand" href="/">CALLSITTER</a>');
+    expect(games).toContain(`<header class="rc-top"><a class="rc-brand" href="/">${logo}CALLSITTER</a>`);
     expect(games).toContain('<b id="wasted">0:00:00</b>');
     expect(games).toContain('<a class="rc-own" href="/bot">GET YOUR OWN BOT</a>');
     expect(games).toMatch(/<div class="rc-right"><button class="chip" type="button" data-chip hidden><\/button><a class="rc-own"/);
@@ -152,7 +153,7 @@ describe("public page with the real calls", async () => {
     expect(privacy).toContain("<h1>PRIVACY</h1>");
     expect(privacy).toContain("180 days");
     for (const html of [terms, privacy]) {
-      expect(html).toContain('<header class="rc-top"><a class="rc-brand" href="/">CALLSITTER</a>');
+      expect(html).toContain(`<header class="rc-top"><a class="rc-brand" href="/">${logo}CALLSITTER</a>`);
       expect(html).not.toContain('class="rc-own"');
       expect(html).not.toContain("tel:");
     }
