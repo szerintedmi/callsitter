@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpenAiWebRtc } from "../src/adapters/openai-live/webrtc";
 import { FsBlobStore } from "../src/adapters/storage/fs-blob";
-import { notifySignups } from "../src/adapters/storage/schema";
+import { notifySignups, pageEvents } from "../src/adapters/storage/schema";
 import { openSqlite, SqliteRepo } from "../src/adapters/storage/sqlite";
 import { TelnyxApi } from "../src/adapters/telnyx/api";
 import { TelnyxVerifier } from "../src/adapters/telnyx/signature";
@@ -542,6 +542,93 @@ describe("public page (fake OpenAI)", () => {
     const { callId } = (await (await call()).json()) as { callId: string };
     await until(async () => (await repo.getCall(callId))?.status === "ended");
     expect((await repo.getCall(callId))?.endReason).toBe("max call length reached");
+    config.set(cfg);
+  });
+});
+
+describe("page analytics: POST call/e", () => {
+  const CHROME = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0 Mobile/15E148 Safari/604.1";
+  const visit = "visitAAAAAAAAAAA";
+  const beacon = (events: unknown[], now = Date.now()) => ({ visit, load: "loadAAAAAAAAAAAA", now, events });
+  const send = (body: unknown, headers: Record<string, string> = {}, host?: string) =>
+    fetch(`${base()}/call/e`, {
+      method: "POST",
+      headers: { origin: host ? `http://${host}` : base(), "content-type": "text/plain", "user-agent": CHROME, "cf-connecting-ip": "10.9.9.1", ...(host ? { host } : {}), ...headers },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+  const rows = () => db.select().from(pageEvents).all();
+
+  test("stores the events with the server's time, the visitor's IP, user agent, language and location", async () => {
+    db.delete(pageEvents).run();
+    // the page's clock is a day off: only the time since each event counts
+    const now = Date.now() + 86_400_000;
+    const res = await send(
+      beacon(
+        [
+          { type: "view", t: now - 5000, path: "/", props: { referrer: "https://news.ycombinator.com/item?id=1", vw: 390, lang: "en-GB" } },
+          { type: "play", t: now - 1000, path: "/", demo: "police-scam", props: { position: 0 } },
+          { type: "click", t: now, path: "/", demo: "nope", props: { action: "link", target: "x".repeat(1000) } },
+        ],
+        now,
+      ),
+      { "cf-ipcountry": "gb", "cf-ipcity": "London", "accept-language": "en-GB" },
+    );
+    expect(res.status).toBe(204);
+    const r = rows();
+    expect(r.map((x) => [x.type, x.demo, x.browser, x.mobile, x.country])).toEqual([
+      ["view", null, "Chrome", true, "GB"],
+      ["play", "police-scam", "Chrome", true, "GB"],
+      // a recording that isn't one is dropped
+      ["click", null, "Chrome", true, "GB"],
+    ]);
+    expect(r[0]!.props).toMatchObject({ refHost: "news.ycombinator.com", source: "news.ycombinator.com" });
+    expect(Math.abs(r[0]!.at - (Date.now() - 5000))).toBeLessThan(1000);
+    expect(r[1]!.at - r[0]!.at).toBeGreaterThan(3500);
+    expect((r[2]!.props.target as string).length).toBe(300);
+    expect(r[0]).toMatchObject({ ip: "10.9.9.1", userAgent: CHROME, os: "iOS", device: "mobile", acceptLanguage: "en-GB", city: "London" });
+  });
+
+  test("bad batches are refused; bots, the admin preview and analytics.yaml off store nothing", async () => {
+    db.delete(pageEvents).run();
+    const ok = [{ type: "view", t: Date.now(), path: "/" }];
+    expect((await send("not json")).status).toBe(400);
+    expect((await send({ ...beacon(ok), visit: "short" })).status).toBe(400);
+    expect((await send(beacon([{ type: "hover", t: 1 }]))).status).toBe(400);
+    expect((await send(beacon(Array.from({ length: 51 }, () => ok[0])))).status).toBe(400);
+    expect((await send(beacon([{ type: "click", t: 1, props: { "bad key": 1 } }]))).status).toBe(400);
+    expect((await send(beacon([{ type: "click", t: 1, props: { nested: { a: 1 } } }]))).status).toBe(400);
+    expect((await send(JSON.stringify(beacon(ok)) + " ".repeat(17_000))).status).toBe(413);
+    // another site's page can't post them
+    expect((await send(beacon(ok), { origin: "https://evil.example" })).status).toBe(403);
+    expect((await send(beacon(ok), { "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" })).status).toBe(204);
+    expect((await send(beacon(ok), { "user-agent": "" })).status).toBe(204);
+    expect((await fetch(`${base()}/public/call/e`, { method: "POST", headers: { host: "admin.test", origin: "http://admin.test", "user-agent": CHROME }, body: JSON.stringify(beacon(ok)) })).status).toBe(204);
+    const cfg = config.get();
+    config.set({ ...cfg, analytics: { ...cfg.analytics, enabled: false } });
+    expect((await send(beacon(ok))).status).toBe(204);
+    config.set(cfg);
+    expect(rows()).toEqual([]);
+  });
+
+  test("requests per IP per minute are capped (analytics.yaml)", async () => {
+    db.delete(pageEvents).run();
+    const cfg = config.get();
+    config.set({ ...cfg, analytics: { ...cfg.analytics, requests_per_ip_per_minute: 2 } });
+    const ok = beacon([{ type: "view", t: Date.now(), path: "/" }]);
+    const ip = { "cf-connecting-ip": "10.9.9.2" };
+    expect((await send(ok, ip)).status).toBe(204);
+    expect((await send(ok, ip)).status).toBe(204);
+    expect((await send(ok, ip)).status).toBe(429);
+    expect((await send(ok, { "cf-connecting-ip": "10.9.9.3" })).status).toBe(204);
+    config.set(cfg);
+    expect(rows()).toHaveLength(3);
+  });
+
+  test("the pages turn tracking on only when analytics.yaml does", async () => {
+    expect(await (await fetch(`${base()}/`)).text()).toContain('data-analytics="1"');
+    const cfg = config.get();
+    config.set({ ...cfg, analytics: { ...cfg.analytics, enabled: false } });
+    expect(await (await fetch(`${base()}/`)).text()).not.toContain("data-analytics");
     config.set(cfg);
   });
 });

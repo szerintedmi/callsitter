@@ -144,13 +144,16 @@ export const top = (base: string, wastedSeconds: number, o: { botLink: boolean; 
   }${o.botLink ? `<a class="rc-own" href="${base}bot">GET YOUR OWN BOT</a>` : ""}<a class="rc-gh" href="https://github.com/szerintedmi/scamsitter" aria-label="ScamSitter on GitHub">${github}</a></div></header>`;
 
 /** The home page: the recordings, and a call to try the bot from the browser (the games at /play). */
-export function realCallsPage(base: string, o: { selected: string; autoplay: boolean; wastedSeconds: number }): string {
+export function realCallsPage(
+  base: string,
+  o: { selected: string; autoplay: boolean; wastedSeconds: number; /** page analytics on (analytics.yaml) */ analytics?: boolean },
+): string {
   const config: PlayerConfig = { demos: DEMOS, selected: o.selected, autoplay: o.autoplay, render: false, base };
   const tabs = DEMOS.map(
-    (x) => `<a class="rc-tab s-${x.scene}" href="${base}listen/${x.slug}" data-slug="${x.slug}">${esc(x.title)}</a>`,
+    (x) => `<a class="rc-tab s-${x.scene}" href="${base}listen/${x.slug}" data-slug="${x.slug}" data-notrack>${esc(x.title)}</a>`,
   ).join("");
   return `${head("ScamSitter", "Real calls to my phone, answered by ScamSitter, the bot that wastes scammers' time.", rootCss + topCss + homeCss + realCallsCss)}
-<body>
+<body${o.analytics ? ` data-analytics="1"` : ""}>
 <div class="rc-col">
 ${top(base, o.wastedSeconds, { botLink: true })}
 <main class="rc" id="rc">

@@ -199,13 +199,14 @@ export function publicRoutes(d: PublicDeps) {
   }
 
   // Mounted at / (public host) and /public (admin preview): the page's URLs are under its own path.
-  const game = async (base: string) => page(base, await lobby(), d.realCalls);
+  const game = async (base: string) => page(base, await lobby(), d.realCalls, d.config().analytics.enabled);
   if (d.realCalls) {
     const home = async (base: string, slug?: string) =>
       realCallsPage(base, {
         selected: slug ?? DEMOS[0]!.slug,
         autoplay: slug !== undefined,
         wastedSeconds: (await wasted()).seconds,
+        analytics: d.config().analytics.enabled,
       });
     app.get("/", async (c) => c.html(await home(c.req.path.replace(/\/?$/, "/"))));
     app.get("/play", async (c) => c.html(await game(c.req.path.slice(0, c.req.path.lastIndexOf("play")))));
@@ -669,7 +670,7 @@ const half = (game: Game, title: string, goal: string, sprite: string) => `
         <div class="detail" data-detail="${game}"></div>
       </div>`;
 
-const page = (base: string, lobby: Lobby, realCalls?: boolean) => `<!doctype html>
+const page = (base: string, lobby: Lobby, realCalls?: boolean, analytics?: boolean) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -683,7 +684,7 @@ const page = (base: string, lobby: Lobby, realCalls?: boolean) => `<!doctype htm
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jersey+10&family=Pixelify+Sans:wght@500;600&display=swap">
 <style>${css}${realCalls ? topCss : ""}</style>
 </head>
-<body data-base="${base}" data-mode="scam" class="idle">
+<body data-base="${base}" data-mode="scam" class="idle"${analytics ? ` data-analytics="1"` : ""}>
 <div id="app">
   <section class="scr" id="s-home">
 ${
@@ -706,7 +707,7 @@ ${
       <div class="mission" id="mission"><span class="mtab" id="m-tab"></span><span class="card-top"><b id="m-name"></b><span class="hard" id="m-hard" hidden>HARD</span></span><p id="m-brief"></p></div>
       <div class="clock"><span class="lbl" id="c-lbl">CALLING…</span><div class="cnum"><b id="c-time">00:00</b><span class="cside" id="c-side" hidden><span class="xb" id="c-x"></span><span class="pts">PTS</span></span></div></div>
       <div class="meter" id="meter"><div class="mbar" id="mbar" aria-hidden="true"></div><div class="mlbl"><span>GENUINE</span><span>SCAM</span></div></div>
-      <button class="hang" type="button" id="end" aria-label="Hang up">${hangIcon}</button>
+      <button class="hang" type="button" id="end" aria-label="Hang up" data-track="hangup">${hangIcon}</button>
     </div>
     <div class="banner" id="banner" hidden></div>
   </section>
@@ -718,7 +719,7 @@ ${
       <div class="r-score"><span class="r-lbl" id="r-lbl" hidden></span><b id="r-time"></b><span id="r-rank"></span></div>
       <p class="r-extra" id="r-extra" hidden><canvas class="sprite" data-sprite="sparkle" width="9" height="9"></canvas><span id="r-wasted"></span><canvas class="sprite" data-sprite="sparkle" width="9" height="9"></canvas></p>
       <ol class="board" id="r-board"></ol>
-      <div class="r-btns"><button class="btn" type="button" id="again">PLAY AGAIN</button><button class="btn ghost" type="button" id="menu">CHANGE GAME</button></div>
+      <div class="r-btns"><button class="btn" type="button" id="again" data-track="play_again">PLAY AGAIN</button><button class="btn ghost" type="button" id="menu" data-track="change_game">CHANGE GAME</button></div>
     </div>
     <footer class="band foot">PLAY NOW. REAL SCAMMERS PAY LATER.</footer>
   </section>
@@ -731,10 +732,10 @@ ${
       <form class="notify" id="notify" method="post" novalidate>
         <label for="notify-in">WANT A SHOUT WHEN WE'RE BACK?</label>
         <input id="notify-in" type="email" name="email" autocomplete="email" inputmode="email" maxlength="254" spellcheck="false" placeholder="you@example.com" required>
-        <button class="btn" type="submit" id="notify-ok">NOTIFY ME</button>
+        <button class="btn" type="submit" id="notify-ok" data-track="notify">NOTIFY ME</button>
       </form>
       <p class="out-msg" id="notify-done" hidden>THANKS! WE'LL LET YOU KNOW.</p>
-      <div class="r-btns"><button class="btn ghost" type="button" id="out-back">BACK</button></div>
+      <div class="r-btns"><button class="btn ghost" type="button" id="out-back" data-track="out_back">BACK</button></div>
     </div>
     <footer class="band foot">REAL SCAMMERS NEVER TAKE A DAY OFF. WE DO.</footer>
   </section>

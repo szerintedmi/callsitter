@@ -15,6 +15,7 @@ import { spokenNumber } from "./phone";
 //   limits.yaml      call limits per channel (phone, test, public): spend, calls, call length
 //   games.yaml       the public page's games: goals, scoring and leaderboards
 //   telegram.yaml    the owner's Telegram: a status message per call, and steering the call from it
+//   analytics.yaml   the public site's own page analytics: on or off, how long they're kept
 
 /** gpt-live-1 built-in voices (openai BuiltInVoice in resources/live/live.d.ts). */
 export const LIVE_VOICES = [
@@ -574,6 +575,16 @@ export const LoggingConfig = z.object({
   retention_days: z.number().int().min(1).default(30),
 });
 
+// The public site's first-party page analytics (src/core/analytics.ts, src/web/analytics.tsx): no
+// cookies; each event keeps the visitor's IP, user agent and Cloudflare location.
+export const AnalyticsConfig = z.object({
+  enabled: z.boolean().default(true),
+  // rows older than this are deleted at startup and daily
+  retention_days: z.number().int().min(1).default(180),
+  // POST call/e per client IP per minute (in memory)
+  requests_per_ip_per_minute: z.number().int().min(1).default(60),
+});
+
 // The owner's Telegram (TELEGRAM_* in .env): one status message per call, edited as it goes on,
 // and steering: the owner's messages reach Live as steering.text.
 export const TelegramConfig = z.object({
@@ -674,6 +685,7 @@ export type LimitsConfig = z.infer<typeof LimitsConfig>;
 export type GamesConfig = z.infer<typeof GamesConfig>;
 export type TelegramConfig = z.infer<typeof TelegramConfig>;
 export type LoggingConfig = z.infer<typeof LoggingConfig>;
+export type AnalyticsConfig = z.infer<typeof AnalyticsConfig>;
 
 export interface AppConfig {
   live: LiveConfig;
@@ -687,6 +699,7 @@ export interface AppConfig {
   games: GamesConfig;
   telegram: TelegramConfig;
   logging: LoggingConfig;
+  analytics: AnalyticsConfig;
 }
 
 const schemas = {
@@ -701,6 +714,7 @@ const schemas = {
   games: GamesConfig,
   telegram: TelegramConfig,
   logging: LoggingConfig,
+  analytics: AnalyticsConfig,
 } as const;
 
 export type ConfigName = keyof typeof schemas;
@@ -718,6 +732,7 @@ export const CONFIG_FILES: Record<ConfigName, string> = {
   games: "games.yaml",
   telegram: "telegram.yaml",
   logging: "logging.yaml",
+  analytics: "analytics.yaml",
 };
 
 /** Supplies the raw (already YAML-parsed) value for each config file. */
