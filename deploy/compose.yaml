@@ -1,15 +1,15 @@
 # Production Compose file. It ships inside the image (/app/deploy/compose.yaml); the VPS deploy
-# script (deploy/vps/scamsitter-deploy) extracts it and sets SCAMSITTER_IMAGE to the image digest.
+# script (deploy/vps/callsitter-deploy) extracts it and sets CALLSITTER_IMAGE to the image digest.
 # cloudflared runs on the host (systemd) and reaches the app on 127.0.0.1:8787; no public ports.
-name: scamsitter
+name: callsitter
 services:
-  scamsitter:
-    image: ${SCAMSITTER_IMAGE:?set by scamsitter-deploy}
+  callsitter:
+    image: ${CALLSITTER_IMAGE:?set by callsitter-deploy}
     pull_policy: missing
     restart: unless-stopped
     # Runtime secrets and settings (PUBLIC_WS_BASE, API keys, ADMIN_HOST, CF_ACCESS_*), root-only.
     # Both paths can be overridden for a local test run (docs/deploy.md).
-    env_file: ${SCAMSITTER_ENV_FILE:-/etc/scamsitter/scamsitter.env}
+    env_file: ${CALLSITTER_ENV_FILE:-/etc/callsitter/callsitter.env}
     # Fixed for the container; these win over the env file.
     environment:
       NODE_ENV: production
@@ -19,7 +19,7 @@ services:
       CONFIG_DIR: /app/config
     volumes:
       # SQLite, recordings, greetings and backups survive container replacement.
-      - ${SCAMSITTER_DATA_DIR:-/var/lib/scamsitter}:/data
+      - ${CALLSITTER_DATA_DIR:-/var/lib/callsitter}:/data
     ports:
       - "127.0.0.1:8787:8787"
     healthcheck:

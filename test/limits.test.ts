@@ -136,7 +136,7 @@ describe("call limits", () => {
 });
 
 test("the channel migration backfills calls from before it", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "scamsitter-migrate-"));
+  const dir = mkdtempSync(join(tmpdir(), "callsitter-migrate-"));
   try {
     // The migrations up to 0005, on a DB with calls from each channel.
     const before = join(dir, "before");

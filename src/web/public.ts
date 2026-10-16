@@ -682,7 +682,7 @@ const page = (base: string, lobby: Lobby, realCalls?: boolean, analytics?: boole
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="description" content="Scam my phone's AI, or get through to me. Every game helps it waste real scammers' time.">
 <meta name="theme-color" content="#0e0d10">
-<title>ScamSitter</title>
+<title>CallSitter</title>
 <link rel="icon" href="${favicon}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -696,7 +696,7 @@ ${
   realCalls
     ? `    <div class="ptop"><div class="rc-col">${top(base, lobby.wasted.seconds, { botLink: true, player: `<button class="chip" type="button" data-chip hidden></button>` })}</div></div>`
     : `    <header class="band hero">
-      <h1><button type="button" data-home>SCAMSITTER</button></h1><button class="chip" type="button" data-chip hidden></button>
+      <h1><button type="button" data-home>CALLSITTER</button></h1><button class="chip" type="button" data-chip hidden></button>
       <p class="tagline">WASTE THE TIME OF SCAMMERS WHO CALL YOU</p>
       <p class="wasted"><b id="wasted">0:00:00</b><span>SCAMMER TIME WASTED SO FAR</span></p>
     </header>`
@@ -707,7 +707,7 @@ ${
   </section>
 
   <section class="scr callbg" id="s-call" hidden>
-    <header class="cbar"><span class="cbrand">SCAMSITTER</span><button class="chip" type="button" data-chip></button></header>
+    <header class="cbar"><span class="cbrand">CALLSITTER</span><button class="chip" type="button" data-chip></button></header>
     <div class="cstage">
       <div class="mission" id="mission"><span class="mtab" id="m-tab"></span><span class="card-top"><b id="m-name"></b><span class="hard" id="m-hard" hidden>HARD</span></span><p id="m-brief"></p></div>
       <div class="clock"><span class="lbl" id="c-lbl">CALLING…</span><div class="cnum"><b id="c-time">00:00</b><span class="cside" id="c-side" hidden><span class="xb" id="c-x"></span><span class="pts">PTS</span></span></div></div>
@@ -718,7 +718,7 @@ ${
   </section>
 
   <section class="scr modebg" id="s-result" hidden>
-    <header class="band"><h1><button type="button" data-home>SCAMSITTER</button></h1><button class="chip" type="button" data-chip hidden></button></header>
+    <header class="band"><h1><button type="button" data-home>CALLSITTER</button></h1><button class="chip" type="button" data-chip hidden></button></header>
     <div class="stage">
       <h2 id="r-title"></h2>
       <div class="r-score"><span class="r-lbl" id="r-lbl" hidden></span><b id="r-time"></b><span id="r-rank"></span></div>
@@ -730,7 +730,7 @@ ${
   </section>
 
   <section class="scr modebg" id="s-out" hidden>
-    <header class="band"><h1><button type="button" data-home>SCAMSITTER</button></h1><button class="chip" type="button" data-chip hidden></button></header>
+    <header class="band"><h1><button type="button" data-home>CALLSITTER</button></h1><button class="chip" type="button" data-chip hidden></button></header>
     <div class="stage">
       <h2 id="out-title">OUT OF GAME</h2>
       <p class="out-msg" id="out-msg">WE'VE RUN OUT OF GAME FOR TODAY. CHECK BACK LATER!</p>
@@ -746,7 +746,7 @@ ${
   </section>
 
   <section class="scr modebg overlay" id="s-name" hidden>
-    <header class="band"><button class="back" type="button" id="name-x" aria-label="Close">✕</button><h1><button type="button" data-home>SCAMSITTER</button></h1></header>
+    <header class="band"><button class="back" type="button" id="name-x" aria-label="Close">✕</button><h1><button type="button" data-home>CALLSITTER</button></h1></header>
     <div class="stage">
       <span class="tag" id="name-tag"></span>
       <h2>PLAYER NAME</h2>

@@ -1,5 +1,5 @@
 {
-  "name": "scamsitter",
+  "name": "callsitter",
   "type": "module",
   "private": true,
   "devDependencies": {

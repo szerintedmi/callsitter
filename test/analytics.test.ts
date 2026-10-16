@@ -13,7 +13,7 @@ const DEMOS = ["areyouai", "police-scam", "crypto-bot", "electrician"];
 const SAFARI = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
 
 describe("beacons", () => {
-  const ctx = { now: 1_000_000, ip: "203.0.113.7", userAgent: SAFARI, acceptLanguage: "de-DE,de;q=0.9", country: "DE", city: "Berlin", host: "scamsitter.example", demos: DEMOS };
+  const ctx = { now: 1_000_000, ip: "203.0.113.7", userAgent: SAFARI, acceptLanguage: "de-DE,de;q=0.9", country: "DE", city: "Berlin", host: "callsitter.example", demos: DEMOS };
   const view = (props: Record<string, unknown>) => ({ visit: "v".repeat(16), load: "l".repeat(16), now: 500, events: [{ type: "view", t: 500, path: "/", props }] });
   const source = (props: Record<string, unknown>) => {
     const r = parseBeacon(view(props), ctx);
@@ -24,7 +24,7 @@ describe("beacons", () => {
   test("a view's source: utm_source, then ?ref=, then the referrer's host (not this site's)", () => {
     expect(source({ referrer: "https://www.reddit.com/r/x", utm_source: "Newsletter", ref: "gh" })).toMatchObject({ refHost: "reddit.com", source: "newsletter" });
     expect(source({ referrer: "https://www.reddit.com/r/x", ref: "gh" })).toMatchObject({ source: "gh" });
-    expect(source({ referrer: "https://scamsitter.example/play" })).not.toHaveProperty("source");
+    expect(source({ referrer: "https://callsitter.example/play" })).not.toHaveProperty("source");
     expect(source({ referrer: null })).not.toHaveProperty("refHost");
   });
 

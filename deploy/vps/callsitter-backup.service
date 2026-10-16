@@ -1,0 +1,7 @@
+[Unit]
+Description=CallSitter nightly SQLite backup (/var/lib/callsitter/backups)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/callsitter-deploy backup

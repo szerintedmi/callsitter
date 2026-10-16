@@ -367,7 +367,7 @@ async function startSip() {
       status("dialling OpenAI through Telnyx…");
       sipCall = client.newCall({
         destinationNumber: j.dial,
-        callerNumber: "scamsittertest",
+        callerNumber: "callsittertest",
         audio: true,
         remoteElement: "remote",
         customHeaders: [{ name: j.header, value: j.nonce }],

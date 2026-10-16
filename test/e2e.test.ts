@@ -24,7 +24,7 @@ import { loadRepoConfig, scripted } from "./helpers";
 // Jev tick → tell_live appended → the owner steers from Telegram → hangup → summary on the
 // owner's status message → recording → UI.
 
-const dataDir = mkdtempSync(join(tmpdir(), "scamsitter-"));
+const dataDir = mkdtempSync(join(tmpdir(), "callsitter-"));
 const telnyxRequests: { url: string; body: any }[] = [];
 const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input);

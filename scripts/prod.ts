@@ -1,19 +1,19 @@
 #!/usr/bin/env bun
-// Copies production data to the laptop for bug investigations, over `ssh scamsitter-vps` (Cloudflare
+// Copies production data to the laptop for bug investigations, over `ssh callsitter-vps` (Cloudflare
 // Access; docs/deploy.md) with the admin login's sudo. Everything lands in data/prod/ (gitignored).
-//   bun run prod get-db                    a consistent copy of the database → data/prod/scamsitter-<time>.db
+//   bun run prod get-db                    a consistent copy of the database → data/prod/callsitter-<time>.db
 //   bun run prod get-logs [--days <n>]     log files changed in the last n days (default 3) → data/prod/logs/
 //   bun run prod get-call-log <call id>    one call's log file → data/prod/logs/
 //   bun run prod get-recording <call id>   the call's recordings → data/prod/recordings/
-// PROD_SSH_HOST overrides the ssh host (default scamsitter-vps).
+// PROD_SSH_HOST overrides the ssh host (default callsitter-vps).
 import { Database } from "bun:sqlite";
 import { mkdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 
-const HOST = process.env.PROD_SSH_HOST || "scamsitter-vps";
-const DATA = "/var/lib/scamsitter"; // /data in the container
-const PROJECT = "/opt/scamsitter"; // the deploy's compose project (deploy/vps/scamsitter-deploy)
+const HOST = process.env.PROD_SSH_HOST || "callsitter-vps";
+const DATA = "/var/lib/callsitter"; // /data in the container
+const PROJECT = "/opt/callsitter"; // the deploy's compose project (deploy/vps/callsitter-deploy)
 const OUT = "data/prod";
 
 const USAGE = "usage: bun run prod get-db | get-logs [--days <n>] | get-call-log <call id> | get-recording <call id>";
@@ -74,12 +74,12 @@ switch (cmd) {
   case "get-db": {
     mkdirSync(OUT, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const dest = join(OUT, `scamsitter-${stamp}.db`);
+    const dest = join(OUT, `callsitter-${stamp}.db`);
     // VACUUM INTO inside the running container (scripts/backup-db.ts): consistent while calls write.
     const tmp = `backups/.pull-${stamp}.db`;
     const ssh = remote(
       `trap "rm -f ${DATA}/${tmp}" EXIT; ` +
-        `docker compose --project-directory ${PROJECT} exec -T scamsitter bun scripts/backup-db.ts /data/${tmp} >&2 && gzip -c ${DATA}/${tmp}`,
+        `docker compose --project-directory ${PROJECT} exec -T callsitter bun scripts/backup-db.ts /data/${tmp} >&2 && gzip -c ${DATA}/${tmp}`,
     );
     const written = await Bun.write(`${dest}.tmp`, new Response(ssh.stdout.pipeThrough(new DecompressionStream("gzip")))).catch((e: Error) => e);
     const err = failed(await ssh.exited, "get-db") ?? (written instanceof Error ? `get-db: ${written.message}` : null);

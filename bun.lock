@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "scamsitter",
+      "name": "callsitter",
       "dependencies": {
         "@typesafe-ai/sdk": "0.6.0",
         "drizzle-orm": "0.45.4",

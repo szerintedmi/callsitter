@@ -1,5 +1,5 @@
 # Production tunnel, rendered to /etc/cloudflared/config.yml by bootstrap.sh (placeholders from
-# /etc/scamsitter/deploy.conf). cloudflared runs on the host as a systemd service.
+# /etc/callsitter/deploy.conf). cloudflared runs on the host as a systemd service.
 #   HOOKS_HOST  public: the Telnyx/OpenAI webhooks, media streams, /healthz, the public page (/, /call…) and /listen…
 #   ADMIN_HOST  admin UI, behind a Cloudflare Access application (the app verifies the Access JWT)
 #   SSH_HOST    SSH, behind a Cloudflare Access application (your login + the deploy service token)

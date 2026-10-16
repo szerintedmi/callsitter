@@ -14,9 +14,9 @@ import { readEnv } from "../src/runtime/env";
 
 const DRY = process.argv.includes("--dry-run");
 const ROTATE = process.argv.includes("--rotate-secret");
-const WEBHOOK_NAME = "scamsitter-sip";
-const CONNECTION_NAME = "scamsitter-sip-test";
-const CREDENTIAL_NAME = "scamsitter-browser";
+const WEBHOOK_NAME = "callsitter-sip";
+const CONNECTION_NAME = "callsitter-sip-test";
+const CREDENTIAL_NAME = "callsitter-browser";
 const TELNYX = "https://api.telnyx.com/v2";
 
 const env = readEnv();
@@ -103,7 +103,7 @@ if (!conn) {
     conn = (
       await telnyx("POST", "/credential_connections", {
         connection_name: CONNECTION_NAME,
-        user_name: `scamsitter${rand(10)}`,
+        user_name: `callsitter${rand(10)}`,
         password: rand(32),
         active: true,
         ...(ovp ? { outbound: { outbound_voice_profile_id: ovp } } : {}),
