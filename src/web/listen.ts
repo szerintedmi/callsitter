@@ -176,14 +176,44 @@ ${legal(base)}
 </html>`;
 }
 
+// The bot page's pixel icons, 12×12: one character per pixel, "." transparent.
+const PX: Record<string, string> = { p: "#fff6ec", k: "#0e0d10", d: "#8d8994", a: "#ffb000", r: "#d8281f" };
+const ICONS = {
+  robot: [".....rr.....", ".....dd.....", "..pppppppp..", "..pppppppp..", ".dpkkppkkpd.", ".dpkkppkkpd.", "..pppppppp..", "..pprrrrpp..", "..pppppppp..", "............", "...aaaaaa...", "..aaaaaaaa.."],
+  forward: [".pppppp.....", ".pkkkkp.....", ".pkkkkp..a..", ".pkkkkp..aa.", ".pkkkkpaaaaa", ".pkkkkpaaaaa", ".pkkkkp..aa.", ".pkkkkp..a..", ".pkkkkp.....", ".pppppp.....", ".ppkkpp.....", ".pppppp....."],
+  popcorn: ["...pp..pp...", "..pppppppp..", ".ppappppapp.", ".pppppapppp.", ".rrpprrpprr.", ".rrpprrpprr.", ".rrpprrpprr.", "..rpprrppr..", "..rpprrppr..", "..rpprrppr..", "...pprrpp...", "...pprrpp..."],
+};
+/** An inline SVG, one rect per run of same-coloured pixels in a row. */
+const pixelIcon = (rows: string[]) =>
+  `<svg viewBox="0 0 12 12" width="48" height="48" shape-rendering="crispEdges" aria-hidden="true">${rows
+    .flatMap((row, y) => [...row.matchAll(/([^.])\1*/g)].map((m) => `<rect x="${m.index}" y="${y}" width="${m[0].length}" height="1" fill="${PX[m[1]!]}"/>`))
+    .join("")}</svg>`;
+
 /** "Get your own bot": not open yet, a waitlist (POST call/waitlist). Its few lines of script are inline. */
 export function botPage(base: string, o: { wastedSeconds: number }): string {
-  return `${head("Get your own bot · ScamSitter", "Get ScamSitter on your own phone: join the waitlist.", rootCss + topCss + homeCss + botCss)}
+  return `${head("Get your own bot · ScamSitter", "Get ScamSitter on your own phone: forward your calls to your own bot, get them on Telegram. Join the waitlist.", rootCss + topCss + homeCss + botCss)}
 <body>
 <div class="rc-col">
 ${top(base, o.wastedSeconds, { botLink: false })}
 <main class="bot">
-  <h1 class="rc-h"><b>GET YOUR OWN BOT.</b></h1>
+  <h1 class="rc-h"><b>GET YOUR OWN BOT.</b><span>It answers the calls you don't. Scammers lose their time, sales calls get a polite no, real callers leave a message.</span></h1>
+  <section class="bot-sec" aria-labelledby="bot-how">
+    <h2 id="bot-how">HOW IT WORKS</h2>
+    <ol class="bot-steps">
+      <li>${pixelIcon(ICONS.robot)}<b>REGISTER YOUR BOT</b><span>Pick its voice and how it treats callers. You get a local number, just for you.</span></li>
+      <li>${pixelIcon(ICONS.forward)}<b>FORWARD YOUR CALLS</b><span>With your phone's call forwarding: all calls, or only the ones you miss or are busy for. No app.</span></li>
+      <li>${pixelIcon(ICONS.popcorn)}<b>POPCORN TIME</b><span>Sit back: the bot takes your calls and sends you live updates on Telegram.</span></li>
+    </ol>
+  </section>
+  <section class="bot-sec" aria-labelledby="bot-get">
+    <h2 id="bot-get">WHAT YOU GET</h2>
+    <ul class="bot-feats">
+      <li><b>LIVE UPDATES</b><span>Follow every call on Telegram as it happens, with a summary when it ends.</span></li>
+      <li><b>STEER IT LIVE</b><span>Tell the bot what to say, how to act, or to hang up, right from Telegram.</span></li>
+      <li><b>RECORDINGS</b><span>Listen back to every call, with the transcript.</span></li>
+      <li><b>MAKE IT YOURS</b><span>Its voice, its character, who it lets through, tuned to your taste.</span></li>
+    </ul>
+  </section>
   <form class="wl" id="wl" method="post" novalidate>
     <label class="sr" for="wl-in">Your email</label>
     <input id="wl-in" type="email" name="email" autocomplete="email" inputmode="email" maxlength="254" spellcheck="false" placeholder="you@example.com" required>
@@ -191,7 +221,7 @@ ${top(base, o.wastedSeconds, { botLink: false })}
   </form>
   <p class="wl-err" id="wl-err" role="alert" hidden></p>
   <p class="wl-done" id="wl-done" role="status" hidden>THANKS! YOU'RE ON THE LIST.</p>
-  <a class="bot-back" href="${base}">BACK TO THE REAL CALLS</a>
+  <div class="bot-try"><a class="bot-play" href="${base}play">PLAY THE BOT <i>▶</i></a><span>Call it from your browser</span></div>
 </main>
 ${legal(base)}
 </div>
@@ -307,9 +337,22 @@ const homeCss = `
 `;
 
 const botCss = `
-.bot{max-width:600px;margin:0 auto;padding:14vh 0 40px;text-align:center}
+.bot{max-width:600px;margin:0 auto;padding:7vh 0 40px;text-align:center}
 .bot .rc-h{justify-content:center;margin:0 0 22px}
+.bot .rc-h{flex-direction:column;align-items:center;gap:12px}
 .bot .rc-h b{font-size:64px}
+.bot .rc-h span{max-width:520px;font-size:18px;line-height:1.4}
+.bot-sec{margin:0 0 30px;text-align:left}
+.bot-sec h2{margin:0 0 12px;font-family:var(--disp);font-weight:400;font-size:28px;line-height:1;letter-spacing:.05em;color:var(--dim)}
+.bot-steps,.bot-feats{margin:0;padding:0;list-style:none;display:grid;gap:10px}
+.bot-steps li,.bot-feats li{display:grid;align-content:start;gap:4px;padding:12px 14px;box-shadow:inset 0 0 0 3px var(--line);font-size:16px;line-height:1.4}
+.bot-steps{counter-reset:step}
+.bot-steps li{counter-increment:step;grid-template-columns:auto 1fr;column-gap:16px}
+.bot-steps svg{grid-row:span 2;align-self:center}
+.bot-steps b::before{content:counter(step) ". ";color:var(--amb)}
+.bot-feats{grid-template-columns:1fr 1fr}
+.bot-steps b,.bot-feats b{font-family:var(--disp);font-weight:400;font-size:24px;line-height:1;letter-spacing:.04em;color:var(--paper)}
+.bot-steps span,.bot-feats span{color:var(--dim)}
 .bot .wl{justify-content:center}
 .bot p{margin:0;font-size:18px;line-height:1.4}
 .wl{display:flex;gap:10px;flex-wrap:wrap}
@@ -321,14 +364,21 @@ const botCss = `
 .wl button:disabled{opacity:.6}
 .bot .wl-err{margin-top:12px;color:var(--red-hi);font-size:16px}
 .bot .wl-done{font-family:var(--disp);font-size:32px;line-height:1;letter-spacing:.03em;color:var(--amb)}
-.bot-back{display:inline-block;margin-top:32px;font-family:var(--disp);font-size:22px;letter-spacing:.04em;color:var(--dim);text-decoration:none}
-.bot-back:hover{color:var(--paper)}
+.bot-try{display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:36px}
+.bot .bot-try span{font-size:14px;color:var(--dim)}
+.bot-play{display:block;padding:8px 20px 10px;background:var(--ink);color:var(--paper);box-shadow:inset 0 0 0 3px var(--red),4px 4px 0 #000;text-decoration:none;font-family:var(--disp);font-size:28px;line-height:1;letter-spacing:.04em}
+.bot-play i{font-style:normal;font-size:.7em;vertical-align:.08em;color:var(--red-hi)}
+.bot-play:hover{background:var(--red)}
+.bot-play:hover i{color:var(--paper)}
+.bot-play:active{transform:translate(2px,2px);box-shadow:inset 0 0 0 3px var(--red),2px 2px 0 #000}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 [hidden]{display:none!important}
 @media (max-width:640px){
 .bot{padding:48px 16px 32px}
 .bot .rc-h{align-items:center;margin:0 0 16px}
 .bot .rc-h b{font-size:44px}
+.bot .rc-h span{font-size:16px}
+.bot-feats{grid-template-columns:1fr}
 .bot p{font-size:16px}
 .wl button{flex:1 1 100%}
 }
