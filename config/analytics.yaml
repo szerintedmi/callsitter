@@ -1,0 +1,7 @@
+# The public site's own page analytics (src/web/analytics.tsx; the admin UI's /analytics): which
+# recordings get listened to and for how long, clicks, referrers. First-party only: no cookies,
+# no third parties. Each event keeps a per-tab random visit id, the visitor's IP, user agent
+# (browser, OS, device), Accept-Language and Cloudflare's country/city/region.
+enabled: true                  # false: the pages send nothing and POST call/e stores nothing
+retention_days: 180            # older rows are deleted at startup and daily
+requests_per_ip_per_minute: 60 # POST call/e per client IP (in memory)

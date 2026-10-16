@@ -99,13 +99,20 @@ table.sip{font:12px/1.4 ui-monospace,monospace}table.sip th{white-space:nowrap;c
 .tag.ch-public{color:var(--agent)}
 .ended{max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tag.by-live,.tag.by-system{color:var(--spam)}
 .ev.has-tip .g{cursor:help}
+/* analytics (src/web/analytics.tsx) */
+.stats{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 8px}.stats div{background:var(--card);border-radius:8px;padding:8px 14px;min-width:140px}
+.stats b{display:block;font-size:22px;font-variant-numeric:tabular-nums}.stats span{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0 24px}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.hbar{display:inline-block;height:8px;background:var(--agent);border-radius:2px;vertical-align:middle;margin-right:6px}
+.mono{font:12px/1.4 ui-monospace,monospace}
 .tip{position:fixed;z-index:10;display:none;max-width:min(520px,calc(100vw - 16px));max-height:70vh;overflow:hidden;padding:8px 10px;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.3);font-size:12px;line-height:1.45;pointer-events:none;overflow-wrap:anywhere}
 .tip.on{display:block}.tip h4{margin:0 0 4px;font-size:12px}.tip .pre{white-space:pre-wrap}.tip .sec{margin-top:6px;padding-top:6px;border-top:1px solid var(--line)}
 .tip table{width:auto}.tip th,.tip td{padding:1px 10px 1px 0;border:0;font-size:12px}.tip th{color:var(--muted);font-weight:500}
 .tip pre{margin:2px 0 0;white-space:pre-wrap;font:11px/1.4 ui-monospace,monospace;color:var(--muted)}
 `;
 
-const Layout: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) => (
+export const Layout: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) => (
   <html lang="en">
     <head>
       <meta charset="utf-8" />
@@ -120,7 +127,7 @@ const Layout: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) =
   </html>
 );
 
-const fmtTime = (ms: number) => new Date(ms).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "medium" });
+export const fmtTime = (ms: number) => new Date(ms).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "medium" });
 const fmtDur = (r: CallRecord) => {
   if (!r.endedAt) return r.status === "ended" ? "–" : "live";
   const s = Math.round((r.endedAt - r.startedAt) / 1000);
@@ -244,6 +251,7 @@ export function adminRoutes(d: AdminDeps) {
       <Layout title="ScamSitter">
         <nav>
           <h1>Calls</h1>
+          <a href="/analytics">Page analytics</a>
           <a href="/test-call">Test call from this computer →</a>
         </nav>
         <FilterRow label="Channel" f={f} k="channel" values={CHANNELS} />

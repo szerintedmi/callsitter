@@ -1,3 +1,4 @@
+import type { AnalyticsSummary, PageEventRecord, VisitSummary } from "./analytics";
 import type { AudioFormat } from "./audio";
 import type { AppConfig, GamesConfig, JevConfig, LiveAppend, LunaTool } from "./config";
 import type { BoardEntry, Game } from "./game";
@@ -256,6 +257,16 @@ export interface Repo {
   junkCallSeconds(): Promise<number>;
   /** stores a "notify me" sign-up; an email signed up before gets the new details and is pending (not notified) again */
   addNotifySignup(s: NotifySignup): Promise<void>;
+  /** the public site's page analytics (src/core/analytics.ts) */
+  addPageEvents(rows: PageEventRecord[]): Promise<void>;
+  /** the dashboard's numbers over events at or after `since` */
+  pageStats(since: number, demos: readonly string[]): Promise<AnalyticsSummary>;
+  /** visits seen at or after `since`, newest first */
+  pageVisits(since: number, limit: number): Promise<VisitSummary[]>;
+  /** a visit's events, oldest first */
+  pageVisit(visitId: string): Promise<PageEventRecord[]>;
+  /** deletes page events from before `before`; how many */
+  prunePageEvents(before: number): Promise<number>;
 }
 
 /** A public page visitor who asked to hear when there's game again (POST call/notify). */

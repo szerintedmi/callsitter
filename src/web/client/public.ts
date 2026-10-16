@@ -2,6 +2,7 @@
 // leaderboard. The call itself is phone.ts; scores are settled on the server (src/core/game.ts).
 
 import { dial, type Call, type PlayState } from "./phone";
+import { startTracking, track } from "./track";
 
 type Game = "scam" | "get_through";
 /** `intro`: scam only, how to start it */
@@ -15,6 +16,8 @@ interface Result { game: Game; goal: string; player: string; scoreMs: number | n
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const base = document.body.dataset.base || "/";
+// Page analytics (track.ts): links and [data-track] buttons, plus the game and goal picked below.
+startTracking(base);
 let lobby = JSON.parse($("lobby").textContent || "{}") as Lobby;
 const LABEL: Record<Game, string> = { scam: "SCAM ME", get_through: "GET THROUGH" };
 /** A game's start page: how to play, and what the leaderboard ranks. */
@@ -179,11 +182,15 @@ split.querySelectorAll<HTMLElement>(".half").forEach((h) => {
     const t = e.target as HTMLElement;
     if (t.closest(".x")) return splitSet(null);
     if (t.closest("[data-start]")) {
+      track("click", { action: "start", target: `${g}/${goalOf(g).id}` });
       setMode(g);
       if (lobby.out) return showOut(lobby.out);
       return player ? startGame() : openName("call");
     }
-    if (!h.classList.contains("on")) splitSet(g);
+    if (!h.classList.contains("on")) {
+      track("click", { action: "game", target: g });
+      splitSet(g);
+    }
   });
   h.addEventListener("keydown", (e) => {
     if ((e.key === "Enter" || e.key === " ") && e.target === h) {

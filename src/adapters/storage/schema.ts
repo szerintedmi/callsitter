@@ -1,4 +1,5 @@
 import { integer, real, sqliteTable, text, index } from "drizzle-orm/sqlite-core";
+import type { Device, PageEventType, PropValue } from "../../core/analytics";
 import type { CallCosts, EndedBy } from "../../core/types";
 
 export const calls = sqliteTable(
@@ -84,6 +85,38 @@ export const notifySignups = sqliteTable("notify_signups", {
   // for whoever sends the "we're back" mail later; cleared when the email signs up again
   notifiedAt: integer("notified_at"),
 });
+
+// The public site's page analytics (src/core/analytics.ts).
+export const pageEvents = sqliteTable(
+  "page_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    // random, per browser tab (sessionStorage), and per page load
+    visitId: text("visit_id").notNull(),
+    loadId: text("load_id").notNull(),
+    at: integer("at").notNull(),
+    type: text("type").$type<PageEventType>().notNull(),
+    path: text("path"),
+    demo: text("demo"),
+    props: text("props", { mode: "json" }).$type<Record<string, PropValue>>().notNull(),
+    // Cloudflare's CF-Connecting-IP
+    ip: text("ip"),
+    userAgent: text("user_agent"),
+    // parsed from the user agent
+    browser: text("browser"),
+    browserVersion: text("browser_version"),
+    os: text("os"),
+    osVersion: text("os_version"),
+    device: text("device").$type<Device>(),
+    mobile: integer("mobile", { mode: "boolean" }),
+    acceptLanguage: text("accept_language"),
+    // Cloudflare's CF-IPCountry, CF-IPCity, CF-Region
+    country: text("country"),
+    city: text("city"),
+    region: text("region"),
+  },
+  (t) => [index("page_events_at_idx").on(t.at), index("page_events_visit_idx").on(t.visitId, t.at)],
+);
 
 export type CallRow = typeof calls.$inferSelect;
 export type EventRow = typeof events.$inferSelect;

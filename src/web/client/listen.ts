@@ -5,6 +5,7 @@
 // at a time. Everything drawn is a function of t.
 import * as THREE from "three";
 import { createScene, type BlunderKind, type CallScene, type Moment, type SceneKind, type SongMoment, type SongSection } from "./listen-scene";
+import { mergeSpans, onHide, spanSeconds, spansOf, startTracking, track, type Span } from "./track";
 
 type Speaker = "caller" | "agent";
 interface Demo {
@@ -57,6 +58,7 @@ declare global {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+const round1 = (x: number) => Math.round(x * 10) / 10;
 const SPEAKERS: Speaker[] = ["caller", "agent"];
 const phone = window.matchMedia("(max-width: 640px)");
 
@@ -424,6 +426,42 @@ async function main() {
 
   const audio = $<HTMLAudioElement>("rc-audio");
   const nextBtn = $<HTMLButtonElement>("rc-next");
+
+  // Page analytics (track.ts): play, pause and ended with the position, and each recording's
+  // listening totals for this page load (`watch`), sent as they grow: when switching away from it
+  // and when the page is hidden. The server keeps the largest (src/core/analytics.ts).
+  startTracking(cfg.base);
+  /** the recording in the audio element */
+  let audioSlug: string | null = null;
+  /** what was heard of each recording before its audio was last loaded (that resets audio.played) */
+  const heard = new Map<string, Span[]>();
+  const lengths = new Map<string, number>();
+  /** the last totals sent per recording */
+  const reported = new Map<string, string>();
+  const spansFor = (slug: string) => mergeSpans([...(heard.get(slug) ?? []), ...(slug === audioSlug ? spansOf(audio.played) : [])]);
+  const reportWatch = (slug: string) => {
+    const spans = spansFor(slug);
+    if (!spans.length) return;
+    const duration = lengths.get(slug) ?? 0;
+    const played = spanSeconds(spans);
+    const props = { playedSeconds: round1(played), maxPosition: round1(spans.at(-1)![1]), duration: round1(duration), completed: duration > 0 && played >= 0.9 * duration };
+    const key = JSON.stringify(props);
+    if (reported.get(slug) === key) return;
+    reported.set(slug, key);
+    track("watch", props, slug);
+  };
+  onHide(() => {
+    for (const slug of new Set([...heard.keys(), ...(audioSlug ? [audioSlug] : [])])) reportWatch(slug);
+  });
+  const position = () => ({ position: round1(audio.currentTime) });
+  /** the pause that switching calls causes: already reported */
+  let switching = false;
+  audio.addEventListener("play", () => audioSlug && track("play", position(), audioSlug));
+  audio.addEventListener("pause", () => {
+    if (switching) switching = false;
+    else if (audioSlug && !audio.ended) track("pause", position(), audioSlug);
+  });
+  audio.addEventListener("ended", () => audioSlug && track("ended", position(), audioSlug));
   /** the picture runs on past the audio's end (a hang-up, the end card): performance.now() at t=0 */
   let tailFrom: number | null = null;
   const now = () => (tailFrom !== null ? (performance.now() - tailFrom) / 1000 : audio.currentTime);
@@ -444,15 +482,26 @@ async function main() {
   /** Shows a call; with `play`, starts it. A call's link opened cold usually can't: browsers want a
    * tap before sound, so the ▶ waits for it. */
   async function select(slug: string, play: boolean) {
+    if (audioSlug) {
+      heard.set(audioSlug, spansFor(audioSlug));
+      reportWatch(audioSlug);
+      if (!audio.paused) {
+        track("pause", { ...position(), switched: true }, audioSlug);
+        switching = true;
+      }
+    }
     audio.pause();
     stopTail();
     cur = await load(slug);
     audio.src = `${cfg.base}listen/media/${cur.demo.slug}.mp3`;
+    audioSlug = cur.demo.slug;
+    lengths.set(audioSlug, cur.call.duration);
     const next = cfg.demos[(cfg.demos.indexOf(cur.demo) + 1) % cfg.demos.length]!;
     nextBtn.hidden = false;
     nextBtn.textContent = `NEXT ▶ ${next.title.toUpperCase()}`;
     nextBtn.onclick = (e) => {
       e.stopPropagation();
+      track("click", { action: "next", target: next.slug }, audioSlug ?? undefined);
       void choose(next.slug);
     };
     draw(0);
@@ -466,12 +515,15 @@ async function main() {
   for (const tab of document.querySelectorAll<HTMLAnchorElement>(".rc-tab")) {
     tab.onclick = (e) => {
       e.preventDefault();
+      track("click", { action: "tab", target: tab.dataset.slug! }, audioSlug ?? undefined);
       void choose(tab.dataset.slug!);
     };
   }
 
   // the stage is the control: tap to play/pause; after the end, from the start again
   stageEl.onclick = () => {
+    const action = tailFrom !== null || audio.ended ? "replay" : audio.paused ? "play" : "pause";
+    track("click", { action, target: "stage", ...position() }, audioSlug ?? undefined);
     if (tailFrom !== null || audio.ended) {
       stopTail();
       audio.currentTime = 0;
@@ -497,7 +549,10 @@ async function main() {
     seekTo(e);
     seekBar.onpointermove = seekTo;
   };
-  seekBar.onpointerup = () => (seekBar.onpointermove = null);
+  seekBar.onpointerup = () => {
+    seekBar.onpointermove = null;
+    track("click", { action: "seek", target: null, ...position() }, audioSlug ?? undefined);
+  };
   document.addEventListener("keydown", (e) => {
     if (e.key === " " && (e.target === document.body || e.target === stageEl)) {
       e.preventDefault();

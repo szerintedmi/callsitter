@@ -79,7 +79,7 @@ Replay examples:
 - It needs the setup in [OpenAI SIP](#openai-sip). Test calls show up as `browser (SIP)`.
 - The page's **Debug log** shows the Telnyx call states (with SIP codes) and the server's log lines.
 
-**Public site** (`https://<public host>/`, the host Telnyx calls; preview at `/public` on the admin host): the real call recordings at `/` (`src/web/listen.ts`; `/listen/<slug>` opens one, playing), and at `/play` an arcade game-select screen with two games for anyone with the link (`config/games.yaml`, scoring in `src/core/game.ts`).
+**Public site** (`https://<public host>/`, the host Telnyx calls; preview at `/public` on the admin host): the real call recordings at `/` (`src/web/listen.ts`; `/listen/<slug>` opens one, playing), and at `/play` an arcade game-select screen with two games for anyone with the link (`config/games.yaml`, scoring in `src/core/game.ts`). The pages send first-party page analytics (no cookies) in batches to `POST /call/e` (`src/web/analytics.tsx`, `config/analytics.yaml`): views, clicks, plays and how long each recording was heard, with the visitor's IP, user agent and location; the admin UI shows them at `/analytics`.
 
 - **Scam me**: the visitor plays a scammer with a goal (safe account, police, crypto wallet…). The scam starts when they say they're who the goal says (e.g. "Peter from HMRC"); from then until they hang up they score 10 points a second, double before the call flow catches them (`waste_time` stage; `scam.undetected_multiplier`). Most points wins. Chatting before the start doesn't count, and points keep coming once caught, so it pays to stay while the agent wastes *their* time.
 - **Get through**: the visitor plays a real caller with a reason to call. Score: time until they've passed on the message, unless caught first; fastest wins.
@@ -176,6 +176,7 @@ Each file has one job (schemas and cross-file checks: `src/core/config.ts`; `bun
 | `games.yaml`      | The public page's games: goals for Scam me and Get through, the referee that judges them, leaderboard size.                                                                                                  |
 | `telegram.yaml`   | The owner's Telegram: the per-call status message, how steering messages reach Live, and the public-calls group's limits. |
 | `logging.yaml`    | The server's log files (`DATA_DIR/logs`, JSON Lines): how many days they're kept.                                                                                                                            |
+| `analytics.yaml`  | The public site's page analytics: on or off, how many days they're kept, beacons per IP a minute. |
 
 
 What reaches Live, and when:

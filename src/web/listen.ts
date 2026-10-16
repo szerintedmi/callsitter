@@ -119,10 +119,13 @@ export const github = `<svg viewBox="0 0 16 16" width="28" height="28" aria-hidd
 const hms = (s: number) => [Math.floor(s / 3600), Math.floor(s / 60) % 60, Math.floor(s) % 60].map((n, i) => (i ? String(n).padStart(2, "0") : String(n))).join(":");
 
 /** The home page: the recordings, a call to play the game, and the bot's number. */
-export function realCallsPage(base: string, o: { selected: string; autoplay: boolean; wastedSeconds: number; phone: string }): string {
+export function realCallsPage(
+  base: string,
+  o: { selected: string; autoplay: boolean; wastedSeconds: number; phone: string; /** page analytics on (analytics.yaml) */ analytics?: boolean },
+): string {
   const config: PlayerConfig = { demos: DEMOS, selected: o.selected, autoplay: o.autoplay, render: false, base };
   const tabs = DEMOS.map(
-    (x) => `<a class="rc-tab s-${x.scene}" href="${base}listen/${x.slug}" data-slug="${x.slug}">${esc(x.title)}</a>`,
+    (x) => `<a class="rc-tab s-${x.scene}" href="${base}listen/${x.slug}" data-slug="${x.slug}" data-notrack>${esc(x.title)}</a>`,
   ).join("");
   return `<!doctype html>
 <html lang="en">
@@ -138,7 +141,7 @@ export function realCallsPage(base: string, o: { selected: string; autoplay: boo
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jersey+10&family=Pixelify+Sans:wght@500;600&display=swap">
 <style>${rootCss}${homeCss}${realCallsCss}</style>
 </head>
-<body>
+<body${o.analytics ? ` data-analytics="1"` : ""}>
 <header class="rc-top"><div><a class="rc-brand" href="${base}">SCAMSITTER</a><p class="rc-wasted">scammers' time wasted: <b>${hms(o.wastedSeconds)}</b></p></div><a class="rc-gh" href="https://github.com/szerintedmi/scamsitter" aria-label="ScamSitter on GitHub">${github}</a></header>
 <main class="rc" id="rc">
   <h1 class="rc-h"><b>REAL CALL RECORDINGS</b><span>ScamSitter answering my phone</span></h1>

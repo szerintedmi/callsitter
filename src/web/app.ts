@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { adminGuard, adminHosts, hostOf, type AdminAuth, type AdminGuardDeps } from "./admin-guard";
 import { adminRoutes, type AdminDeps } from "./admin";
+import { analyticsAdminRoutes, analyticsRoutes } from "./analytics";
 import { BrowserSipCalls, openAiSipRoutes, type SipRoutesDeps } from "./openai-sip";
 import { listenRoutes, type DemoMedia } from "./listen";
 import { publicRoutes, type PublicDeps } from "./public";
@@ -36,12 +37,16 @@ export function createApp(d: AppDeps) {
   const admin = new Hono();
   admin.use("*", adminGuard(d.adminAuth, d.adminGuardDeps));
   admin.route("/", adminRoutes(d));
+  admin.route("/", analyticsAdminRoutes({ repo: d.repo, config: () => d.config.get() }));
   admin.route("/", testCallRoutes(d));
 
   const pub = d.publicPage ? publicRoutes({ ...d.publicPage, manager: d.manager, repo: d.repo, clientAssets: d.clientAssets, realCalls: !!d.publicPage.demoMedia }) : null;
   if (pub && d.publicPage?.demoMedia) pub.route("/", listenRoutes({ clientAssets: d.clientAssets, media: d.publicPage.demoMedia }));
+  if (pub) pub.route("/", analyticsRoutes({ repo: d.repo, config: () => d.config.get() }));
   if (pub) {
     admin.get("/public/", (c) => c.redirect("/public"));
+    // The owner's previews aren't visitors: their page analytics are dropped.
+    admin.post("/public/call/e", (c) => c.body(null, 204));
     admin.route("/public", pub);
   }
   const publicHost = d.publicPage?.host.toLowerCase();

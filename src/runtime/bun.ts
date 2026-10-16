@@ -83,6 +83,16 @@ if (publicTelegram && !publicTelegram.canListen) {
 const callLink = env.ADMIN_HOST ? (id: string) => `https://${env.ADMIN_HOST}/calls/${encodeURIComponent(id)}` : undefined;
 
 const repo = new SqliteRepo(openSqlite(join(env.DATA_DIR, "scamsitter.db")));
+// The public site's page analytics are kept for analytics.yaml retention_days.
+const prunePageEvents = () => {
+  const days = config.get().analytics.retention_days;
+  repo
+    .prunePageEvents(Date.now() - days * 24 * 60 * 60 * 1000)
+    .then((n) => n && logger("analytics").info(`deleted ${n} page events older than ${days} days`))
+    .catch((err) => logger("analytics").warn("pruning page events failed", { err }));
+};
+prunePageEvents();
+setInterval(prunePageEvents, 24 * 60 * 60 * 1000);
 const blobs = new FsBlobStore(env.DATA_DIR);
 const bus = new MemoryEventBus();
 const persistence = attachPersistence(bus, repo);
