@@ -187,7 +187,7 @@ ${top(base, o.wastedSeconds, { botLink: false, github: false })}
 <main class="rc" id="rc">
   <section class="hero">
     <div><p class="hero-kick">CALL SCREENING. WITH ATTITUDE.</p><h1>LET THE BOT TAKE IT.</h1><p class="hero-sub">My bot answers. Friends get through. Scammers meet their match.</p></div>
-    <div class="hero-cta"><a class="hero-own" href="${base}bot">GET YOUR OWN BOT</a><a class="hero-play" href="${base}play"><b>PLAY THE BOT <i>↗</i></b><span>Can you fool it?</span></a></div>
+    <div class="hero-cta"><a class="hero-own" href="${base}bot">GET YOUR OWN BOT</a><a class="hero-play" href="${base}play"><b>PLAY THE BOT</b><span>Can you fool it?</span></a></div>
   </section>
   <h2 class="rc-h"><b>REAL CALLS.</b><span>Actual recordings from my phone.</span></h2>
   <div class="rc-player">
@@ -325,30 +325,29 @@ const homeCss = `
 .rc-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 16px;margin:14px 0 12px;font-weight:400}
 .rc-h b{font-family:var(--disp);font-weight:400;font-size:56px;line-height:.85;letter-spacing:.03em;color:var(--amb);text-shadow:3px 3px 0 #000}
 .rc-h span{font-size:18px;color:var(--paper)}
-.home .rc-col{width:min(1132px,100% - 32px)}
+.home .rc-col{--side:clamp(240px,24vw,296px);width:min(1132px,100% - 32px)}
 .rc-top.solo{grid-template-columns:1fr auto}
 .rc-top.solo .rc-wasted{justify-self:end}
-.hero{display:grid;grid-template-columns:1fr minmax(240px,296px);align-items:center;gap:20px 32px;padding:30px 0 28px;border-bottom:3px solid var(--line)}
+.hero{display:grid;grid-template-columns:1fr var(--side);align-items:center;gap:20px 32px;padding:30px 0 28px;border-bottom:3px solid var(--line)}
 .hero-kick{margin:0;font-size:20px;font-weight:600;letter-spacing:.06em;color:var(--dim)}
-.hero h1{margin:6px 0 10px;font-family:var(--disp);font-weight:400;font-size:clamp(56px,7.8vw,100px);line-height:.85;letter-spacing:.03em;color:var(--amb);text-shadow:4px 4px 0 #000}
+.hero h1{margin:10px 0 6px;font-family:var(--disp);font-weight:400;font-size:clamp(56px,7.8vw,100px);line-height:.85;letter-spacing:.03em;color:var(--amb);text-shadow:4px 4px 0 #000}
 .hero-sub{margin:0;font-size:21px;line-height:1.3}
 .hero-cta{display:flex;flex-direction:column;gap:14px}
 .hero-own,.hero-play{display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center;text-decoration:none;line-height:1}
 .hero-own{padding:13px 16px 15px;background:var(--amb);color:var(--ink);font-family:var(--disp);font-size:34px;letter-spacing:.04em;box-shadow:5px 5px 0 #000}
-.hero-play{padding:10px 16px 12px;color:var(--paper);box-shadow:inset 0 0 0 3px #a8a1b0}
+.hero-play{padding:10px 16px 12px;color:var(--paper);box-shadow:inset 0 0 0 3px #6b6773}
 .hero-play b{font-family:var(--disp);font-weight:400;font-size:30px;letter-spacing:.04em}
-.hero-play i{font-style:normal;font-family:var(--text);font-size:.7em}
 .hero-play span{font-size:15px;color:#c8c2cf}
 .hero-own:hover{transform:translate(-1px,-1px);box-shadow:6px 6px 0 #000}
 .hero-own:active{transform:translate(2px,2px);box-shadow:2px 2px 0 #000}
 .hero-play:hover{background:var(--ink2);box-shadow:inset 0 0 0 3px var(--paper)}
-.home .rc-h{margin:22px 0 16px}
-.home .rc-h span{font-size:19px;color:#c8c2cf}
-.rc-player{display:grid;grid-template-columns:1fr minmax(220px,268px);gap:16px;align-items:stretch}
-.rc-tabs{display:flex;flex-direction:column;box-shadow:inset 0 0 0 3px var(--line)}
+.home .rc-h{flex-direction:column;align-items:flex-start;gap:8px;margin:24px 0 16px}
+.home .rc-h span{font-size:18px;color:var(--dim)}
+.rc-player{display:grid;grid-template-columns:1fr var(--side);gap:19px;align-items:stretch}
+.rc-tabs{display:flex;flex-direction:column;box-shadow:0 0 0 3px var(--line)}
 .rc-tab{flex:1 1 0;display:flex;align-items:center;gap:20px;min-height:44px;padding:6px 20px;font-size:21px;line-height:1.1;color:#c8c2cf;text-decoration:none}
 .rc-tab+.rc-tab{border-top:3px solid var(--line)}
-.rc-tab i{font-style:normal;color:var(--dim);font-variant-numeric:tabular-nums}
+.rc-tab i{flex:none;width:1.3em;font-style:normal;color:var(--dim)}
 .rc-tab:hover{color:var(--paper);background:var(--ink2)}
 .rc-tab[aria-current]{color:var(--paper);background:var(--ink2);box-shadow:inset 6px 0 0 var(--amb)}
 .rc-tab[aria-current] i{color:var(--paper)}

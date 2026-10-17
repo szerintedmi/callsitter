@@ -29,7 +29,7 @@ describe("listen routes", () => {
     expect(html).toContain("REAL CALLS.");
     expect(html).toContain("LET THE BOT TAKE IT.");
     expect(html).toContain('<a class="hero-own" href="/bot">GET YOUR OWN BOT</a>');
-    expect(html).toContain('<a class="hero-play" href="/play"><b>PLAY THE BOT <i>↗</i></b><span>Can you fool it?</span></a>');
+    expect(html).toContain('<a class="hero-play" href="/play"><b>PLAY THE BOT</b><span>Can you fool it?</span></a>');
     expect(html).not.toContain('class="rc-own"');
     expect(html).toContain('<header class="rc-top solo">');
     expect(html).not.toContain("tel:");
