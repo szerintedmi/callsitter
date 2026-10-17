@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { demoMedia } from "../src/runtime/demo-media";
+import { callTimeAt, resolveCut } from "../src/web/client/listen-cut";
 import { logo } from "../src/web/favicon";
 import { DEMOS, listenRoutes, realCallsPage } from "../src/web/listen";
 import { publicRoutes, type PublicDeps } from "../src/web/public";
@@ -58,6 +59,14 @@ describe("listen routes", () => {
     expect(await song.text()).toContain('"selected":"areyouai"');
   });
 
+  test("the recorder's page takes a layout and the safe area off", async () => {
+    const config = async (q: string) => JSON.parse((await (await get(`/listen/render/areyouai${q}`)).text()).match(/id="rc-config">(.*?)<\/script>/s)![1]!);
+    expect(await config("")).toMatchObject({ safe: true });
+    expect((await config("")).layout).toBeUndefined();
+    expect(await config("?layout=stack&safe=0")).toMatchObject({ layout: "stack", safe: false });
+    expect((await get("/listen/render/areyouai?layout=diagonal")).status).toBe(400);
+  });
+
   test("unknown demos and files are not found", async () => {
     expect((await get("/listen/render/nope")).status).toBe(404);
     expect((await get("/listen/media/nope.mp3")).status).toBe(404);
@@ -71,6 +80,47 @@ describe("listen routes", () => {
 
   test("the page script is served", async () => {
     expect(await (await get("/assets/listen.js")).text()).toBe("// page");
+  });
+});
+
+// An edit for a video (record.ts --edit): segments end to end, each a whole number of frames, song
+// cuts on the beat grid, stills, sped-up stretches.
+describe("cuts", () => {
+  const song = { bpm: 120, beat: 10 };
+
+  test("segments play end to end on the video's clock", () => {
+    const { pieces, duration } = resolveCut({ segments: [{ from: 5, to: 7 }, { hold: 20, for: 1 }, { from: 30, to: 42, speed: 4 }] }, undefined, 30);
+    expect(duration).toBeCloseTo(6);
+    expect(pieces.map((p) => [p.out, p.len, p.audio])).toEqual([[0, 2, "on"], [2, 1, "mute"], [3, 3, "mute"]]);
+    expect(callTimeAt(pieces, 0)).toBe(5);
+    expect(callTimeAt(pieces, 1.5)).toBe(6.5);
+    expect(callTimeAt(pieces, 2)).toBe(20);
+    expect(callTimeAt(pieces, 2.9)).toBe(20);
+    expect(callTimeAt(pieces, 4)).toBeCloseTo(34);
+    // a frame's time a hair short of a cut is still after it
+    expect(callTimeAt(pieces, 3 - 1e-9)).toBeCloseTo(30);
+  });
+
+  test("a segment lasts whole frames, its end moved to fit", () => {
+    const { pieces } = resolveCut({ segments: [{ from: 0, to: 1.01 }, { from: 3, to: 4 }] }, undefined, 30);
+    expect(pieces[0]!.len).toBe(1);
+    expect(pieces[0]!.to).toBe(1);
+    expect(pieces[1]!.out).toBe(1);
+  });
+
+  test("snapping to the song's bars and beats", () => {
+    // a beat is 0.5 s from 10 s, a bar 2 s
+    const { pieces } = resolveCut({ segments: [{ from: 13.2, to: 18.6, snap: "bar" }, { from: 13.2, to: 18.6, snap: "beat" }] }, song, 30);
+    expect([pieces[0]!.from, pieces[0]!.to]).toEqual([14, 18]);
+    expect([pieces[1]!.from, pieces[1]!.to]).toEqual([13, 18.5]);
+    expect(() => resolveCut({ segments: [{ from: 1, to: 2, snap: "bar" }] }, undefined, 30)).toThrow(/song/);
+  });
+
+  test("crossfades and audio choices", () => {
+    const { pieces } = resolveCut({ fade: 0.1, segments: [{ from: 1, to: 2 }, { from: 3, to: 9, speed: 3, audio: "fast" }, { from: 9, to: 10, fade: 0.5 }] }, undefined, 30);
+    expect(pieces.map((p) => [p.fade, p.audio])).toEqual([[0.1, "on"], [0.1, "fast"], [0.5, "on"]]);
+    expect(() => resolveCut({ segments: [{ from: 2, to: 1 }] }, undefined, 30)).toThrow();
+    expect(() => resolveCut({ segments: [{ hold: 1, for: 0 }] }, undefined, 30)).toThrow();
   });
 });
 

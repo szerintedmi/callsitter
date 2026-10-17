@@ -3,7 +3,7 @@
 // loudness normalized per channel and overall.
 //
 //   bun demos/tools/build.ts <slug> --wav <recording.wav> --words <dir> --redact <rules.json> [--db <db> --call <id>]
-//                            [--from <sec>] [--end <sec>] [--song <song.mp3> --lyrics <lyrics.json>] [--preview]
+//                            [--from <sec>] [--end <sec>] [--song <song.mp3> --lyrics <lyrics.json>] [--prologue <prologue.json>] [--preview]
 //
 // --from/--end take a clip of the recording (seconds on its clock, like the words, fixes and beeps);
 // the audio still opens LEAD_IN before the clip's first agent word, if that's after --from.
@@ -18,10 +18,12 @@
 //              "watch": "pet|gmail"}    --preview flags lines matching this, to check by hand
 // edits.json  {"fixes": [{"speaker": "caller", "from": 3.2, "to": 5.3, "text": "Hello, am I through to [redacted] there?"}],
 //              "beeps": [{"speaker": "caller", "from": 4.5, "to": 5.0}],
-//              "replace": [["Bodafire", "bona fide"]]}
+//              "replace": [["Bodafire", "bona fide"]],
+//              "trims": [{"from": 489.9, "to": 490.9}]}
 //             fixes replace the words starting in [from, to) (Whisper misheard them; "" drops them);
 //             beeps add a beep where a rule can't find the word; replace swaps a misheard word's
-//             text wherever it occurs.
+//             text wherever it occurs; trims cut stretches out of the call (pauses, for pace), the
+//             audio crossfaded over TRIM_FADE and everything after moved up (no words in them).
 //
 // --db/--call add Jev's verdicts and the call-flow stages from a copy of the database (bun run prod
 // get-db), shifted onto the recording's clock by the agent's first words (with --from: by the clip's
@@ -31,18 +33,32 @@
 // --song/--lyrics append a song after the call (SONG_GAP of silence, then the song as it is, not
 // normalized) with karaoke lines in the JSON's `song`:
 // lyrics.json {"bpm": 115.4, "beat": 0.23,          tempo, and the first beat (s into the song)
+//              "gap": 0.8, "tease": 1.2,              silence before it (default SONG_GAP); its banner
+//              "ballIn": 5,                           comes this long before it (the player's, default 0),
+//                                                     the disco ball lowering in this long before it
+//              "soloFrom": 39.9, "soloMin": 2.5,      the staging's (s into the song; listen-story.ts
+//              "danceFrom": 75,                       stagingAt): solos from, on lines at least this
+//                                                     long; dancing free from
 //              "lines": [{"speaker": "both", "text": "Who's the human? Who's the machine?"}, …]}
-//             the lines in order, as sung ("caller", "agent" or "both"). Next to it, song.words.json:
+//             the lines in order, as sung ("caller", "agent" or "both"; "solo": true stages one as a
+//             solo whatever its length; "stand": true has the bot get up on it, for good). Next to it, song.words.json:
 //             Whisper's verbose_json of the song with word timings ({"words": [{word, start, end}]}).
 //             Each lyric word gets the time of the Whisper word it's aligned
 //             with (the lyric's spelling wins; a word Whisper split or missed is placed between).
 //             Over the song, levels.music is the song's loudness, caller/agent the same gated by who
 //             sings the current line.
 //
+// --prologue puts an opening before the call (demos/tools/prologue.ts has the format): its sound
+// first in the audio, its lines in `lines`, its stages in `stages`, its storyboard in `prologue`
+// for the player (src/web/client/listen-story.ts), and everything else moved later by its length.
+//
 // --preview prints the transcript with its beeps and writes no files.
 import { Database } from "bun:sqlite";
 import { parseArgs } from "node:util";
+import type { Prologue } from "../../src/web/client/listen-story";
 import { SPEAKERS, channelSamples, envelope, ffmpeg, type Speaker } from "./audio";
+import { buildPrologue, loudness, mimeAt, type PrologueSpec } from "./prologue";
+import { retime, trimSamples, trimmer } from "./timeline";
 import type { Word } from "./transcribe";
 
 interface Rule {
@@ -57,6 +73,7 @@ interface Edits {
   fixes?: { speaker: Speaker; from: number; to: number; text: string }[];
   beeps?: { speaker: Speaker; from: number; to: number }[];
   replace?: [string, string][];
+  trims?: { from: number; to: number }[];
 }
 export interface DemoLine {
   speaker: Speaker;
@@ -76,11 +93,15 @@ export interface DemoCall {
   verdicts: [number, number, number, number][];
   /** call-flow stages entered: [t, stage] */
   stages: [number, string][];
-  /** a song after the call (--song): where it plays, its tempo (beat: the first beat's time) and karaoke lines */
-  song?: { start: number; end: number; bpm: number; beat: number; lines: SongLine[] };
+  /** a song after the call (--song): where it plays, its tempo (beat: the first beat's time) and karaoke lines; its banner `tease` s early */
+  song?: { start: number; end: number; bpm: number; beat: number; tease?: number; ballIn?: number; soloFrom?: number; soloMin?: number; danceFrom?: number; lines: SongLine[] };
+  /** an opening before the call (--prologue): its storyboard, for the player; the call starts at its `duration` */
+  prologue?: Prologue;
 }
 export interface SongLine {
   speaker: Speaker | "both";
+  solo?: boolean;
+  stand?: boolean;
   start: number;
   end: number;
   words: [number, string][];
@@ -105,14 +126,19 @@ const BEEP_HZ = 1000;
 const BEEP_GAIN = 0.18;
 /** silence between the call and the song */
 const SONG_GAP = 0.8;
+/** the crossfade where a trim cuts the call */
+const TRIM_FADE = 0.12;
 
 const { values, positionals } = parseArgs({
   args: Bun.argv.slice(2),
-  options: { wav: { type: "string" }, words: { type: "string" }, redact: { type: "string" }, db: { type: "string" }, call: { type: "string" }, from: { type: "string" }, end: { type: "string" }, song: { type: "string" }, lyrics: { type: "string" }, preview: { type: "boolean" } },
+  options: {
+    wav: { type: "string" }, words: { type: "string" }, redact: { type: "string" }, db: { type: "string" }, call: { type: "string" }, from: { type: "string" }, end: { type: "string" },
+    song: { type: "string" }, lyrics: { type: "string" }, prologue: { type: "string" }, preview: { type: "boolean" },
+  },
   allowPositionals: true,
 });
 const slug = positionals[0];
-if (!slug || !values.wav || !values.words || !values.redact) throw new Error("usage: build.ts <slug> --wav <wav> --words <dir> --redact <rules.json> [--from <sec>] [--end <sec>] [--song <mp3> --lyrics <json>] [--preview]");
+if (!slug || !values.wav || !values.words || !values.redact) throw new Error("usage: build.ts <slug> --wav <wav> --words <dir> --redact <rules.json> [--from <sec>] [--end <sec>] [--song <mp3> --lyrics <json>] [--prologue <json>] [--preview]");
 if (!values.song !== !values.lyrics) throw new Error("--song and --lyrics go together");
 const endSec = values.end ? Number(values.end) : undefined;
 const fromSec = Number(values.from ?? 0);
@@ -123,9 +149,10 @@ const edits: Edits = (await editsFile.exists()) ? await editsFile.json() : {};
 const norm = (w: string) => w.toLowerCase().replace(/[^a-z0-9']/g, "");
 
 type Timed = Word & { speaker: Speaker; beep?: boolean };
-const words: Timed[] = [];
-for (const speaker of SPEAKERS) {
-  let ws: Timed[] = ((await Bun.file(`${values.words}/${speaker}.words.json`).json()) as Word[]).map((w) => ({ ...w, speaker }));
+
+/** a transcript dir's words for `speaker`, with edits.json's fixes and replacements */
+async function loadWords(dir: string, speaker: Speaker): Promise<Timed[]> {
+  let ws: Timed[] = ((await Bun.file(`${dir}/${speaker}.words.json`).json()) as Word[]).map((w) => ({ ...w, speaker }));
   for (const f of (edits.fixes ?? []).filter((f) => f.speaker === speaker)) {
     const inside = ws.filter((w) => w.start >= f.from && w.start < f.to);
     const at = inside[0]?.start ?? f.from;
@@ -144,13 +171,11 @@ for (const speaker of SPEAKERS) {
     const r = (edits.replace ?? []).find(([from]) => w.text.trim().replace(/[.,?!]+$/, "") === from);
     if (r) w.text = w.text.replace(r[0], r[1]);
   }
-  words.push(...ws.filter((w) => w.start >= fromSec && w.start < (endSec ?? Infinity)));
+  return ws;
 }
 
-// Redaction: rules over each speaker's words in order.
-const beeps: DemoCall["beeps"] = [];
-for (const speaker of SPEAKERS) {
-  const ws = words.filter((w) => w.speaker === speaker);
+/** the rules over one speaker's words in order: the text redacted, `beep` on what goes from the audio */
+function redact(ws: Timed[]) {
   for (let i = 0; i < ws.length; i++) {
     for (const r of rules) {
       const run = ws.slice(i, i + r.tokens.length);
@@ -167,6 +192,16 @@ for (const speaker of SPEAKERS) {
       break;
     }
   }
+}
+
+const words: Timed[] = [];
+for (const speaker of SPEAKERS) words.push(...(await loadWords(values.words, speaker)).filter((w) => w.start >= fromSec && w.start < (endSec ?? Infinity)));
+
+// Redaction: rules over each speaker's words in order.
+const beeps: DemoCall["beeps"] = [];
+for (const speaker of SPEAKERS) {
+  const ws = words.filter((w) => w.speaker === speaker);
+  redact(ws);
   const env = envelope(await channelSamples(values.wav, speaker, 16000, endSec, fromSec), 16000, SNAP_FRAME);
   for (const w of ws.filter((w) => w.beep)) {
     const b = snapBeep(env, w.start - fromSec, w.end - fromSec);
@@ -184,6 +219,14 @@ for (const b of beeps) {
   b.start -= cut;
   b.end -= cut;
 }
+// Trims (edits.json): stretches cut out of the call, on its clock from here on.
+const trims = (edits.trims ?? []).map((x): [number, number] => [x.from - cut, x.to - cut]);
+const trim = trimmer(trims);
+for (const [a, b] of trims) {
+  const w = words.find((w) => w.start >= a && w.start < b);
+  if (w) throw new Error(`the trim at ${a + cut}–${b + cut} s cuts into "${w.text.trim()}" (${w.speaker}, ${(w.start + cut).toFixed(2)} s)`);
+}
+for (const x of [...words, ...beeps]) [x.start, x.end] = [trim(x.start), trim(x.end)];
 const merged = mergeBeeps(beeps);
 
 /**
@@ -266,7 +309,7 @@ for (const s of SPEAKERS) {
   const trimmed = raw.subarray(from);
   // a short fade in, so the cut doesn't click
   for (let i = 0; i < Math.min(trimmed.length, RATE * 0.05); i++) trimmed[i]! *= i / (RATE * 0.05);
-  ch[s] = await loudnorm(trimmed.slice(), 1, CHANNEL_LUFS);
+  ch[s] = trimSamples(await loudnorm(trimmed.slice(), 1, CHANNEL_LUFS), RATE, trims, TRIM_FADE);
 }
 const n = Math.min(ch.caller.length, ch.agent.length);
 const fade = Math.round(RATE * 0.01);
@@ -291,13 +334,18 @@ const final = await loudnorm(mix, 2, FINAL_LUFS);
 // The song (--song): SONG_GAP of silence after the call, then the song as it is. Over it the mouths
 // follow the song, each while its singer's line plays.
 let audio = final.subarray(0, n * 2);
+const callLufs = values.prologue ? await loudness("-", ["-f", "f32le", "-ar", String(RATE), "-ac", "2"], audio) : 0;
 const voice: Record<Speaker, Float32Array> = { caller: ch.caller.subarray(0, n), agent: ch.agent.subarray(0, n) };
 let music: Float32Array | undefined;
 let song: DemoCall["song"];
 if (values.song && values.lyrics) {
   const { stdout } = await ffmpeg(["-i", values.song, "-ar", String(RATE), "-ac", "2", "-f", "f32le", "-"]);
   const tune = new Float32Array(stdout.buffer, stdout.byteOffset, stdout.byteLength / 4);
-  const at = n + Math.round(SONG_GAP * RATE);
+  const lyrics = (await Bun.file(values.lyrics).json()) as { bpm: number; beat: number; gap?: number; tease?: number; ballIn?: number; soloFrom?: number; soloMin?: number; danceFrom?: number; lines: { speaker: SongLine["speaker"]; text: string; solo?: boolean; stand?: boolean }[] };
+  // the call's last few ms faded, as the song comes in close behind
+  const tail = Math.min(n, Math.round(RATE * 0.02));
+  for (let i = 0; i < tail; i++) for (const c of [0, 1]) audio[2 * (n - 1 - i) + c]! *= i / tail;
+  const at = n + Math.round((lyrics.gap ?? SONG_GAP) * RATE);
   const total = at + tune.length / 2;
   const withSong = new Float32Array(total * 2);
   withSong.set(audio);
@@ -305,11 +353,11 @@ if (values.song && values.lyrics) {
   audio = withSong;
   music = new Float32Array(total);
   for (let i = 0; i < tune.length / 2; i++) music[at + i] = (tune[2 * i]! + tune[2 * i + 1]!) / 2;
-  const lyrics = (await Bun.file(values.lyrics).json()) as { bpm: number; beat: number; lines: { speaker: SongLine["speaker"]; text: string }[] };
   const heard = ((await Bun.file(`${values.lyrics.replace(/[^/]*$/, "")}song.words.json`).json()) as { words: { word: string; start: number; end: number }[] }).words;
   const start = at / RATE;
   const lines = karaoke(lyrics.lines, heard).map((l) => ({ ...l, start: round(start + l.start), end: round(start + l.end), words: l.words.map(([t, w]): [number, string] => [round(start + t), w]) }));
-  song = { start: round(start), end: round(total / RATE), bpm: lyrics.bpm, beat: round(start + lyrics.beat), lines };
+  song = { start: round(start), end: round(total / RATE), bpm: lyrics.bpm, beat: round(start + lyrics.beat), ...(lyrics.tease && { tease: lyrics.tease }), ...(lyrics.ballIn && { ballIn: lyrics.ballIn }),
+    ...(lyrics.soloFrom !== undefined && { soloFrom: lyrics.soloFrom }), ...(lyrics.soloMin !== undefined && { soloMin: lyrics.soloMin }), ...(lyrics.danceFrom !== undefined && { danceFrom: lyrics.danceFrom }), lines };
   for (const s of SPEAKERS) {
     const v = new Float32Array(total);
     v.set(voice[s]);
@@ -317,14 +365,55 @@ if (values.song && values.lyrics) {
     voice[s] = v;
   }
 }
+// Jev's verdicts and the stages, on the call's clock (before the trims, as the database has it)
+const events = callEvents();
+const trimmed = retime({ lines: [], beeps: [], ...events }, trim);
+let timed: Pick<DemoCall, "lines" | "beeps" | "verdicts" | "stages" | "song"> = { lines, beeps: merged, verdicts: trimmed.verdicts, stages: trimmed.stages, ...(song && { song }) };
+
+// The prologue (--prologue): its sound before the call's, as loud; everything else after it.
+let prologue: Prologue | undefined;
+let mime: (frame: number, speaker: Speaker) => number = () => 0;
+if (values.prologue) {
+  const spec = (await Bun.file(values.prologue).json()) as PrologueSpec;
+  const all: Timed[] = [];
+  for (const speaker of SPEAKERS) {
+    const ws = await loadWords(spec.words, speaker);
+    redact(ws);
+    all.push(...ws);
+  }
+  const built = await buildPrologue(spec, { recording: values.wav, words: all, callLufs, callStart: cut, song: song?.start, levelFps: LEVEL_FPS });
+  const p = built.prologue.duration;
+  // the clock shows the recording's time: it jumps where the call was trimmed
+  const cuts = trims.map(([a, b]): [number, number] => [round(trim(a) + p), round(b - a)]);
+  prologue = { ...built.prologue, beats: built.prologue.beats.map((b) => (b.type === "clock" && cuts.length ? { ...b, cuts } : b)) };
+  const before = (x: Float32Array, head: Float32Array) => {
+    const out = new Float32Array(head.length + x.length);
+    out.set(head);
+    out.set(x, head.length);
+    return out;
+  };
+  audio = before(audio, built.audio);
+  for (const s of SPEAKERS) voice[s] = before(voice[s], built.voice[s]);
+  if (music) music = before(music, new Float32Array(built.voice.caller.length));
+  const later = retime(timed, (t) => t + p);
+  timed = { ...later, lines: [...built.lines, ...later.lines], stages: [...built.stages, ...later.stages] };
+  // a mouth miming where it's asked to, except where anyone's line is heard
+  mime = (f, speaker) => {
+    const t = f / LEVEL_FPS;
+    const on = built.mime.some((m) => m.speaker === speaker && t >= m.from && t <= m.to) && !built.spoken.some(([a, b]) => t > a - 0.08 && t < b + 0.08);
+    return on ? Math.round(255 * mimeAt(t)) : 0;
+  };
+}
+
 const duration = round(audio.length / 2 / RATE);
 const frames = Math.ceil(duration * LEVEL_FPS);
-const level = (x: Float32Array) => {
+const level = (x: Float32Array, speaker?: Speaker) => {
   const out = new Uint8Array(frames);
   out.set(levelBytes(envelope(x, RATE, 1 / LEVEL_FPS)).subarray(0, frames));
+  if (speaker) for (let f = 0; f < frames; f++) out[f] = Math.max(out[f]!, mime(f, speaker));
   return Buffer.from(out).toString("base64");
 };
-const levels: DemoCall["levels"] = { caller: level(voice.caller), agent: level(voice.agent), ...(music && { music: level(music) }) };
+const levels: DemoCall["levels"] = { caller: level(voice.caller, "caller"), agent: level(voice.agent, "agent"), ...(music && { music: level(music) }) };
 
 const outDir = "demos/calls";
 const pcm = new Uint8Array(audio.buffer, audio.byteOffset, audio.byteLength);
@@ -335,16 +424,19 @@ await ffmpeg([...raw, "-c:a", "libmp3lame", "-b:a", "128k", ...tags, `${outDir}/
 // Lossless, for the video (record.ts); it holds only the redacted audio, but is big: kept out of git.
 await ffmpeg([...raw, "-c:a", "flac", `${values.words}/final.flac`], { stdin: pcm });
 
-const call: DemoCall = { duration, lines, beeps: merged, levels, levelFps: LEVEL_FPS, ...callEvents(), ...(song && { song }) };
+const call: DemoCall = { duration, ...timed, levels, levelFps: LEVEL_FPS, ...(prologue && { prologue }) };
 await Bun.write(`${outDir}/${slug}.json`, JSON.stringify(call));
-console.log(`${outDir}/${slug}.{mp3,json}: ${fmt(call.duration)} (first ${cut.toFixed(2)} s cut), ${lines.length} lines, ${merged.length} beeps${song ? `, the song at ${fmt(song.start)} (${song.lines.length} lines)` : ""}`);
+console.log(
+  `${outDir}/${slug}.{mp3,json}: ${fmt(call.duration)} (first ${cut.toFixed(2)} s cut${trims.length ? `, ${trims.length} trims` : ""}), ${call.lines.length} lines, ${merged.length} beeps` +
+    `${prologue ? `, a ${prologue.duration.toFixed(2)} s prologue` : ""}${call.song ? `, the song at ${fmt(call.song.start)} (${call.song.lines.length} lines)` : ""}`,
+);
 
 /**
  * The lyrics' words timed by Whisper's (song.words.json), seconds into the song: the two word lists
  * aligned by edit distance, so a word Whisper heard differently ("open a's" for "OpenAI's") still
  * takes its time; one it missed starts where the next heard one does.
  */
-function karaoke(lyrics: { speaker: SongLine["speaker"]; text: string }[], heard: { word: string; start: number; end: number }[]): SongLine[] {
+function karaoke(lyrics: { speaker: SongLine["speaker"]; text: string; solo?: boolean; stand?: boolean }[], heard: { word: string; start: number; end: number }[]): SongLine[] {
   const sung = lyrics.flatMap((l, line) => l.text.split(/(?<=\s)(?=\S)/).map((text) => ({ line, text: /\s$/.test(text) ? text : `${text} `, key: norm(text) })));
   const keys = heard.map((w) => norm(w.word));
   const cost = Array.from({ length: sung.length + 1 }, (_, i) => Float64Array.from({ length: keys.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)));
@@ -363,7 +455,7 @@ function karaoke(lyrics: { speaker: SongLine["speaker"]; text: string }[], heard
   });
   return lyrics.map((l, line) => {
     const ws = timed.filter((w) => w.line === line);
-    return { speaker: l.speaker, start: ws[0]!.start, end: ws.at(-1)!.end ?? ws.at(-1)!.start + 0.3, words: ws.map((w): [number, string] => [w.start, w.text]) };
+    return { speaker: l.speaker, ...(l.solo && { solo: true }), ...(l.stand && { stand: true }), start: ws[0]!.start, end: ws.at(-1)!.end ?? ws.at(-1)!.start + 0.3, words: ws.map((w): [number, string] => [w.start, w.text]) };
   });
 }
 

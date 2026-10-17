@@ -7,7 +7,9 @@ import { favicon, logo } from "./favicon";
 // redacted in the files (demos/tools/build.ts). public.ts serves the page (realCallsPage) at its
 // root and at /listen/<slug>, which opens it on that call, playing; the game moves to /play. Here:
 //
-//   GET listen/render/:slug  the stage alone, full window, for the video recorder (demos/tools/record.ts)
+//   GET listen/render/:slug  the stage alone, full window, for the video recorder (demos/tools/record.ts);
+//                            ?layout=wide|stack|follow fixes the rooms' layout (else from the window's
+//                            shape), ?safe=0 lets text into a tall frame's bottom fifth and right edge
 //   GET listen/media/:file   <slug>.mp3 and <slug>.json from demos/calls
 //   GET assets/listen.js     the player
 
@@ -78,7 +80,10 @@ export function listenRoutes(d: { clientAssets: ClientAssets; media: DemoMedia }
   app.get("/listen/render/:slug", (c) => {
     const demo = findDemo(c.req.param("slug"));
     const base = c.req.path.slice(0, c.req.path.indexOf("listen/"));
-    return demo ? c.html(renderPage(base, demo, c.req.query("poster") === "1")) : c.notFound();
+    const layout = c.req.query("layout");
+    if (layout !== undefined && !LAYOUTS.includes(layout as Layout)) return c.text(`layout: one of ${LAYOUTS.join(", ")}`, 400);
+    const o = { poster: c.req.query("poster") === "1", layout: layout as Layout | undefined, safe: c.req.query("safe") !== "0" };
+    return demo ? c.html(renderPage(base, demo, o)) : c.notFound();
   });
   app.get("/assets/listen.js", async (c) => {
     const body = await d.clientAssets("listen.js");
@@ -96,6 +101,10 @@ export const siteBody = (base: string, analytics?: boolean, cls?: string) =>
 const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 const json = (v: unknown) => JSON.stringify(v).replace(/</g, "\\u003c");
 
+/** How the recorder's page lays out the two rooms (src/web/client/listen-scene.ts Layout). */
+export type Layout = "wide" | "stack" | "follow";
+const LAYOUTS: Layout[] = ["wide", "stack", "follow"];
+
 /** What listen.ts reads from #rc-config. */
 export interface PlayerConfig {
   demos: Demo[];
@@ -110,6 +119,10 @@ export interface PlayerConfig {
   base: string;
   /** the public site, on the video's end card */
   site?: string;
+  /** the recorder's: the rooms' layout, fixed (else from the frame's shape) */
+  layout?: Layout;
+  /** the recorder's: keep text off a tall frame's bottom fifth and right edge (Shorts' and Reels' title and buttons) */
+  safe?: boolean;
 }
 
 const stage = `<div class="rc-stage" id="rc-stage">
@@ -121,6 +134,7 @@ const stage = `<div class="rc-stage" id="rc-stage">
   <div class="rc-subs" id="rc-subs"></div>
   <div class="rc-end" id="rc-end"><b id="rc-outcome"></b><button type="button" id="rc-next" hidden></button><span id="rc-site" hidden></span></div>
   <button class="rc-play" id="rc-play" type="button" aria-label="Play">▶</button>
+  <button class="rc-fs" id="rc-fs" type="button" aria-label="Fullscreen"><svg viewBox="0 0 9 9" aria-hidden="true"><path fill="currentColor" d="M0 0h3v1H1v2H0zM6 0h3v3H8V1H6zM0 6h1v2h2v1H0zM8 6h1v3H6V8h2z"/></svg></button>
   <div class="rc-seek" id="rc-seek"><i id="rc-progress"></i><i id="rc-mark"></i></div>
 </div>`;
 
@@ -183,7 +197,7 @@ export function realCallsPage(
     (x, i) =>
       `<a class="rc-tab s-${x.scene}" href="${base}listen/${x.slug}" data-slug="${x.slug}" data-notrack><i>${String(i + 1).padStart(2, "0")}</i>${esc(x.title)}</a>`,
   ).join("");
-  return `${head("CallSitter", "Real calls to my phone, answered by CallSitter, the bot that wastes scammers' time.", rootCss + topCss + homeCss + realCallsCss)}
+  return `${head("CallSitter", "Real calls to my phone, answered by CallSitter, the bot that wastes scammers' time.", rootCss + topCss + homeCss + realCallsCss + shapeCss + editCss + prologueCss)}
 <body class="home"${o.analytics ? ` data-analytics="1"` : ""}>
 <div class="rc-col">
 ${top(base, o.wastedSeconds, { botLink: false, github: false })}
@@ -194,7 +208,7 @@ ${top(base, o.wastedSeconds, { botLink: false, github: false })}
   </section>
   <h2 class="rc-h"><b>REAL CALLS.</b><span>Actual recordings from my phone.</span></h2>
   <div class="rc-player">
-    <div>${stage}<div class="rc-caption" id="rc-caption"></div></div>
+    <div class="rc-screen" id="rc-screen">${stage}<div class="rc-caption" id="rc-caption"></div><button class="rc-fsx" id="rc-fsx" type="button" aria-label="Exit fullscreen">✕</button></div>
     <nav class="rc-tabs" aria-label="Recordings">${tabs}</nav>
   </div>
 </main>
@@ -280,8 +294,8 @@ ${legal(base, { github: true })}
 </html>`;
 }
 
-function renderPage(base: string, demo: Demo, poster: boolean) {
-  const config: PlayerConfig = { demos: DEMOS, selected: demo.slug, autoplay: false, render: true, poster, base, site: "callsitter.org" };
+function renderPage(base: string, demo: Demo, o: { poster: boolean; layout?: Layout; safe: boolean }) {
+  const config: PlayerConfig = { demos: DEMOS, selected: demo.slug, autoplay: false, render: true, ...o, base, site: "callsitter.org" };
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -289,7 +303,7 @@ function renderPage(base: string, demo: Demo, poster: boolean) {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(demo.title)}</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jersey+10&family=Pixelify+Sans:wght@500;600&display=swap">
-<style>${rootCss}${realCallsCss}
+<style>${rootCss}${realCallsCss}${shapeCss}${editCss}${prologueCss}
 html,body{overflow:hidden;background:#000}
 .rc-stage{width:100vw;height:100vh;aspect-ratio:auto;box-shadow:none}</style>
 </head>
@@ -538,14 +552,142 @@ export const realCallsCss = `
 #rc-mark{position:absolute;bottom:0;width:3px;height:10px;background:var(--red-hi);display:none}
 .rc-render .rc-seek{display:none}
 .rc-caption{display:none}
+/* fullscreen (listen-fullscreen.ts): the button on touch screens, or on hover; the stage and its captions fill the screen, letterboxed */
+.rc-fs{position:absolute;right:10px;bottom:30px;width:36px;height:36px;display:grid;place-items:center;padding:7px;background:#0e0d10c0;color:var(--paper);border:2px solid #000;box-shadow:2px 2px 0 #000;cursor:pointer;opacity:0;transition:opacity .2s}
+.rc-fs svg{width:100%;height:100%;shape-rendering:crispEdges}
+.rc-stage:hover .rc-fs,.rc-fs:focus-visible{opacity:1}
+@media (pointer:coarse){.rc-fs{opacity:.85}}
+.rc-render .rc-fs,.rc-fsx{display:none}
+.rc-screen.fs{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#000}
+.rc-screen.fs .rc-stage{width:min(100vw,100dvh * 16 / 9);max-height:100dvh;box-shadow:none}
+.rc-screen.fs .rc-caption{position:absolute;left:0;right:0;bottom:max(12px,env(safe-area-inset-bottom));padding:0 12px;min-height:0}
+.rc-screen.fs .rc-fsx{display:grid;place-items:center;position:absolute;top:max(10px,env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));width:44px;height:44px;font:28px/1 var(--disp);background:#0e0d10c0;color:var(--paper);border:2px solid #000;box-shadow:2px 2px 0 #000;cursor:pointer;z-index:2;transition:opacity .4s}
+.rc-screen.fs.idle .rc-fsx,.rc-screen.fs.idle .rc-fs{opacity:0}
+.rc-fs-on,.rc-fs-on body{overflow:hidden}
 @media (max-width:640px){
 .rc-stage{box-shadow:none}
 .rc-subs{display:none}
 .rc-caption{display:block;padding:10px 16px 0;font-size:16px;line-height:1.35}
 .rc.playing .rc-caption{min-height:calc(3 * 1.35em + 28px)}
+.rc-caption{overflow:hidden;transition:height .25s ease-out;box-sizing:border-box}
+.rc-caption .rc-sub+.rc-sub{margin-top:6px}
+.rc-caption .rc-sub.old{font-size:14px;padding:5px 10px}
 .rc-caption .rc-sub{max-width:none;font-size:16px;padding:8px 12px;border-width:2px}
 .rc-caption .rc-sub .who{font-size:14px}
 .rc-caption .rc-sub.caller{border-left-width:5px}.rc-caption .rc-sub.agent{border-right-width:5px}
 .rc-caption .rc-sub.both{border-left-width:5px;border-right-width:5px}
 }
+`;
+
+// The recorder's page in a frame other than 16:9 (record.ts --size 1080x1920): listen.ts sets the
+// stage's data-shape. Its text is sized up by --z, as it's measured in the frame's width; a tall
+// frame with the rooms stacked puts each side's subtitle under its own room. .safe keeps text off
+// the bottom fifth and the right edge, where Shorts, Reels and TikTok put the title and buttons.
+const shapeCss = `
+.rc-stage{--z:1;--safe-r:0px;--safe-b:0px}
+.rc-stage[data-shape="square"]{--z:1.45}
+.rc-stage[data-shape="tall"]{--z:2.2}
+.rc-stage.safe{--safe-r:13cqw;--safe-b:20%}
+.rc-stage:not([data-shape="wide"]) .rc-mode{right:calc(2cqw + var(--safe-r));top:2.4cqw;font-size:calc(var(--z) * 1.6cqw);padding:calc(var(--z) * .3cqw) calc(var(--z) * 1cqw);border-width:calc(var(--z) * .25cqw);box-shadow:calc(var(--z) * .3cqw) calc(var(--z) * .3cqw) 0 #000}
+.rc-stage:not([data-shape="wide"]) .rc-pop{z-index:1;font-size:calc(var(--z) * 2.7cqw);border-width:calc(var(--z) * .25cqw);box-shadow:calc(var(--z) * .3cqw) calc(var(--z) * .3cqw) 0 #000;padding:calc(var(--z) * .6cqw) calc(var(--z) * .9cqw)}
+.rc-stage:not([data-shape="wide"]) .rc-beep{font-size:calc(var(--z) * 3cqw);border-width:calc(var(--z) * .3cqw);box-shadow:calc(var(--z) * .4cqw) calc(var(--z) * .4cqw) 0 #000}
+.rc-stage:not([data-shape="wide"]) .rc-banner{font-size:calc(var(--z) * 2.6cqw);width:max-content;max-width:92cqw;white-space:normal;text-align:center;border-width:calc(var(--z) * .3cqw);box-shadow:calc(var(--z) * .5cqw) calc(var(--z) * .5cqw) 0 #000}
+.rc-stage:not([data-shape="wide"]) .rc-subs{left:3cqw;right:calc(3cqw + var(--safe-r));bottom:calc(3cqw + var(--safe-b));gap:calc(var(--z) * .8cqw)}
+.rc-stage:not([data-shape="wide"]) .rc-sub{max-width:92%;font-size:calc(var(--z) * 1.85cqw);padding:calc(var(--z) * .8cqw) calc(var(--z) * 1.2cqw);border-width:calc(var(--z) * .2cqw);box-shadow:calc(var(--z) * .3cqw) calc(var(--z) * .3cqw) 0 #000}
+.rc-stage:not([data-shape="wide"]) .rc-sub .who{font-size:calc(var(--z) * 1.3cqw)}
+.rc-stage:not([data-shape="wide"]) .rc-sub.caller{border-left-width:calc(var(--z) * .6cqw)}
+.rc-stage:not([data-shape="wide"]) .rc-sub.agent{border-right-width:calc(var(--z) * .6cqw)}
+.rc-stage:not([data-shape="wide"]) .rc-sub.both{border-left-width:calc(var(--z) * .6cqw);border-right-width:calc(var(--z) * .6cqw)}
+.rc-stage:not([data-shape="wide"]) .rc-end{gap:calc(var(--z) * 2cqw);padding:0 4cqw var(--safe-b)}
+.rc-stage:not([data-shape="wide"]) .rc-end b{font-size:calc(var(--z) * 3cqw)}
+.rc-stage[data-layout="stack"]:not([data-song]) .rc-banner{top:50%}
+.rc-stage:not([data-shape="wide"]) .rc-end span{font-size:calc(var(--z) * 2.4cqw)}
+.rc-stage[data-layout="stack"]:not([data-song]) .rc-subs{inset:0;display:block}
+.rc-stage[data-layout="stack"]:not([data-song]) .rc-sub{position:absolute;max-width:none}
+.rc-stage[data-layout="stack"]:not([data-song]) .rc-sub.caller{left:3cqw;right:calc(3cqw + var(--safe-r));bottom:calc(54% + 4cqw)}
+.rc-stage[data-layout="stack"]:not([data-song]) .rc-sub.agent{left:3cqw;right:calc(3cqw + var(--safe-r));bottom:calc(3cqw + var(--safe-b))}
+.rc-stage[data-layout="stack"]:not([data-song]) .rc-sub.caller.old:has(~ .rc-sub.caller),.rc-stage[data-layout="stack"]:not([data-song]) .rc-sub.agent.old:has(~ .rc-sub.agent){display:none}
+`;
+
+// An edit's overlays (src/web/client/listen-edit.ts), over the stage, sized by the frame's --z.
+const editCss = `
+.rc-edit{position:absolute;inset:0;pointer-events:none;font-family:var(--disp);color:var(--paper)}
+.rc-edit>*{position:absolute;opacity:var(--o,1)}
+.rc-card{inset:0}
+.rc-card.dim{background:#0e0d10c8}
+.rc-card b{position:absolute;left:calc(50% - var(--safe-r) / 2);top:var(--y,50%);transform:translate(-50%,-50%) scale(var(--s,1));width:max-content;max-width:calc(88% - var(--safe-r));font-weight:400;font-size:calc(var(--k,1) * var(--z) * 3.8cqw);line-height:1;letter-spacing:.03em;text-align:center;white-space:pre-line;padding:.3em .55em .38em;background:var(--ink);border:calc(var(--z) * .3cqw) solid #000;box-shadow:calc(var(--z) * .6cqw) calc(var(--z) * .6cqw) 0 #000}
+.rc-edit em{font-style:normal;color:var(--amb)}
+.rc-msg{top:var(--y,42%);left:calc(50% - var(--safe-r) / 2);transform:translate(-50%,-50%) translateY(calc((1 - var(--s,1)) * 80%)) scale(calc(.6 + .4 * var(--s,1)))}
+.rc-msg.left{left:calc(var(--z) * 15cqw)}
+.rc-msg.right{left:auto;right:calc(var(--z) * 15cqw + var(--safe-r));transform:translate(50%,-50%) translateY(calc((1 - var(--s,1)) * 80%)) scale(calc(.6 + .4 * var(--s,1)))}
+.rc-stage[data-shape="tall"] .rc-msg.left,.rc-stage[data-shape="tall"] .rc-msg.right{left:calc(50% - var(--safe-r) / 2);right:auto;transform:translate(-50%,-50%) translateY(calc((1 - var(--s,1)) * 80%)) scale(calc(.6 + .4 * var(--s,1)))}
+.rc-phone{position:relative;width:calc(var(--z) * 25cqw);min-height:calc(var(--z) * 15cqw);padding:calc(var(--z) * 2.4cqw) calc(var(--z) * 1.1cqw) calc(var(--z) * 1.6cqw);background:var(--ink);border:calc(var(--z) * .55cqw) solid var(--amb);box-shadow:0 0 0 calc(var(--z) * .3cqw) #000,calc(var(--z) * .9cqw) calc(var(--z) * .9cqw) 0 calc(var(--z) * .3cqw) #000}
+.rc-phone-cam{position:absolute;left:50%;top:calc(var(--z) * .8cqw);width:calc(var(--z) * 5cqw);height:calc(var(--z) * .7cqw);transform:translateX(-50%);background:var(--line)}
+.rc-phone-top{display:flex;align-items:center;gap:calc(var(--z) * .7cqw);padding:0 0 calc(var(--z) * .7cqw);margin-bottom:calc(var(--z) * 1cqw);border-bottom:calc(var(--z) * .25cqw) solid var(--line);font-size:calc(var(--z) * 1.7cqw);letter-spacing:.06em}
+.rc-phone-top i{width:calc(var(--z) * 1.3cqw);height:calc(var(--z) * 1.3cqw);background:var(--grn);box-shadow:inset calc(var(--z) * -.3cqw) calc(var(--z) * -.3cqw) 0 #04230f}
+.rc-phone-chat{display:flex;flex-direction:column;align-items:flex-end;gap:calc(var(--z) * .8cqw)}
+.rc-bub{position:relative;max-width:88%;padding:calc(var(--z) * .5cqw) calc(var(--z) * .9cqw) calc(var(--z) * .7cqw);background:var(--paper);color:var(--ink);font-family:var(--text);font-size:calc(var(--z) * 1.55cqw);line-height:1.25;transform:scale(var(--s,1));transform-origin:100% 100%;box-shadow:calc(var(--z) * .3cqw) calc(var(--z) * .3cqw) 0 var(--amb)}
+.rc-bub::after{content:"";position:absolute;right:calc(var(--z) * -.7cqw);bottom:0;width:calc(var(--z) * .7cqw);height:calc(var(--z) * .7cqw);background:var(--paper)}
+.rc-bub small{display:block;font-family:var(--disp);font-size:.8em;letter-spacing:.06em;color:#8a5a00}
+.rc-bub span{white-space:pre-line}
+.rc-bub em{color:#c42b22}
+.rc-typing{display:flex;gap:calc(var(--z) * .45cqw);padding:calc(var(--z) * .7cqw) calc(var(--z) * .9cqw);background:var(--paper)}
+.rc-typing i{width:calc(var(--z) * .7cqw);height:calc(var(--z) * .7cqw);background:var(--amb);transform:translateY(calc(var(--h,0) * var(--z) * -.5cqw))}
+.rc-clock{display:flex;flex-direction:column;padding:calc(var(--z) * .3cqw) calc(var(--z) * 1cqw) calc(var(--z) * .5cqw);background:var(--ink);border:calc(var(--z) * .25cqw) solid #000;box-shadow:calc(var(--z) * .3cqw) calc(var(--z) * .3cqw) 0 #000;border-left:calc(var(--z) * .6cqw) solid var(--amb);transform:scale(var(--s,1));transform-origin:0 0}
+.rc-clock b{font-weight:400;font-size:calc(var(--z) * 3.4cqw);line-height:1;color:var(--amb);font-variant-numeric:tabular-nums;letter-spacing:.04em}
+.rc-clock small{font-size:calc(var(--z) * 1.2cqw);letter-spacing:.08em;color:var(--paper)}
+.rc-clock.top-left{left:2cqw;top:3cqw}
+.rc-clock.top{left:calc(50% - var(--safe-r) / 2);top:3cqw;transform:translateX(-50%) scale(var(--s,1));transform-origin:50% 0;align-items:center}
+.rc-clock.top-right{right:calc(2cqw + var(--safe-r));top:3cqw;transform-origin:100% 0;align-items:flex-end}
+.rc-endcard{inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(var(--z) * 1.8cqw);padding:0 calc(6cqw + var(--safe-r)) var(--safe-b) 6cqw;background:#0e0d10f2;text-align:center}
+.rc-endcard b{font-weight:400;font-size:calc(var(--z) * 6cqw);line-height:.95;color:var(--amb);text-shadow:calc(var(--z) * .4cqw) calc(var(--z) * .4cqw) 0 #000;white-space:pre-line}
+.rc-endcard b em{color:var(--paper)}
+.rc-endcard span{font-family:var(--text);font-size:calc(var(--z) * 1.9cqw);line-height:1.3;white-space:pre-line}
+.rc-endcard u{text-decoration:none;font-size:calc(var(--z) * 2.6cqw);letter-spacing:.08em;padding:calc(var(--z) * .3cqw) calc(var(--z) * 1.4cqw) calc(var(--z) * .5cqw);background:var(--amb);color:var(--ink);box-shadow:calc(var(--z) * .4cqw) calc(var(--z) * .4cqw) 0 #000}
+`;
+
+// A demo's prologue (src/web/client/listen-prologue.ts): the owner's phone ringing and, later, texting
+// the bot, cards, a tag and the clock (the cards and clock are the edit's, editCss), over the stage
+// under its end card. Sized by the frame's --z like the rest; the phone by its own --pz on top.
+const prologueCss = `
+.rc-pro{position:absolute;inset:0;pointer-events:none;font-family:var(--disp);color:var(--paper);--zs:var(--z,1)}
+.rc-pro>*{position:absolute;opacity:var(--o,1)}
+.rc-pro em{font-style:normal;color:var(--amb)}
+.pl-dim,.pl-black,.pl-siren,.pl-flash{inset:0}
+.pl-dim,.pl-black{background:var(--ink)}
+.pl-black{opacity:1}
+.pl-siren{opacity:1;mix-blend-mode:screen;background:radial-gradient(70% 110% at 0% 50%,rgb(50 100 255 / var(--b,0)),transparent 80%),radial-gradient(70% 110% at 100% 50%,rgb(230 40 30 / var(--r,0)),transparent 80%)}
+.pl-flash{background:var(--paper);opacity:var(--o,0);mix-blend-mode:screen}
+.pl-cap{left:calc(50% - var(--safe-r,0px) / 2);top:calc((100% - var(--safe-b,0px)) * .915);transform:translate(-50%,-50%);font-size:max(calc(var(--zs) * 2.2cqw),11px);letter-spacing:.14em;white-space:nowrap;opacity:var(--o,0)}
+.rc-stage:not([data-shape="wide"]) .pl-cap{top:9%;width:80cqw;white-space:normal;text-align:center;line-height:1.3}
+.rc-pro .rc-clock b{font-size:max(calc(var(--z) * 3.4cqw),22px)}
+.rc-pro .rc-clock small{font-size:max(calc(var(--z) * 1.2cqw),9px)}
+@media (max-width:640px){.pl-cap{width:86%;white-space:normal;text-align:center;line-height:1.25;top:93%}}
+.rc-card b small{display:block;margin-top:.3em;font-size:.48em;letter-spacing:.04em;color:var(--paper)}
+.rc-card.pl-left b{left:4cqw;transform:translate(0,-50%) scale(var(--s,1));transform-origin:0 50%}
+.pl-tag{left:2cqw;top:3cqw;display:flex;align-items:center;gap:.45em;padding:calc(var(--zs) * .38cqw) calc(var(--zs) * 1.1cqw) calc(var(--zs) * .5cqw);background:var(--ink);border:calc(var(--zs) * .25cqw) solid #000;box-shadow:calc(var(--zs) * .38cqw) calc(var(--zs) * .38cqw) 0 #000;font-size:max(calc(var(--zs) * 1.9cqw),13px);line-height:1;letter-spacing:.1em}
+.pl-tag i{width:.5em;height:.5em;background:var(--red-hi);opacity:var(--o,1)}
+.pl-msg{left:calc(50% - var(--safe-r,0px) / 2);top:var(--y,50%);transform:translate(-50%,-50%) translate(var(--dx,0px),0) rotate(var(--r,0deg))}
+.pl-msg .rc-phone{--z:calc(var(--zs) * var(--pz,1));width:calc(var(--z) * var(--w,25) * 1cqw);min-height:calc(var(--z) * var(--h,15) * 1cqw);display:flex;flex-direction:column}
+.pl-msg .rc-phone-top span{white-space:nowrap}
+.pl-msg .rc-phone-top i{flex:none}
+.pl-ring{position:absolute;inset:calc(var(--z) * 2.4cqw) calc(var(--z) * 1.1cqw) calc(var(--z) * 1.8cqw);display:flex;flex-direction:column;align-items:center;text-align:center}
+.pl-inc{margin-top:calc(var(--z) * .2cqw);font-size:calc(var(--z) * 1.7cqw);letter-spacing:.12em}
+.pl-inc i{font-style:normal;color:var(--red-hi)}
+.pl-light{order:1;width:calc(var(--z) * 6cqw);margin:auto 0;image-rendering:pixelated;shape-rendering:crispEdges;filter:drop-shadow(calc(var(--z) * .35cqw) calc(var(--z) * .35cqw) 0 #000)}
+.pl-id{margin-top:calc(var(--z) * .9cqw);font-size:calc(var(--z) * 5.2cqw);line-height:.86;letter-spacing:.04em;text-shadow:calc(var(--z) * .35cqw) calc(var(--z) * .35cqw) 0 #000;white-space:pre-line}
+.pl-btns{order:2;display:flex;justify-content:space-around;width:100%}
+.pl-btns i{display:grid;place-items:center;width:calc(var(--z) * 4.6cqw);height:calc(var(--z) * 4.6cqw);border:calc(var(--z) * .25cqw) solid #000;box-shadow:calc(var(--z) * .35cqw) calc(var(--z) * .35cqw) 0 #000;transform:translate(var(--p,0),var(--p,0)) scale(var(--s,1))}
+.pl-btns svg{width:58%;shape-rendering:crispEdges}
+.pl-no{background:var(--red)}
+.pl-yes{background:var(--grn)}
+.pl-space{flex-grow:var(--g,0)}
+.pl-tick{position:absolute;left:calc(var(--z) * -2.6cqw);bottom:0;width:calc(var(--z) * 1.6cqw);shape-rendering:crispEdges;opacity:var(--o,0)}
+.pl-input{display:flex;align-items:center;gap:calc(var(--z) * .45cqw);margin-top:calc(var(--z) * 1cqw * var(--ih,1));max-height:calc(var(--z) * 8cqw * var(--ih,1));overflow:hidden;opacity:var(--ih,1)}
+.pl-field{flex:1;min-width:0;min-height:calc(var(--z) * 3cqw);padding:calc(var(--z) * .5cqw) calc(var(--z) * .6cqw);background:var(--ink2);box-shadow:inset 0 0 0 calc(var(--z) * .25cqw) var(--line);font-family:var(--text);font-size:calc(var(--z) * 1.55cqw);line-height:1.25}
+.pl-caret{display:inline-block;width:calc(var(--z) * .25cqw);height:1.1em;margin-left:.08em;background:var(--amb);vertical-align:-.18em;opacity:var(--o,1)}
+.pl-send{display:grid;place-items:center;flex:none;width:calc(var(--z) * 2.8cqw);height:calc(var(--z) * 2.8cqw);background:var(--amb);box-shadow:calc(var(--z) * .3cqw) calc(var(--z) * .3cqw) 0 #000;transform:scale(var(--s,1))}
+.pl-send svg{width:55%;shape-rendering:crispEdges}
+.pl-ping{left:var(--x);top:var(--y);width:calc(var(--d,2) * 1cqw);height:calc(var(--d,2) * 1cqw);transform:translate(-50%,-50%);border:.4cqw solid var(--red-hi);box-shadow:0 0 0 .2cqw #000;opacity:var(--o,0)}
+.pl-glow{left:var(--x);top:var(--y);width:7cqw;height:7cqw;transform:translate(-50%,-50%);background:radial-gradient(circle,rgb(255 70 50 / .9) 0,rgb(255 60 40 / .35) 25%,transparent 60%);mix-blend-mode:screen;opacity:var(--o,0)}
 `;

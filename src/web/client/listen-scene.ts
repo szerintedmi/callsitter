@@ -1,10 +1,21 @@
 // The 3D half of the real-call player (listen.ts): two rooms joined by a phone cable, the caller
 // on the left and the CallSitter bot on the right, built from boxes (voxels, to match the arcade
 // page). Every frame is a function of the call time alone (no state carried between frames), so
-// the video recorder can render any frame in any order.
+// the video recorder can render any frame in any order. The frame can be any shape (Layout): side
+// by side in a wide one, the rooms stacked in a tall one (Shorts, Reels).
 import * as THREE from "three";
 
 export type SceneKind = "areyouai" | "police" | "cryptobot" | "electrician" | "coldcall";
+/**
+ * How the rooms share the frame. wide: side by side, one camera (the player's 16:9; a squarer frame
+ * crops the rooms' outer ends). stack: the caller's room on top, the bot's below, each with its own
+ * camera, the cable leaving the top one and reaching the bottom one at the divider. follow: one
+ * camera on whoever spoke last. In a tall frame the song's disco is one camera on both (they dance
+ * together); the stacked rooms come back after it.
+ */
+export type Layout = "wide" | "stack" | "follow";
+/** the layout for a frame `w`×`h`: stacked when it's clearly taller than wide */
+export const layoutFor = (w: number, h: number): Layout => (w / h < 0.8 ? "stack" : "wide");
 /** the scam bot's mistakes: talking over, giving up mid-sentence, an off-script question */
 export type BlunderKind = "talkover" | "cutoff" | "ignored";
 
@@ -30,6 +41,23 @@ export interface SongMoment {
   music: number;
   /** seconds into a line everyone sings (the identity swap), or null */
   swap: number | null;
+  /** beats a minute */
+  bpm: number;
+  /** each one stepping forward for a line of their own, 0–1, eased in and out over a beat */
+  solo: { caller: number; agent: number };
+  /** the same, eased over three beats: the camera's lean toward the singer */
+  soloCam: { caller: number; agent: number };
+  /** dancing free in their own rooms where nobody sings (the instrumental): there, 0–1, and how much they dance, building */
+  free: number;
+  freeMoves: number;
+  /** grooving in place (a chorus after the first), 0–1 */
+  groove: number;
+  /** the seated one (the bot) up on its feet for good, 0–1 */
+  stood: number;
+  /** seconds since they leave their rooms to dance together (the finale), negative before; null: they don't */
+  together: number | null;
+  /** seconds since they slow to a frozen pose as the lights go down (the last line), or null */
+  freeze: number | null;
 }
 
 /** What a frame needs to know about the call at time t. */
@@ -55,12 +83,33 @@ export interface Moment {
   hangup: number | null;
   /** the song after the call (areyouai), or null outside it */
   song: SongMoment | null;
+  /** who spoke last, eased: 0 the caller, 1 the bot (the follow layout's camera) */
+  focus: number;
+  /** this frame's layout, over the scene's own (a prologue's camera: listen-story.ts) */
+  layout?: Layout;
+  /** the disco ball coming in before the song: seconds since it started, over a lead-in of `lead` s, and the song's beat count (negative till it starts); null: none */
+  ball?: { since: number; lead: number; beat: number } | null;
+  /** the camera raised this much (scene units), keeping its framing: headroom (a prologue's) */
+  lift?: number;
+  /** the antenna lit this much, 0–1, instead of its own blinking (a prologue's: the bot got a message) */
+  blink?: number | null;
 }
 
 export interface CallScene {
   render(m: Moment): void;
   /** where the caller's and agent's heads and feet are on screen, 0–1 */
-  anchors(): { callerHead: [number, number]; agentHead: [number, number]; callerFeet: [number, number]; agentFeet: [number, number] };
+  anchors(): {
+    callerHead: [number, number];
+    agentHead: [number, number];
+    callerFeet: [number, number];
+    agentFeet: [number, number];
+    /** each one's eye line */
+    callerEyes: [number, number];
+    agentEyes: [number, number];
+    antenna: [number, number];
+  };
+  /** the last frame's layout */
+  layout(): Layout;
 }
 
 const lambert = new Map<string, THREE.MeshLambertMaterial>();
@@ -215,6 +264,8 @@ interface Bot {
   armL: THREE.Group;
   belly: THREE.Mesh;
   extras: THREE.Group;
+  /** hip-pivoted: forward along +z (seated, up on the footstool); rotated π/2 they point down (standing) */
+  legs: THREE.Group[];
 }
 
 const SCREEN_ON = "#35d07a";
@@ -225,11 +276,13 @@ function buildBot(parent: THREE.Object3D, body: string, trim: string, screen = S
   box(root, 1.15, 1.05, 0.85, body, 0, 0.95, 0);
   box(root, 1.2, 0.18, 0.9, trim, 0, 0.95, 0);
   const belly = box(root, 0.45, 0.32, 0.05, mat("#10161a", screen), 0, 1.35, 0.44);
-  // legs, up on a footstool
-  for (const x of [-0.3, 0.3]) {
-    box(root, 0.36, 0.3, 1.2, trim, x, 0.8, 0.75);
-    box(root, 0.42, 0.42, 0.3, "#3a3740", x, 0.72, 1.45);
-  }
+  // legs, up on a footstool: each from its hip, so it can stand
+  const legs = [-0.3, 0.3].map((x) => {
+    const leg = group(root, x, 0.95, 0.15);
+    box(leg, 0.36, 0.3, 1.2, trim, 0, -0.15, 0.6);
+    box(leg, 0.42, 0.42, 0.3, "#3a3740", 0, -0.23, 1.3);
+    return leg;
+  });
   // head
   const head = group(root, 0, 2.0, 0);
   box(head, 1.35, 1.0, 1.0, body, 0, 0, 0);
@@ -257,7 +310,7 @@ function buildBot(parent: THREE.Object3D, body: string, trim: string, screen = S
   const armL = group(root, -0.68, 1.85, 0);
   box(armL, 0.26, 0.75, 0.26, body, 0, -0.75, 0);
   const extras = group(root);
-  return { root, head, eyes, mouth, antennaTip, arm, cup, armL, belly, extras };
+  return { root, head, eyes, mouth, antennaTip, arm, cup, armL, belly, extras, legs };
 }
 
 function animateBot(b: Bot, m: Moment, level: number, active: number, other: number, seed: number) {
@@ -323,6 +376,8 @@ function agentRoom(scene: THREE.Scene) {
 interface Caller {
   root: THREE.Group;
   head: THREE.Group;
+  /** for the song's choreography (areyouai): legs from the hips, the free arm */
+  body?: { legs: THREE.Group[]; arm: THREE.Group };
   /** call time → pose */
   animate(m: Moment): void;
 }
@@ -330,10 +385,13 @@ interface Caller {
 /** A person: torso, head, arms; the left hand holds a phone to the ear. */
 function buildPerson(parent: THREE.Object3D, o: { top: string; legs: string; skin: string; hair: string }) {
   const root = group(parent);
-  for (const x of [-0.25, 0.25]) {
-    box(root, 0.36, 1.0, 0.4, o.legs, x, 0, 0);
-    box(root, 0.4, 0.18, 0.55, "#1b1a20", x, 0, 0.08);
-  }
+  // each leg from its hip, so it can walk
+  const legs = [-0.25, 0.25].map((x) => {
+    const leg = group(root, x, 1.0, 0);
+    box(leg, 0.36, 1.0, 0.4, o.legs, 0, -1.0, 0);
+    box(leg, 0.4, 0.18, 0.55, "#1b1a20", 0, -1.0, 0.08);
+    return leg;
+  });
   const torso = group(root, 0, 1.0, 0);
   box(torso, 1.05, 1.15, 0.6, o.top, 0, 0, 0);
   const head = group(torso, 0, 1.15, 0);
@@ -354,7 +412,7 @@ function buildPerson(parent: THREE.Object3D, o: { top: string; legs: string; ski
   const arm = group(torso, 0.62, 1.05, 0);
   box(arm, 0.26, 0.85, 0.28, o.top, 0, -0.85, 0);
   box(arm, 0.24, 0.2, 0.24, o.skin, 0, -1.02, 0);
-  return { root, torso, head, mouth, arm, phoneArm, phone, face };
+  return { root, torso, head, mouth, arm, phoneArm, phone, face, legs };
 }
 
 /**
@@ -381,7 +439,8 @@ function police(scene: THREE.Scene, essex = false): Caller {
   sign(scene, textTexture(["CYBER", "CRIME", "UNIT"], 96, 72, "#fff6ec", "#d8281f", 24), 1.1, 0.8, -6.9, 2.3, -2.82);
 
   // the scammer: hoodie, shades, a police helmet a size too big
-  const chair = group(scene, -4.0, 0, -0.2);
+  // behind him, clear of his legs: he stands at the desk
+  const chair = group(scene, -4.0, 0, -1.25);
   box(chair, 1.3, 0.7, 1.2, "#1b1a20", 0, 0, 0);
   box(chair, 1.3, 1.6, 0.25, "#1b1a20", 0, 0.7, -0.6);
   const p = buildPerson(scene, { top: "#2a2a30", legs: "#1d2a44", skin: "#c99a7a", hair: "#2a1a10" });
@@ -409,6 +468,7 @@ function police(scene: THREE.Scene, essex = false): Caller {
   return {
     root: p.root,
     head: p.head,
+    body: { legs: p.legs, arm: p.arm },
     animate(m) {
       const lv = m.level.caller;
       const t = m.t;
@@ -826,6 +886,38 @@ function electrician(scene: THREE.Scene): Caller {
  * the back walls, coloured lights stepping on the beat, and confetti in the finale. Instanced
  * meshes and four unshadowed lights, so a phone keeps up.
  */
+/**
+ * The disco ball: out of sight, just above the frame, where a lead-in (song.ballIn, before the song)
+ * leaves it, and hanging in the song. A lead-in pulls the divider back over its first BALL_PULL s
+ * (out of sight), lowers the ball by BALL_SETTLE s before the song, and lights its tiles over the last BALL_GLOW s.
+ */
+const BALL_TOP = 10.05;
+const BALL_ABOVE = 7.5;
+const BALL_PEEK = 6.0;
+const BALL_LOW = 5.55;
+const BALL_PULL = 1;
+const BALL_SETTLE = 1.5;
+const BALL_GLOW = 1;
+/** how far the divider's front pulls back, clear of the ball (z 1.4, 0.66 across) */
+const DIVIDER_BACK = 10.5;
+/** its turning speed before the song and in it (rad/s): the song's comes up over 2 s */
+const SPIN_LEAD = 0.3;
+const SPIN_SONG = 0.9;
+/** smoothstep: eased both ends */
+const smooth = (x: number) => {
+  const u = clamp01(x);
+  return u * u * (3 - 2 * u);
+};
+/** the ball's turn, `x` s after the song starts (negative before), after a lead-in of `lead` s; speeds up smoothly into the song's */
+function spin(x: number, lead: number): number {
+  if (!lead) return x * SPIN_SONG;
+  if (x < 0) return SPIN_LEAD * (x + lead);
+  // the integral of SPIN_LEAD + (SPIN_SONG - SPIN_LEAD) * smooth(u / 2)
+  const s = Math.min(x / 2, 1);
+  const ramp = 2 * (s ** 3 - s ** 4 / 2) + Math.max(0, x - 2);
+  return SPIN_LEAD * lead + SPIN_LEAD * x + (SPIN_SONG - SPIN_LEAD) * ramp;
+}
+
 function disco(scene: THREE.Scene) {
   const o = new THREE.Object3D();
   const instanced = (n: number, w: number, h: number, d: number) => {
@@ -870,24 +962,41 @@ function disco(scene: THREE.Scene) {
 
   return (m: Moment) => {
     const s = m.song;
-    ball.visible = specks.visible = confetti.visible = !!s;
+    const lead = m.ball && m.ball.lead > 0 ? m.ball : null;
+    ball.visible = !!s || !!lead;
+    specks.visible = confetti.visible = !!s;
     for (const l of lights) l.intensity = 0;
-    if (!s) return;
+    /** the tiles: grey, with glints and the beat's colours `lit` (0–1) */
+    const light = (since: number, beat: number, lit: number) => {
+      for (let i = 0; i < cells.length; i++) {
+        const grey = 0.35 + 0.4 * hash(i);
+        const glint = hash(i * 7.3 + Math.floor(since * 10)) > 0.86;
+        const tint = hash(i * 3.1 + Math.floor(beat)) > 0.72;
+        if (glint) c.set("#ffffff");
+        else if (tint) c.set(discoAt(beat, i));
+        else c.setScalar(grey);
+        tiles.setColorAt(i, lit >= 1 ? c : c.lerp(new THREE.Color().setScalar(grey), 1 - lit));
+      }
+      tiles.instanceColor!.needsUpdate = true;
+    };
+    if (!s) {
+      // before the song: only the ball, lowering into the top of the frame and settling, turning slowly, its tiles lit up at the end
+      if (!lead) return;
+      const travel = Math.max(0.1, lead.lead - BALL_PULL - BALL_SETTLE);
+      ball.position.set(0, BALL_ABOVE - (BALL_ABOVE - BALL_PEEK) * ease((lead.since - BALL_PULL) / travel), 1.4);
+      ball.rotation.y = spin(lead.since - lead.lead, lead.lead);
+      ball.rotation.z = 0.15;
+      light(lead.since - lead.lead, lead.beat, clamp01((lead.since - (lead.lead - BALL_GLOW)) / BALL_GLOW));
+      return;
+    }
     const e = Math.min(1.3, s.energy);
     const fast = s.section === "finale" ? 2 : 1;
-    // drops in while the song's first line plays, then spins
-    ball.position.set(0, 5.55 + 4.5 * (1 - ease(s.since / 2.4)), 1.4);
-    ball.rotation.y = s.since * 0.9;
+    // drops in while the song's first line plays (from where a lead-in left it, setting off gently), then spins
+    const drop = lead ? 1 - smooth(s.since / 2.4) : 1 - ease(s.since / 2.4);
+    ball.position.set(0, BALL_LOW + ((lead ? BALL_PEEK : BALL_TOP) - BALL_LOW) * drop, 1.4);
+    ball.rotation.y = spin(s.since, lead?.lead ?? 0);
     ball.rotation.z = 0.15;
-    for (let i = 0; i < cells.length; i++) {
-      const glint = hash(i * 7.3 + Math.floor(s.since * 10)) > 0.86;
-      const tint = hash(i * 3.1 + Math.floor(s.beat)) > 0.72;
-      if (glint) c.set("#ffffff");
-      else if (tint) c.set(discoAt(s.beat, i));
-      else c.setScalar(0.35 + 0.4 * hash(i));
-      tiles.setColorAt(i, c);
-    }
-    tiles.instanceColor!.needsUpdate = true;
+    light(s.since, s.beat, 1);
     // the specks it throws: sliding along the back walls as it turns
     for (let i = 0; i < specks.count; i++) {
       const x = (((hash(i) * 18 + s.since * 0.9 * (i % 2 ? 1 : 0.8)) % 18) + 18) % 18 - 9;
@@ -965,10 +1074,287 @@ function botSongKit(bot: Bot) {
   };
 }
 
+// ---------- the song's choreography ----------
+
+/** where they meet to dance together (the divider's gone by then): side by side, facing the camera */
+const MEET = { caller: -1.15, agent: 1.15, z: 2.4 };
+/** a solo's mark: a third of the way to the middle, a step toward the camera (round the desk or off the chair) */
+const SOLO_MARK = { caller: -2.7, agent: 2.95, z: 2.0 };
+/** where the bot stands once it's up, in front of its armchair */
+const STAND_SPOT = { x: 4.2, z: 1.7 };
+/** a stride, for the legs' swing */
+const STRIDE = 0.55;
+
+/** a point along a path of points, `u` 0–1 of its length, and which way it's heading there */
+function along(points: THREE.Vector3[], u: number): { at: THREE.Vector3; heading: number; length: number } {
+  const lens = points.slice(1).map((p, i) => p.distanceTo(points[i]!));
+  const length = lens.reduce((a, b) => a + b, 0);
+  let d = clamp01(u) * length;
+  for (let i = 0; i < lens.length; i++) {
+    if (d <= lens[i]! || i === lens.length - 1) {
+      const a = points[i]!;
+      const b = points[i + 1]!;
+      const f = lens[i]! > 0 ? Math.min(1, d / lens[i]!) : 1;
+      return { at: a.clone().lerp(b, f), heading: Math.atan2(b.x - a.x, b.z - a.z), length };
+    }
+    d -= lens[i]!;
+  }
+  return { at: points.at(-1)!.clone(), heading: 0, length };
+}
+
+/** the walk to the middle: from the together part's first beat to the first bar start six beats on */
+function walkBeats(s: SongMoment): { fb: number; ab: number } | null {
+  if (s.together === null) return null;
+  const fb = s.beat - s.together / (60 / s.bpm);
+  return { fb, ab: Math.ceil((fb + 6) / 4) * 4 };
+}
+
+/** a pose of the routine: arm raised (rad), rise, tilt, sideways step, half-turn to each other, knees tucked, spin */
+interface Pose {
+  arm: number;
+  rise: number;
+  tilt: number;
+  side: number;
+  face: number;
+  tuck: number;
+  spin: number;
+  /** apart (and back) each bar */
+  apart: number;
+}
+
+/**
+ * The four-bar routine at `since` beats into it: (1) a bob, arms high and low (dipping) on alternate
+ * beats; (2) leaning and pointing out, then in; (3) hips swaying, arms out, a half-turn to each other
+ * on beat 3; (4) with `flourish`, a tucked jump on beat 1 and arms up on landing, a spin as well every
+ * eighth bar (without: bar 1 again). Each move a third of a beat early, so its pose lands on the beat.
+ */
+function routine(beats: number, s: SongMoment, flourish: boolean): Pose {
+  const since = Math.max(0, beats + 0.35);
+  const barN = Math.floor(since / 4);
+  const inBar = since - barN * 4;
+  const j = Math.floor(inBar);
+  const f = inBar - j;
+  const step = smooth(f / 0.35);
+  const part = barN % 4;
+  const p: Pose = { arm: 1.2, rise: 0.22 * hop(s), tilt: 0, side: 0, face: 0, tuck: 0, spin: 0, apart: 0.6 * Math.sin((Math.PI * inBar) / 4) };
+  if (part === 1) {
+    // leaning (and pointing) out, then in
+    p.tilt = 0.28 * (inBar < 2 ? smooth(inBar / 0.5) : 1 - 2 * smooth((inBar - 2) / 0.5));
+    p.side = (0.3 * p.tilt) / 0.28;
+    p.arm = 1.6;
+  } else if (part === 2) {
+    // hips swaying, arms out, a half-turn to each other on beat 3
+    p.tilt = 0.16 * Math.sin(since * Math.PI);
+    p.side = 0.15 * Math.sin(since * Math.PI);
+    p.arm = 1.55;
+    p.face = Math.sin(Math.PI * clamp01((inBar - 2) / 2));
+  } else if (part === 3 && flourish) {
+    // a tucked jump on beat 1, arms up on landing; a spin with it every eighth bar
+    if (j === 0) {
+      p.rise = Math.sin(f * Math.PI);
+      p.tuck = 1.1 * Math.sin(f * Math.PI);
+      if (barN % 8 === 7) p.spin = 2 * Math.PI * smooth(f);
+    }
+    p.arm = j === 0 ? 1.2 + 1.6 * f : 2.8;
+  } else {
+    // arms low and high on alternate beats, a dip on the low ones
+    const hi = j % 2 === 0;
+    p.arm = hi ? 0.5 + 2.2 * step : 2.7 - 2.2 * step;
+    p.rise = hi ? 0.3 * hop(s) : -0.25 * Math.sin(f * Math.PI);
+    p.tuck = hi ? 0 : 0.35 * Math.sin(f * Math.PI);
+  }
+  return p;
+}
+
+/**
+ * The song's staging, over each one's own song moves (essexExtras, the bot's in the scene), all on
+ * the beat grid and eased, building toward the finale (the song's staging: listen-story.ts stagingAt).
+ * A strong line of their own takes the singer to a mark nearer the middle in a beat (round the desk,
+ * or up off the chair), with moves twice as big (arm pumps, leaning into the phone or mic) while the
+ * other turns to watch and calms down; where nobody sings in the instrumental (`free`) they dance the
+ * routine there, without its flourishes, more as it goes on; through the later choruses (`groove`)
+ * they dance it in place. For the finale (`together`) they walk out of their rooms to meet in the
+ * middle, arriving on a bar, and dance the routine side by side, mirrored, its jumps and spins too;
+ * on `freeze` they ease into a pose and hold it.
+ */
+function choreography(caller: Caller & { body: NonNullable<Caller["body"]> }, bot: Bot) {
+  const home = { caller: caller.root.position.clone(), agent: bot.root.position.clone() };
+  const turn = { caller: caller.root.rotation.y, agent: bot.root.rotation.y };
+  const swing = (legs: THREE.Group[], base: number, dist: number, amt: number, tuck = 0) => {
+    const a = 0.45 * amt * Math.sin((dist / STRIDE) * Math.PI);
+    legs[0]!.rotation.x = base + a - tuck;
+    legs[1]!.rotation.x = base - a - tuck;
+  };
+  const sides = ["caller", "agent"] as const;
+  const out = { caller: -1, agent: 1 };
+  return (m: Moment) => {
+    const s = m.song;
+    const at = { caller: home.caller.clone(), agent: home.agent.clone() };
+    const rot = { ...turn };
+    const lean = { caller: 0, agent: 0 };
+    const walked = { caller: 0, agent: 0 };
+    const moving = { caller: 0, agent: 0 };
+    let tuck = 0;
+    caller.root.rotation.z = 0;
+    if (s) {
+      const b = 60 / s.bpm;
+      const w = walkBeats(s);
+      const p = { caller: 0, agent: 0 };
+      if (w && s.beat >= w.fb) {
+        p.caller = smooth((s.beat - w.fb) / (w.ab - w.fb));
+        p.agent = smooth((s.beat - w.fb) / (w.ab - w.fb));
+      }
+      // solos and dancing free (not once they're off to the middle)
+      const solo = { caller: s.solo.caller * (1 - p.caller), agent: s.solo.agent * (1 - p.agent) };
+      const free = s.free * (1 - Math.max(p.caller, p.agent));
+      const pump = Math.sin(s.beat * Math.PI);
+      // the bot gets up once (stood), out to a spot in front of its armchair, and stays up; before that it
+      // sings and dances seated
+      const base = { caller: home.caller.clone(), agent: home.agent.clone().lerp(new THREE.Vector3(STAND_SPOT.x, home.agent.y, STAND_SPOT.z), s.stood) };
+      const up = { caller: 1, agent: s.stood };
+      for (const who of sides) {
+        const other = who === "caller" ? "agent" : "caller";
+        const away = Math.max(solo[who], free) * up[who];
+        const mark = new THREE.Vector3(SOLO_MARK[who], home[who].y, SOLO_MARK.z);
+        const path = [base[who], new THREE.Vector3(base[who].x, home[who].y, SOLO_MARK.z), mark];
+        const { at: pos, length } = along(path, away);
+        at[who].copy(pos);
+        walked[who] = length * away;
+        moving[who] = Math.max(Math.sin(Math.PI * away), who === "agent" ? Math.sin(Math.PI * s.stood) : 0);
+        // the soloist faces front, leaning into the phone/mic; the other turns a little to watch
+        rot[who] = turn[who] * (1 - away) + 0.5 * out[other] * solo[other];
+        lean[who] = 0.18 * solo[who] * (0.6 + 0.4 * Math.max(0, pump));
+      }
+      // the soloist's moves: twice as big
+      caller.root.position.y += 0.12 * solo.caller * hop(s);
+      bot.root.position.y += 0.12 * solo.agent * hop(s);
+      caller.body.arm.rotation.z += solo.caller * (0.9 * pump + 0.6);
+      bot.armL.rotation.z -= solo.agent * (0.9 * pump + 0.6);
+      bot.arm.rotation.x -= 0.4 * solo.agent * Math.max(0, pump);
+      // seated, a solo's a bounce and a nodding head
+      bot.head.rotation.x += 0.18 * solo.agent * (1 - s.stood) * Math.pow(1 - s.phase, 2);
+      // the other one calms down
+      caller.root.position.y += (home.caller.y - caller.root.position.y) * 0.6 * solo.agent;
+      caller.body.arm.rotation.z += (0.4 - caller.body.arm.rotation.z) * 0.6 * solo.agent;
+      bot.root.position.y += (home.agent.y - bot.root.position.y) * 0.6 * solo.caller;
+      bot.armL.rotation.z += (-0.3 - bot.armL.rotation.z) * 0.6 * solo.caller;
+
+      /** the routine at strength k, mirrored, from where they are; arms blended in by `armK` */
+      const dance = (pose: Pose, k: number, armK: number, spread = 1) => {
+        for (const who of sides) {
+          const o = out[who];
+          at[who].x += (o * pose.apart * spread + o * pose.side) * k;
+          rot[who] += (-o * (Math.PI / 2) * pose.face + o * pose.spin) * k;
+        }
+        caller.root.rotation.z = -pose.tilt * k;
+        bot.root.rotation.z = pose.tilt * k;
+        caller.root.position.y += pose.rise * k;
+        bot.root.position.y += pose.rise * k;
+        tuck = Math.max(tuck, pose.tuck * k);
+        for (const who of sides) moving[who] = Math.max(moving[who], 0.3 * k * Math.abs(Math.sin(s.beat * Math.PI)));
+        walked.caller += s.beat * STRIDE * 0.5 * Math.min(1, k * 4);
+        walked.agent += s.beat * STRIDE * 0.5 * Math.min(1, k * 4);
+        caller.body.arm.rotation.x += (-0.2 - caller.body.arm.rotation.x) * armK;
+        caller.body.arm.rotation.z += (pose.arm - caller.body.arm.rotation.z) * armK;
+        bot.armL.rotation.x += (-0.2 - bot.armL.rotation.x) * armK;
+        bot.armL.rotation.z += (-pose.arm - bot.armL.rotation.z) * armK;
+      };
+      // the instrumental: dancing free at their marks; the later choruses: in place
+      const moves = s.freeMoves * (1 - Math.max(p.caller, p.agent));
+      const loose = Math.max(moves, s.groove);
+      if (loose > 0 && !(w && s.beat >= w.fb)) dance(routine(s.beat, s, false), loose, loose, moves > s.groove ? 1 : 0.4);
+
+      if (w && s.beat >= w.fb) {
+        for (const who of sides) {
+          const from = at[who].clone();
+          const to = new THREE.Vector3(MEET[who], from.y, MEET.z);
+          const path = [from, new THREE.Vector3(from.x, from.y, MEET.z), to];
+          const { at: pos, heading, length } = along(path, p[who]);
+          at[who].copy(pos);
+          walked[who] += length * p[who];
+          const go = p[who] > 0 && p[who] < 1 ? Math.min(1, 6 * Math.min(p[who], 1 - p[who])) : 0;
+          moving[who] = Math.max(moving[who] * (1 - p[who]), go);
+          // facing the way they walk, then the camera
+          const face = smooth((p[who] - 0.8) / 0.2);
+          rot[who] = (rot[who] + (heading - rot[who]) * go) * (1 - face);
+        }
+        // the routine, once there, with its flourishes, slowing to the pose at the freeze
+        const d = smooth(s.beat - w.ab);
+        const still = s.freeze !== null && s.freeze >= 0 ? smooth(s.freeze / (3 * b)) : 0;
+        if (d > 0) {
+          const pose = routine(s.beat - w.ab, s, true);
+          pose.arm = pose.arm * (1 - still) + 2.8 * still;
+          dance(pose, d * (1 - still), d);
+        }
+        if (still > 0) {
+          // frozen: feet down, the mic up
+          caller.root.position.y += (home.caller.y - caller.root.position.y) * still;
+          bot.arm.rotation.x += (-2.6 - bot.arm.rotation.x) * still;
+        }
+      }
+    }
+    // the bot stands once it's clear of its armchair (seated in it, legs up on the footstool)
+    const stand = smooth((at.agent.z - home.agent.z - 0.75) / 0.5);
+    bot.root.position.y += 0.45 * stand;
+    swing(bot.legs, (Math.PI / 2) * stand, walked.agent, moving.agent * stand, 0.8 * tuck);
+    swing(caller.body.legs, 0, walked.caller, moving.caller, tuck);
+    caller.root.position.x = at.caller.x;
+    caller.root.position.z = at.caller.z;
+    bot.root.position.x = at.agent.x;
+    bot.root.position.z = at.agent.z;
+    caller.root.rotation.y = rot.caller;
+    bot.root.rotation.y = rot.agent;
+    // leaning into the phone/mic
+    caller.root.rotation.x = lean.caller;
+    bot.root.rotation.x = lean.agent;
+  };
+}
+
 // ---------- the scene ----------
 
-/** One call's scene, drawn with `renderer` (shared by every call on the page). */
-export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): CallScene {
+/** a camera and the part of the frame it draws, 0–1 from the top left */
+interface View {
+  cam: THREE.PerspectiveCamera;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+/** what a camera frames: the x it centres on, its height and the height it looks at, how far back, and how far either side of the centre it shows (none: the player's 30° lens) */
+interface Shot {
+  cx: number;
+  camY: number;
+  lookY: number;
+  dist: number;
+  halfW?: number;
+}
+/** the player's: both rooms, from 17.5 in front */
+const WIDE: Shot = { cx: 0, camY: 4.3, lookY: 2.25, dist: 17.5 };
+/** the stacked rooms, the caller's in the top 46% (listen.ts shapeCss too): each sits high in its view, its side's subtitle on the floor under it */
+const STACK_TOP = 0.46;
+const CALLER_ROOM: Shot = { cx: -3.2, camY: 4.4, lookY: 2.3, dist: 15, halfW: 5.4 };
+const BOT_ROOM: Shot = { cx: 3.9, camY: 3.3, lookY: -0.15, dist: 15, halfW: 5.4 };
+/** a tall frame's one camera in the song: both of them, looking down a little, the floor under them for the karaoke */
+const TALL_DISCO: Shot = { cx: 0.2, camY: 6.2, lookY: 1.2, dist: 17.5, halfW: 5.8 };
+/** the song's last part: both of them in the middle, centred, framed above the subtitles */
+const TOGETHER_SHOT: Shot = { cx: 0, camY: 2.8, lookY: 1.95, dist: 15.1 };
+const mixShot = (a: Shot, b: Shot, k: number): Shot => ({
+  cx: a.cx + (b.cx - a.cx) * k,
+  camY: a.camY + (b.camY - a.camY) * k,
+  lookY: a.lookY + (b.lookY - a.lookY) * k,
+  dist: a.dist + (b.dist - a.dist) * k,
+  halfW: a.halfW ?? b.halfW,
+});
+/** how far the camera's into dancing together (0–1): pushing in from a bar before they set off, settled as they arrive (choreography's walk) */
+function togetherAt(s: SongMoment): number {
+  const w = walkBeats(s);
+  return w ? smooth((s.beat - (w.fb - 4)) / (w.ab - (w.fb - 4))) : 0;
+}
+/** follow: one of them at a time */
+const FOLLOW: Shot = { cx: 0, camY: 4.3, lookY: 1.6, dist: 15, halfW: 4 };
+
+/** One call's scene, drawn with `renderer` (shared by every call on the page). `layout`: fixed, or (by default) from the frame's shape. */
+export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind, opts: { layout?: Layout } = {}): CallScene {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color("#0e0d10");
   const sky = new THREE.HemisphereLight("#fff3e0", "#2a2333", 1.6);
@@ -981,6 +1367,11 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
   scene.add(sun);
 
   const camera = new THREE.PerspectiveCamera(30, 16 / 9, 0.1, 100);
+  // the stacked layout's second, on the bot's room
+  const camera2 = new THREE.PerspectiveCamera(30, 16 / 9, 0.1, 100);
+  const size = new THREE.Vector2();
+  let layout: Layout = "wide";
+  let views: View[] = [{ cam: camera, x: 0, y: 0, w: 1, h: 1 }];
 
   agentRoom(scene);
   // the divider between the two ends of the call
@@ -1010,7 +1401,14 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
   for (let i = 0; i < 4; i++) box(pad, 0.36, 0.065, 0.03, "#2a6ab0", 0, 0.001, -0.2 + i * 0.13);
   pad.visible = false;
   const party = kind === "areyouai" ? disco(scene) : undefined;
+  /** the divider at height `h` (gone at 0), reaching `d` forward from the back walls */
+  const wall = (h: number, d: number) => {
+    divider.visible = h > 0.01;
+    divider.scale.set(0.25, Math.max(0.01, h), d);
+    divider.position.set(0, -0.2 + h / 2, -3.4 + d / 2);
+  };
   const songKit = kind === "areyouai" ? botSongKit(bot) : undefined;
+  const dancers = kind === "areyouai" && caller.body ? choreography({ ...caller, body: caller.body }, bot) : undefined;
 
   // the phone cable: from the caller's ear over the divider to the bot's headset, with pulses
   const cable = new THREE.CatmullRomCurve3([
@@ -1037,47 +1435,113 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
   });
 
   const v = new THREE.Vector3();
-  const project = (o: THREE.Object3D, dy: number): [number, number] => {
+  /** a pulse's place on the call's cable, while the song's takes over */
+  const pulseFrom = new THREE.Vector3();
+  const project = (o: THREE.Object3D, dy: number, view: View): [number, number] => {
     o.getWorldPosition(v);
     v.y += dy;
-    v.project(camera);
-    return [(v.x + 1) / 2, (1 - v.y) / 2];
+    v.project(view.cam);
+    return [view.x + (view.w * (v.x + 1)) / 2, view.y + (view.h * (1 - v.y)) / 2];
+  };
+
+  /**
+   * Points `cam` for `shot` in a view `aspect` wide. The camera leans toward whoever is talking
+   * (`lean`) and drifts; in the song it dances too: a slow orbit, a sway every two beats, a pump on
+   * each, a punch in when a chorus drops.
+   */
+  const aim = (cam: THREE.PerspectiveCamera, shot: Shot, aspect: number, m: Moment, lean: number) => {
+    cam.aspect = aspect;
+    // the player's lens; a frame narrower than 16:9 widens it to keep the rooms in, down to about 2 × 6.4 across
+    const halfW = shot.halfW ?? (aspect >= 16 / 9 ? undefined : Math.max(6.4, (8.33 * aspect) / (16 / 9)));
+    cam.fov = halfW === undefined ? 30 : (2 * Math.atan(halfW / (shot.dist * aspect)) * 180) / Math.PI;
+    cam.updateProjectionMatrix();
+    const { cx, lookY } = shot;
+    const song = m.song;
+    // the call's: leaning, drifting
+    const callPos = new THREE.Vector3(cx + lean + 0.3 * Math.sin(m.t * 0.13), shot.camY + 0.15 * Math.sin(m.t * 0.21), shot.dist);
+    const callLook = new THREE.Vector3(cx + lean * 0.6, lookY, 0);
+    if (!song) {
+      cam.position.copy(callPos);
+      cam.lookAt(callLook);
+      return;
+    }
+    const { e, k, pump, punch } = dance(song);
+    // pushing in on the beat and the drops; not on the two dancing together (the shot's their own then)
+    const calm = 1 - togetherAt(song);
+    // a solo: the camera leans and pushes toward the singer; dancing together: a slow drift over eight bars
+    const together = 1 - calm;
+    const soloing = (song.soloCam.agent - song.soloCam.caller) * calm;
+    const drift = Math.sin((2 * Math.PI * song.beat) / 32);
+    const dist =
+      shot.dist - k * calm * (0.6 * e * pump + 3.2 * punch + (song.section === "finale" && song.together === null ? 1.6 * smooth(song.sectionSince / 1.5) : 0)) -
+      1.2 * Math.abs(soloing) + together * 0.4 * Math.sin((2 * Math.PI * song.beat) / 32 + 1);
+    const orbit = k * calm * 0.12 * Math.sin(song.since * 0.1) + together * 0.055 * drift;
+    const x = cx + lean * 0.6 + 0.35 * e * sway(song) * calm + 1.3 * soloing;
+    // eased over from the call's, so the song starts without a jump
+    const b = smooth(song.since / 1.5);
+    cam.position.lerpVectors(callPos, new THREE.Vector3(x + Math.sin(orbit) * dist, shot.camY + 0.25 * e * hop(song) - 0.6 * punch, Math.cos(orbit) * dist), b);
+    cam.lookAt(callLook.lerp(new THREE.Vector3(x, lookY, 0), b));
+    cam.rotateZ(0.03 * e * sway(song) * b);
   };
 
   return {
     render(m) {
       const t = m.t;
       const song = m.song;
-      // camera leans toward whoever is talking
-      const lean = 0.9 * (m.active.agent - m.active.caller) * (song ? 0.3 : 1);
-      camera.position.set(lean + 0.3 * Math.sin(t * 0.13), 4.3 + 0.15 * Math.sin(t * 0.21), 17.5);
-      camera.lookAt(lean * 0.6, 2.25, 0);
+      renderer.getSize(size);
+      const aspect = size.x / size.y;
+      layout = m.layout ?? opts.layout ?? layoutFor(size.x, size.y);
+      // the song's camera takes over from the call's over its first 1.5 s
+      const into = song ? smooth(song.since / 1.5) : 0;
+      const lean = 0.9 * (m.active.agent - m.active.caller) * (1 - 0.7 * into);
+      if (layout === "wide") {
+        views = [{ cam: camera, x: 0, y: 0, w: 1, h: 1 }];
+        // dancing together in the middle: the camera settles on them, centred, above the subtitles
+        const c = song && dancers ? togetherAt(song) : 0;
+        aim(camera, c > 0 ? mixShot(WIDE, TOGETHER_SHOT, c) : WIDE, aspect, m, lean * (1 - c));
+      } else if (song) {
+        // together for the song
+        views = [{ cam: camera, x: 0, y: 0, w: 1, h: 1 }];
+        aim(camera, TALL_DISCO, aspect, m, lean);
+      } else if (layout === "stack") {
+        // a dark seam between the rooms, where the divider is
+        const seam = 6 / size.y;
+        views = [
+          { cam: camera, x: 0, y: 0, w: 1, h: STACK_TOP - seam },
+          { cam: camera2, x: 0, y: STACK_TOP + seam, w: 1, h: 1 - STACK_TOP - seam },
+        ];
+        aim(camera, CALLER_ROOM, aspect / views[0]!.h, m, 0);
+        aim(camera2, BOT_ROOM, aspect / views[1]!.h, m, 0);
+      } else {
+        views = [{ cam: camera, x: 0, y: 0, w: 1, h: 1 }];
+        const f = ease(m.focus);
+        const lift = m.lift ?? 0;
+        aim(camera, { ...FOLLOW, cx: CALLER_ROOM.cx + (BOT_ROOM.cx - CALLER_ROOM.cx) * f, camY: FOLLOW.camY + lift, lookY: FOLLOW.lookY + lift }, aspect, m, 0);
+      }
       sky.intensity = 1.6;
       sun.intensity = 1.8;
-      divider.scale.set(0.25, 7.2, 14.4);
-      divider.position.set(0, -0.2 + 3.6, 3.8);
+      // the disco ball's lead-in (before the song): the divider pulls back first, so the ball comes down in front
+      // of it, then sinks out of sight by the time the ball has settled
+      const lead = m.ball && m.ball.lead > 0 ? m.ball : null;
+      const back = lead ? smooth(lead.since / BALL_PULL) : 0;
+      const sunk = lead ? smooth((lead.since - BALL_PULL) / Math.max(0.1, lead.lead - BALL_PULL - BALL_SETTLE)) : 0;
+      wall(7.2 * (1 - sunk), 14.4 - DIVIDER_BACK * back);
       if (song) {
-        // the disco: lights down, the divider sinks for the ball, and the camera dances too: a slow
-        // orbit, a sway every two beats, a pump on each, a punch in when a chorus drops
-        const e = Math.min(1.3, song.energy);
-        const k = ease(song.since / 2);
-        const pump = Math.pow(1 - song.phase, 4);
-        const punch = song.section === "chorus" && song.sectionSince < 1.4 ? 1 - ease(song.sectionSince / 1.4) : 0;
-        const dist = 17.5 - k * (0.6 * e * pump + 3.2 * punch + (song.section === "finale" ? 1.6 : 0));
-        const orbit = k * 0.12 * Math.sin(song.since * 0.1);
-        const x = lean * 0.6 + 0.35 * e * sway(song);
-        camera.position.set(x + Math.sin(orbit) * dist, 4.3 + 0.25 * e * hop(song) - 0.6 * punch, Math.cos(orbit) * dist);
-        camera.lookAt(x, 2.25, 0);
-        camera.rotateZ(0.03 * e * sway(song));
+        // the disco: lights down, the divider sinks for the ball (the camera dances: aim)
+        const { e, k, punch } = dance(song);
         // a white flash as a chorus drops, a flicker on the beat in the finale
         const flash = 3 * punch * punch + (song.section === "finale" ? 1.2 * Math.pow(1 - song.phase, 8) : 0.3 * e * Math.pow(1 - song.phase, 6));
         sky.intensity = 1.6 * (1 - 0.75 * k) + flash;
         sun.intensity = 1.8 * (1 - 0.8 * k);
-        // the divider pulls back and down, out of the moving camera's way, and the ball comes in over it
-        const h = 7.2 - 2.8 * ease(song.since / 1.5);
-        const d = 14.4 - 10 * ease(song.since / 1.5);
-        divider.scale.set(0.25, h, d);
-        divider.position.set(0, -0.2 + h / 2, -3.4 + d / 2);
+        // the divider (if a lead-in hasn't already) pulls back and sinks away for the song: it's gone
+        const go = Math.max(sunk, ease(song.since / 1.5));
+        wall(7.2 * (1 - go), 14.4 - DIVIDER_BACK * Math.max(back, go));
+        // the last line: the lights go down on the pose
+        if (song.freeze !== null && song.freeze > 0) {
+          const dim = 1 - 0.55 * smooth(song.freeze / 2);
+          sky.intensity *= dim;
+          sun.intensity *= dim;
+        }
       }
       party?.(m);
 
@@ -1115,12 +1579,18 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
       bot.armL.rotation.z = 0;
       bot.mouth.visible = true;
       songKit?.(m);
+      // a prologue's blinks: lit and grown, dark between them
+      const tip = bot.antennaTip.material as THREE.MeshLambertMaterial;
+      if (m.blink !== undefined && m.blink !== null) tip.emissive.set(m.blink > 0 ? "#ff3a24" : "#3a0d0a");
+      bot.antennaTip.scale.setScalar(0.16 * (1 + 0.7 * (m.blink ?? 0)));
       if (song) {
         // bouncing in the armchair, mic up while it sings, the other arm waving, antenna strobing
         const e = Math.min(1.2, song.energy);
         const side = sway(song);
         const sing = clamp01(m.active.agent * 1.5);
-        bot.root.position.y = 0.05 + 0.18 * e * hop(song);
+        // a chorus: its bob half a beat after the caller's, call and response
+        const offbeat = song.section === "chorus" ? Math.sin(((song.phase + 0.5) % 1) * Math.PI) : hop(song);
+        bot.root.position.y = 0.05 + 0.18 * e * offbeat;
         bot.root.rotation.z = 0.06 * e * side;
         bot.head.rotation.x = -0.05 + 0.2 * e * Math.pow(1 - song.phase, 3);
         bot.head.rotation.z = 0.12 * e * side;
@@ -1131,6 +1601,8 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
         (bot.antennaTip.material as THREE.MeshLambertMaterial).emissive.set(discoAt(song.beat * 2, 3));
         (bot.belly.material as THREE.MeshLambertMaterial).emissive.set(discoAt(song.beat, 1));
       }
+      // the song's staging: solos, the walk to the middle, dancing together
+      dancers?.(m);
 
       // pulses travel away from whoever is speaking
       for (let i = 0; i < pulses.length; i++) {
@@ -1138,15 +1610,25 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
         const level = fromCaller ? m.level.caller : m.level.agent;
         const p = pulses[i]!;
         if (song) {
-          // the song: always on, rainbow, stepping along with the beat
+          // the song: always on, rainbow, stepping along with the beat; blended over from the call's over its first second
           // the beat count is negative before the first beat: keep u in [0, 1)
           const u = (((song.beat * 0.125 + (i % PULSES) / PULSES) % 1) + 1) % 1;
           const mat = rainbow[i]!;
-          mat.color.setHSL((i / PULSES + song.beat * 0.0625) % 1, 1, 0.55);
+          mat.color.setHSL((((i / PULSES + song.beat * 0.0625) % 1) + 1) % 1, 1, 0.55);
+          const into = smooth(song.since);
+          const scale = 0.5 + 0.8 * Math.min(1.2, song.energy) * Math.pow(1 - song.phase, 2);
+          if (into < 1) {
+            mat.color.lerpColors((fromCaller ? callerPulse : agentPulse).color, mat.color.clone(), into);
+            cable.getPointAt(fromCaller ? (t * 0.45 + (i % PULSES) / PULSES) % 1 : 1 - ((t * 0.45 + (i % PULSES) / PULSES) % 1), pulseFrom);
+            cable.getPointAt(fromCaller ? u : 1 - u, p.position);
+            p.position.lerpVectors(pulseFrom, p.position.clone(), into);
+            p.scale.setScalar((level > 0.3 ? 0.6 + level : 0) * (1 - into) + scale * into);
+          } else {
+            cable.getPointAt(fromCaller ? u : 1 - u, p.position);
+            p.scale.setScalar(scale);
+          }
           p.material = mat;
           p.visible = true;
-          cable.getPointAt(fromCaller ? u : 1 - u, p.position);
-          p.scale.setScalar(0.5 + 0.8 * Math.min(1.2, song.energy) * Math.pow(1 - song.phase, 2));
           continue;
         }
         p.material = fromCaller ? callerPulse : agentPulse;
@@ -1155,15 +1637,44 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind): Cal
         cable.getPointAt(fromCaller ? u : 1 - u, p.position);
         p.scale.setScalar(0.6 + level);
       }
-      renderer.render(scene, camera);
+      if (views.length === 1) renderer.render(scene, camera);
+      else {
+        renderer.setClearColor("#0e0d10");
+        renderer.clear();
+        renderer.setScissorTest(true);
+        for (const view of views) {
+          // WebGL counts up from the bottom
+          const [x, y, w, h] = [view.x * size.x, (1 - view.y - view.h) * size.y, view.w * size.x, view.h * size.y].map(Math.round) as [number, number, number, number];
+          renderer.setViewport(x, y, w, h);
+          renderer.setScissor(x, y, w, h);
+          renderer.render(scene, view.cam);
+        }
+        renderer.setScissorTest(false);
+        renderer.setViewport(0, 0, size.x, size.y);
+      }
     },
     anchors() {
+      const [callerView, agentView] = [views[0]!, views.at(-1)!];
       return {
-        callerHead: project(caller.head, 2.1),
-        agentHead: project(bot.head, 1.9),
-        callerFeet: project(caller.root, -0.3),
-        agentFeet: project(bot.root, -0.3),
+        callerHead: project(caller.head, 2.1, callerView),
+        agentHead: project(bot.head, 1.9, agentView),
+        callerFeet: project(caller.root, -0.3, callerView),
+        agentFeet: project(bot.root, -0.3, agentView),
+        callerEyes: project(caller.head, 0.55, callerView),
+        agentEyes: project(bot.head, 0.5, agentView),
+        antenna: project(bot.antennaTip, 0, agentView),
       };
     },
+    layout: () => layout,
+  };
+}
+
+/** the song's camera and lights: how wild (e), eased in over its first 2 s (k), the pump on each beat, the punch as a chorus drops */
+function dance(song: SongMoment) {
+  return {
+    e: Math.min(1.3, song.energy),
+    k: ease(song.since / 2),
+    pump: Math.pow(1 - song.phase, 4),
+    punch: song.section === "chorus" && song.sectionSince < 1.4 ? 1 - ease(song.sectionSince / 1.4) : 0,
   };
 }
