@@ -30,7 +30,6 @@
     "eval": "bun evals/run.ts",
     "db:generate": "drizzle-kit generate",
     "check-config": "bun scripts/check-config.ts",
-    "brand-icons": "bun scripts/brand-icons.ts",
     "prod": "bun scripts/prod.ts",
     "tunnel": "cloudflared tunnel --config deploy/cloudflared.yml run"
   }
