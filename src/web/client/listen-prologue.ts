@@ -20,6 +20,12 @@ const SIREN_HZ = 1;
 const RINGING = { pz: 1.2, w: 20, h: 36, y: 0.43 };
 const UP = { pz: 1.5, w: 18.5, h: 26.3, y: 0.565 };
 const CALL = { pz: 1, w: 25, h: 15 };
+/** a tall frame's (the recorder's Shorts): a card that follows an eye line sits this far above it (of the frame's
+ * height), over the head; a card while the phone's up sits just above the phone, at least this big */
+const TALL_ABOVE_EYES = 0.12;
+const TALL_OVER_PHONE = { y: 0.235, size: 1.1 };
+/** …and the ringing phone sits lower, under its caption */
+const TALL_RINGING_Y = 0.46;
 
 /** pixel art, one rect per run: a police light, a handset, a send arrow, a tick */
 const px = (w: number, h: number, rects: [number, number, number, number, string][], cls = "") =>
@@ -53,6 +59,16 @@ function rich(into: HTMLElement, text: string) {
     else into.append(part);
   }
 }
+/** "A · B" as two spans and the dot between them, so a tall frame can show two lines (listen.ts: .sep) */
+export function splitLine(into: HTMLElement, text: string) {
+  if (into.dataset.text === text) return;
+  into.dataset.text = text;
+  into.textContent = "";
+  for (const [i, part] of text.split(" · ").entries()) {
+    if (i) el("i", "sep", into).textContent = " · ";
+    el("span", "", into).textContent = part;
+  }
+}
 /** "7:30" */
 const mmss = (s: number) => {
   const t = Math.max(0, Math.floor(s));
@@ -76,6 +92,11 @@ export class PrologueLayer {
     for (const c of beatsOf(p, "clock")) this.clock(c);
     for (const g of beatsOf(p, "tag")) this.tag(g);
     this.phone(beatsOf(p, "ring")[0], beatsOf(p, "phone")[0]);
+  }
+
+  /** the stage is a tall frame's */
+  private tall() {
+    return this.root.parentElement?.dataset.shape === "tall";
   }
 
   remove() {
@@ -106,17 +127,22 @@ export class PrologueLayer {
   /** a title card, built like an edit's (listen-edit.ts): a pop in, a fade over its last 0.3 s */
   private card(c: BeatOf<"card">) {
     const e = el("div", `rc-card${c.align === "left" ? " pl-left" : ""}`, this.root);
-    set(e, { y: `${(c.pos ?? 0.5) * 100}%`, k: c.size ?? 1 });
     const b = el("b", "", e);
     rich(b, c.text);
     if (c.sub) el("small", "", b).textContent = c.sub;
+    const chat = beatsOf(this.p, "phone")[0];
+    const overPhone = !!chat && c.start < chat.handoff && c.end > chat.start;
+    // a tall frame's: over the dimmed phone, as amber text (listen.ts: .pl-over)
+    e.classList.toggle("pl-over", overPhone);
     this.draws.push((t) => {
       const on = t >= c.start && t < c.end;
       show(e, on);
       if (!on) return;
       set(e, { s: c.in === "none" ? 1 : pop(t - c.start), o: clamp01((c.end - t) / FADE) });
+      const tall = this.tall();
       const eyes = c.follow && this.anchors?.[c.follow === "agent" ? "agentEyes" : "callerEyes"];
-      if (eyes) set(e, { y: `${(eyes[1] * 100).toFixed(2)}%` });
+      const y = eyes ? eyes[1] - (tall ? TALL_ABOVE_EYES : 0) : tall && overPhone ? TALL_OVER_PHONE.y : (c.pos ?? 0.5);
+      set(e, { y: `${(y * 100).toFixed(2)}%`, k: tall && overPhone ? Math.max(c.size ?? 1, TALL_OVER_PHONE.size) : (c.size ?? 1) });
     });
   }
 
@@ -155,7 +181,7 @@ export class PrologueLayer {
     const black = el("div", "pl-black", this.root);
     const siren = el("div", "pl-siren", this.root);
     const cap = el("div", "pl-cap", this.root);
-    cap.textContent = ring?.caption?.text ?? "";
+    splitLine(cap, ring?.caption?.text ?? "");
     const msg = el("div", "pl-msg", this.root);
     msg.innerHTML = `<div class="rc-phone">
     <i class="rc-phone-cam"></i>
@@ -209,7 +235,7 @@ export class PrologueLayer {
           dx += env * 0.5 * Math.sin(2 * Math.PI * 26 * (t - b));
           r += env * 1.4 * Math.sin(2 * Math.PI * 19 * (t - b) + 1);
         }
-        set(msg, { y: `${RINGING.y * 100}%`, dx: `${dx}cqw`, r: `${r}deg`, o: 1 });
+        set(msg, { y: `${(this.tall() ? TALL_RINGING_Y : RINGING.y) * 100}%`, dx: `${dx}cqw`, r: `${r}deg`, o: 1 });
         set(ph, RINGING);
         set(light, { lb: Math.sin(2 * Math.PI * SIREN_HZ * t) < 0 ? "#d8281f" : "#3d6bff" });
         const press = t >= ring.answer;
@@ -227,7 +253,8 @@ export class PrologueLayer {
       show(space, !handed);
       show(input, !handed);
       const y = 130 - (130 - UP.y * 100) * up + ((chat.pos ?? 0.42) - UP.y) * 100 * u;
-      set(msg, { y: `${y.toFixed(2)}%`, dx: "0cqw", r: "0deg", o: clamp01((chat.end - t) / FADE) });
+      // a tall frame has no room for it in the call (it'd sit on the subtitles): it fades as it hands off
+      set(msg, { y: `${y.toFixed(2)}%`, dx: "0cqw", r: "0deg", o: clamp01((chat.end - t) / FADE) * (this.tall() ? 1 - u : 1) });
       set(ph, { pz: UP.pz + (CALL.pz - UP.pz) * u, w: UP.w + (CALL.w - UP.w) * u, h: UP.h + (CALL.h - UP.h) * u });
       set(space, { g: 1 - u });
       set(input, { ih: 1 - u });
