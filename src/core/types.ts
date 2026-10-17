@@ -232,7 +232,9 @@ export type CallEvent =
   /** the owner's page hears the caller (the transferred leg's audio flows) */
   | { type: "takeover.live"; callId: string; at: number }
   /** the takeover didn't happen: the agent carries on, or the call ended (call.ended follows) */
-  | { type: "takeover.failed"; callId: string; at: number; reason: string };
+  | { type: "takeover.failed"; callId: string; at: number; reason: string }
+  /** the call's recording stopped (storage failed or fell behind), or couldn't be stored at the end */
+  | { type: "recording.failed"; callId: string; at: number; reason: string };
 
 /** A SIP INVITE header as a vendor reports it (untrusted call metadata). */
 export interface SipHeader {

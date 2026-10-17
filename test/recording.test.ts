@@ -159,7 +159,7 @@ describe("CallManager recordings", () => {
     w.append(frames(3, 1));
     expect(await w.finish()).toBe("recordings/c1.wav");
     expect(appended).toEqual([4]);
-    expect(r.events.some((e) => e.type === "note" && e.level === "warn" && e.message.includes("recording stopped"))).toBe(true);
+    expect(r.events.some((e) => e.type === "recording.failed" && e.reason === "recording stopped: writing it failed")).toBe(true);
     await r.persistence.flush();
     expect((await r.repo.getCall("c1"))?.recordingPath).toBe("recordings/c1.wav");
   });
@@ -185,7 +185,7 @@ describe("CallManager recordings", () => {
     await Bun.sleep(0);
     for (let i = 1; i < 12; i++) w.append(block);
     await Bun.sleep(0);
-    expect(r.events.filter((e) => e.type === "note" && e.message === "recording stopped: storage fell over 30 s behind")).toHaveLength(1);
+    expect(r.events.filter((e) => e.type === "recording.failed" && e.reason === "recording stopped: storage fell over 30 s behind")).toHaveLength(1);
     release();
     expect(await w.finish()).toBe("recordings/c1.wav");
     // Only the block in flight lands; the queued ones are dropped.

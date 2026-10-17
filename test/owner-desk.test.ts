@@ -503,6 +503,21 @@ describe("owner desk: declined calls", () => {
   });
 });
 
+describe("owner desk: recording failures", () => {
+  test("a stopped recording gets a notifying reply under the status message; public calls don't", async () => {
+    const r = await rig();
+    r.start("c1");
+    r.start("p1", "+441", { channel: "public" });
+    await settle();
+    const status = r.sent.length;
+    r.bus.publish({ type: "recording.failed", callId: "c1", at: 65_000, reason: "recording stopped: writing it failed" });
+    r.bus.publish({ type: "recording.failed", callId: "p1", at: 1_000, reason: "recording stopped: writing it failed" });
+    await settle();
+    expect(r.sent.slice(status).map((m) => m.text)).toEqual(["⚠️ Recording stopped: writing it failed (at 1:05)."]);
+    expect(r.sent.at(-1)!.replyTo).toBe(r.sent[0]!.id);
+  });
+});
+
 describe("owner desk: takeover", () => {
   const url = (id: string) => `https://hooks.example.com/takeover/${id}`;
   async function takeoverRig(o: Parameters<typeof rig>[0] = {}) {

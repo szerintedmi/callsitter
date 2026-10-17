@@ -3,6 +3,7 @@ import { CallSession, type CallSessionDeps } from "./call-session";
 import { withCarrier } from "./cost";
 import { CallGate, callSecondsCap, type Channel, type LimitHit } from "./limits";
 import { logger } from "./log";
+import { errMsg } from "./orchestrator";
 import type { BlobStore, EventBus, MediaChannel, OwnerAudioLeg, RecordingStore, RecordingWriter, Repo, TakeoverHandle, VoiceAgent } from "./ports";
 import { bufferedRecordings } from "./recording";
 import { TakeoverTokens, takeoverUri } from "./takeover";
@@ -412,6 +413,13 @@ export class CallManager {
     return call ? Math.max(0, this.d.clock.now() - call.startedAt) : null;
   }
 
+  /** The recording stopped: an error on the call's timeline and a Telegram reply (never said to the caller). */
+  private async recordingFailed(callId: string, reason: string) {
+    const call = await this.d.repo.getCall(callId);
+    if (!call) return;
+    this.d.bus.publish({ type: "recording.failed", callId, at: Math.max(0, this.d.clock.now() - call.startedAt), reason });
+  }
+
   /** Records a note on a call, e.g. a telephony error outside the voice session. */
   async note(callId: string, level: "info" | "warn" | "error", message: string) {
     const call = await this.d.repo.getCall(callId);
@@ -461,8 +469,8 @@ export class CallManager {
     const stop = (why: string, err?: unknown) => {
       if (failed) return;
       failed = true;
-      recLog.warn(`recording ${why}: the rest of the call isn't recorded`, { callId, err });
-      void this.note(callId, "warn", `recording stopped: ${why}`).catch(() => undefined);
+      recLog.error(`recording ${why}: the rest of the call isn't recorded`, { callId, err });
+      void this.recordingFailed(callId, `recording stopped: ${why}`).catch(() => undefined);
     };
     return {
       append: (pcm) => {
@@ -482,8 +490,9 @@ export class CallManager {
               await this.recordingStored(callId, path);
               return path;
             })
-            .catch((err) => {
-              recLog.warn("recording not saved", { callId, err });
+            .catch(async (err) => {
+              recLog.error("recording not saved", { callId, err });
+              await this.recordingFailed(callId, `recording not saved: ${errMsg(err)}`).catch(() => undefined);
               return null;
             }),
         )),

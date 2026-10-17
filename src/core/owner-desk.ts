@@ -178,6 +178,14 @@ export class OwnerDesk {
         delete v.takeoverLive;
         v.takeoverFailed = ev.reason;
         break;
+      case "recording.failed":
+        // A reply, so it notifies; the status message itself doesn't change. Not in the public
+        // group: it's for the owner.
+        if (v.channel === "public") return;
+        void v.message
+          .then((replyTo) => this.sendFor(v.callId, `⚠️ ${capitalized(ev.reason)} (at ${clock(ev.at)}).`, replyTo !== null ? { replyTo } : {}))
+          .catch((err) => log.warn("recording failure not sent", { callId: v.callId, err }));
+        return;
       default:
         return;
     }
@@ -542,6 +550,8 @@ export function parseOwnerMessage(st: TelegramConfig["steering"], message: strin
 function cut(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
+
+const capitalized = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** m:ss */
 function clock(ms: number): string {

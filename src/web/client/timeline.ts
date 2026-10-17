@@ -581,6 +581,9 @@ export function createTimeline(root: HTMLElement): Timeline {
       case "note":
         row({ kind: "note " + ev.level, at: ev.at, body: esc(ev.message) });
         break;
+      case "recording.failed":
+        row({ kind: "note error", at: ev.at, body: esc(ev.reason) });
+        break;
       case "takeover.started": {
         // The owner asked from Telegram: the call flow has Live say the handover line, then transfers the call.
         const { r } = row({ kind: "takeover", at: ev.at, dots: [["f", "flow"]], body: '<b>🎧 owner takes over</b> <span class="muted">· the agent says the handover line, then the call moves to the owner</span>' });
