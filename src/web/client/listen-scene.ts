@@ -10,8 +10,8 @@ export type SceneKind = "areyouai" | "police" | "cryptobot" | "electrician" | "c
  * How the rooms share the frame. wide: side by side, one camera (the player's 16:9; a squarer frame
  * crops the rooms' outer ends). stack: the caller's room on top, the bot's below, each with its own
  * camera, the cable leaving the top one and reaching the bottom one at the divider. follow: one
- * camera on whoever spoke last. In a tall frame the song's disco is one camera on both (they dance
- * together); the stacked rooms come back after it.
+ * camera on whoever spoke last (closer in a tall frame). In a tall frame the song keeps the rooms
+ * stacked, each camera dancing, until they set off to dance together: then one camera on both.
  */
 export type Layout = "wide" | "stack" | "follow";
 /** the layout for a frame `w`×`h`: stacked when it's clearly taller than wide */
@@ -1330,12 +1330,18 @@ interface Shot {
 }
 /** the player's: both rooms, from 17.5 in front */
 const WIDE: Shot = { cx: 0, camY: 4.3, lookY: 2.25, dist: 17.5 };
-/** the stacked rooms, the caller's in the top 46% (listen.ts shapeCss too): each sits high in its view, its side's subtitle on the floor under it */
-const STACK_TOP = 0.46;
-const CALLER_ROOM: Shot = { cx: -3.2, camY: 4.4, lookY: 2.3, dist: 15, halfW: 5.4 };
-const BOT_ROOM: Shot = { cx: 3.9, camY: 3.3, lookY: -0.15, dist: 15, halfW: 5.4 };
-/** a tall frame's one camera in the song: both of them, looking down a little, the floor under them for the karaoke */
-const TALL_DISCO: Shot = { cx: 0.2, camY: 6.2, lookY: 1.2, dist: 17.5, halfW: 5.8 };
+/** the stacked rooms, the same height: the caller's down to 42% of the frame, the bot's from 58% (listen.ts shapeCss too), each filling its width (the divider out of shot); the dark band between is the subtitles' and the banner's */
+const STACK_TOP = 0.42;
+const STACK_BOT = 0.58;
+const CALLER_ROOM: Shot = { cx: -4.15, camY: 4.4, lookY: 2.65, dist: 15, halfW: 3.8 };
+const BOT_ROOM: Shot = { cx: 4.35, camY: 3.6, lookY: 1.4, dist: 15, halfW: 3.9 };
+/** a tall frame's one camera in the song's finale, as they set off to dance together: both rooms, looking down a little, the floor under them for the karaoke */
+const TALL_DISCO: Shot = { cx: 0, camY: 6.2, lookY: 1.2, dist: 17.5, halfW: 6.8 };
+/** …and on them, together in the middle */
+const TALL_TOGETHER: Shot = { cx: 0, camY: 3.8, lookY: 1.3, dist: 15.1, halfW: 3.6 };
+/** a tall frame's follow: close on whoever it's on (the divider out of shot), the room high, over the subtitles */
+const TALL_FOLLOW: Shot = { cx: 0, camY: 4.3, lookY: 1.2, dist: 15, halfW: 3.3 };
+const TALL_FOLLOW_X = { caller: -3.9, agent: 4.3 };
 /** the song's last part: both of them in the middle, centred, framed above the subtitles */
 const TOGETHER_SHOT: Shot = { cx: 0, camY: 2.8, lookY: 1.95, dist: 15.1 };
 const mixShot = (a: Shot, b: Shot, k: number): Shot => ({
@@ -1345,13 +1351,16 @@ const mixShot = (a: Shot, b: Shot, k: number): Shot => ({
   dist: a.dist + (b.dist - a.dist) * k,
   halfW: a.halfW ?? b.halfW,
 });
+/** togetherAt as they set off (the finale's first beat): a tall frame's stacked rooms give way to one camera */
+const TALL_APART = 1 / 3;
 /** how far the camera's into dancing together (0–1): pushing in from a bar before they set off, settled as they arrive (choreography's walk) */
 function togetherAt(s: SongMoment): number {
   const w = walkBeats(s);
   return w ? smooth((s.beat - (w.fb - 4)) / (w.ab - (w.fb - 4))) : 0;
 }
-/** follow: one of them at a time */
+/** follow: one of them at a time, centred on these */
 const FOLLOW: Shot = { cx: 0, camY: 4.3, lookY: 1.6, dist: 15, halfW: 4 };
+const FOLLOW_X = { caller: -3.2, agent: 3.9 };
 
 /** One call's scene, drawn with `renderer` (shared by every call on the page). `layout`: fixed, or (by default) from the frame's shape. */
 export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind, opts: { layout?: Layout } = {}): CallScene {
@@ -1449,7 +1458,7 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind, opts
    * (`lean`) and drifts; in the song it dances too: a slow orbit, a sway every two beats, a pump on
    * each, a punch in when a chorus drops.
    */
-  const aim = (cam: THREE.PerspectiveCamera, shot: Shot, aspect: number, m: Moment, lean: number) => {
+  const aim = (cam: THREE.PerspectiveCamera, shot: Shot, aspect: number, m: Moment, lean: number, pan = 1) => {
     cam.aspect = aspect;
     // the player's lens; a frame narrower than 16:9 widens it to keep the rooms in, down to about 2 × 6.4 across
     const halfW = shot.halfW ?? (aspect >= 16 / 9 ? undefined : Math.max(6.4, (8.33 * aspect) / (16 / 9)));
@@ -1476,7 +1485,8 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind, opts
       shot.dist - k * calm * (0.6 * e * pump + 3.2 * punch + (song.section === "finale" && song.together === null ? 1.6 * smooth(song.sectionSince / 1.5) : 0)) -
       1.2 * Math.abs(soloing) + together * 0.4 * Math.sin((2 * Math.PI * song.beat) / 32 + 1);
     const orbit = k * calm * 0.12 * Math.sin(song.since * 0.1) + together * 0.055 * drift;
-    const x = cx + lean * 0.6 + 0.35 * e * sway(song) * calm + 1.3 * soloing;
+    // pan 0: a room's own camera (a tall frame's) doesn't swing over to the other room's singer
+    const x = cx + lean * 0.6 + 0.35 * e * sway(song) * calm + 1.3 * soloing * pan;
     // eased over from the call's, so the song starts without a jump
     const b = smooth(song.since / 1.5);
     cam.position.lerpVectors(callPos, new THREE.Vector3(x + Math.sin(orbit) * dist, shot.camY + 0.25 * e * hop(song) - 0.6 * punch, Math.cos(orbit) * dist), b);
@@ -1499,24 +1509,28 @@ export function createScene(renderer: THREE.WebGLRenderer, kind: SceneKind, opts
         // dancing together in the middle: the camera settles on them, centred, above the subtitles
         const c = song && dancers ? togetherAt(song) : 0;
         aim(camera, c > 0 ? mixShot(WIDE, TOGETHER_SHOT, c) : WIDE, aspect, m, lean * (1 - c));
-      } else if (song) {
-        // together for the song
+      } else if (song && dancers && togetherAt(song) > TALL_APART) {
+        // setting off to dance together (on the finale's drop): one camera, closing in on them in the middle
         views = [{ cam: camera, x: 0, y: 0, w: 1, h: 1 }];
-        aim(camera, TALL_DISCO, aspect, m, lean);
-      } else if (layout === "stack") {
-        // a dark seam between the rooms, where the divider is
-        const seam = 6 / size.y;
+        aim(camera, mixShot(TALL_DISCO, TALL_TOGETHER, smooth((togetherAt(song) - TALL_APART) / (1 - TALL_APART))), aspect, m, 0);
+      } else if (layout === "stack" || song) {
+        // a dark band between the rooms, where the divider is (in the song, each room's camera dances)
         views = [
-          { cam: camera, x: 0, y: 0, w: 1, h: STACK_TOP - seam },
-          { cam: camera2, x: 0, y: STACK_TOP + seam, w: 1, h: 1 - STACK_TOP - seam },
+          { cam: camera, x: 0, y: 0, w: 1, h: STACK_TOP },
+          { cam: camera2, x: 0, y: STACK_BOT, w: 1, h: 1 - STACK_BOT },
         ];
-        aim(camera, CALLER_ROOM, aspect / views[0]!.h, m, 0);
-        aim(camera2, BOT_ROOM, aspect / views[1]!.h, m, 0);
+        aim(camera, CALLER_ROOM, aspect / views[0]!.h, m, 0, 0);
+        aim(camera2, BOT_ROOM, aspect / views[1]!.h, m, 0, 0);
+      } else if (aspect < 0.8) {
+        // follow in a tall frame: no lift, it has the headroom
+        views = [{ cam: camera, x: 0, y: 0, w: 1, h: 1 }];
+        const f = ease(m.focus);
+        aim(camera, { ...TALL_FOLLOW, cx: TALL_FOLLOW_X.caller + (TALL_FOLLOW_X.agent - TALL_FOLLOW_X.caller) * f }, aspect, m, 0);
       } else {
         views = [{ cam: camera, x: 0, y: 0, w: 1, h: 1 }];
         const f = ease(m.focus);
         const lift = m.lift ?? 0;
-        aim(camera, { ...FOLLOW, cx: CALLER_ROOM.cx + (BOT_ROOM.cx - CALLER_ROOM.cx) * f, camY: FOLLOW.camY + lift, lookY: FOLLOW.lookY + lift }, aspect, m, 0);
+        aim(camera, { ...FOLLOW, cx: FOLLOW_X.caller + (FOLLOW_X.agent - FOLLOW_X.caller) * f, camY: FOLLOW.camY + lift, lookY: FOLLOW.lookY + lift }, aspect, m, 0);
       }
       sky.intensity = 1.6;
       sun.intensity = 1.8;

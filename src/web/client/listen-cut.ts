@@ -43,6 +43,8 @@ export interface Cut {
   overlays?: Overlay[];
   /** the default crossfade at every cut, s */
   fade?: number;
+  /** the prologue's cards to leave out, by their text (an edit that shows its own instead) */
+  hide?: string[];
 }
 
 /** A segment placed on the video's clock: `len` s from `out`, showing the call from `from` to `to`. */
