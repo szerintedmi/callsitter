@@ -40,6 +40,8 @@ const KEEP_ENDED_MS = 10 * 60_000;
 /** For calls whose audio doesn't pass through us (OpenAI SIP): agent audio copies are dropped. */
 export const NO_MEDIA: MediaChannel = { sendAudio() {}, clear() {}, close() {} };
 
+/** Seconds of recording audio that may wait for storage before the recording stops (memory bound). */
+const MAX_QUEUED_RECORDING_S = 30;
 const recLog = logger("recording");
 
 export class CallManager {
@@ -446,24 +448,31 @@ export class CallManager {
    * A recording of the call written while it runs (`recordings/<call id>.wav`): appends go to the
    * store in order, without blocking the caller; finish() stores it, publishes the `recording`
    * event and is waited for by stopAll. A failed write is logged and stops the recording (what
-   * was written is still stored); it never fails the call.
+   * was written is still stored); it never fails the call. So does storage falling more than
+   * MAX_QUEUED_RECORDING_S behind, so a slow disk can't fill memory with queued audio.
    */
   openRecording(callId: string, rate: number, channels: number): RecordingWriter {
     const sink = this.recordings.open(`recordings/${callId}.wav`, { rate, channels });
+    const maxQueued = MAX_QUEUED_RECORDING_S * rate * channels * 2;
     let chain = Promise.resolve();
+    let queued = 0;
     let failed = false;
     let finished: Promise<string | null> | undefined;
+    const stop = (why: string, err?: unknown) => {
+      if (failed) return;
+      failed = true;
+      recLog.warn(`recording ${why}: the rest of the call isn't recorded`, { callId, err });
+      void this.note(callId, "warn", `recording stopped: ${why}`).catch(() => undefined);
+    };
     return {
       append: (pcm) => {
         if (failed || finished) return;
+        if (queued + pcm.length > maxQueued) return stop(`storage fell over ${MAX_QUEUED_RECORDING_S} s behind`);
+        queued += pcm.length;
         chain = chain
           .then(() => (failed ? undefined : sink.append(pcm)))
-          .catch((err) => {
-            if (failed) return;
-            failed = true;
-            recLog.warn("recording write failed: the rest of the call isn't recorded", { callId, err });
-            void this.note(callId, "warn", "recording stopped: writing it failed").catch(() => undefined);
-          });
+          .catch((err) => stop("writing it failed", err))
+          .finally(() => void (queued -= pcm.length));
       },
       finish: () =>
         (finished ??= this.track(

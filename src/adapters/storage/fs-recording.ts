@@ -15,6 +15,8 @@ export class FsRecordingStore implements RecordingStore {
     private root: string,
     /** where unfinished recordings are looked for, under root */
     private dir = "recordings",
+    /** opens the `.part` (tests inject short writes and failures) */
+    private openFile: (path: string, flags: string) => Promise<FileHandle> = open,
   ) {}
 
   private path(key: string) {
@@ -32,7 +34,7 @@ export class FsRecordingStore implements RecordingStore {
     const file = async () => {
       if (fh) return fh;
       await mkdir(dirname(part), { recursive: true });
-      fh = await open(part, "w");
+      fh = await this.openFile(part, "w");
       await fh.write(wavHeader(rate, channels, 0), 0, WAV_HEADER_BYTES, 0);
       return fh;
     };
@@ -40,18 +42,22 @@ export class FsRecordingStore implements RecordingStore {
       async append(pcm) {
         const f = await file();
         // A short write (a nearly full disk) mustn't leave a hole: go on from where it stopped.
+        // `bytes` counts what landed, so a failure partway still keeps it.
         for (let done = 0; done < pcm.length; ) {
-          const { bytesWritten } = await f.write(pcm, done, pcm.length - done, WAV_HEADER_BYTES + bytes + done);
+          const { bytesWritten } = await f.write(pcm, done, pcm.length - done, WAV_HEADER_BYTES + bytes);
           if (bytesWritten === 0) throw new Error(`recording ${key}: nothing written (disk full?)`);
           done += bytesWritten;
+          bytes += bytesWritten;
         }
-        bytes += pcm.length;
         await f.datasync();
       },
       async finish() {
         const f = await file();
+        // Whole frames only: a write that failed partway can leave part of one.
+        const whole = bytes - (bytes % (channels * 2));
         try {
-          await f.write(wavHeader(rate, channels, bytes), 0, WAV_HEADER_BYTES, 0);
+          if (whole < bytes) await f.truncate(WAV_HEADER_BYTES + whole);
+          await f.write(wavHeader(rate, channels, whole), 0, WAV_HEADER_BYTES, 0);
           await f.datasync();
         } finally {
           await f.close();

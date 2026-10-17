@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FsRecordingStore } from "../src/adapters/storage/fs-recording";
@@ -12,6 +13,20 @@ import type { CallEvent } from "../src/core/types";
 import { wavHeader } from "../src/core/wav";
 import { loadRepoConfig, scripted } from "./helpers";
 
+/** Opens files for real, but audio writes (past the header) land at most `max` bytes, or fail. */
+const shortWrites = (next: () => { max?: number; fail?: boolean }) => async (path: string, flags: string) => {
+  const fh = await open(path, flags);
+  const write = fh.write.bind(fh) as (b: Uint8Array, o: number, l: number, p: number) => Promise<{ bytesWritten: number }>;
+  Object.assign(fh, {
+    write: (b: Uint8Array, o: number, l: number, p: number) => {
+      if (p < 44) return write(b, o, l, p);
+      const w = next();
+      if (w.fail) return Promise.reject(Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" }));
+      return write(b, o, Math.min(l, w.max ?? l), p);
+    },
+  });
+  return fh;
+};
 const tmp = () => mkdtempSync(join(tmpdir(), "callsitter-rec-"));
 const u32 = (b: Uint8Array, off: number) => new DataView(b.buffer, b.byteOffset).getUint32(off, true);
 const frames = (n: number, fill: number) => new Uint8Array(n * 4).fill(fill);
@@ -76,12 +91,29 @@ describe("FsRecordingStore", () => {
 
   test("a short write goes on from where it stopped", async () => {
     const root = tmp();
-    const sink = new FsRecordingStore(root).open("recordings/c5.wav", { rate: 24000, channels: 2 });
+    // Every audio write lands at most 6 bytes (1.5 frames).
+    const sink = new FsRecordingStore(root, "recordings", shortWrites(() => ({ max: 6 }))).open("recordings/c5.wav", { rate: 24000, channels: 2 });
     await sink.append(frames(2, 3));
     await sink.append(frames(1, 4));
     await sink.finish();
     const wav = readFileSync(join(root, "recordings/c5.wav"));
+    expect(u32(wav, 40)).toBe(12);
     expect([...wav.subarray(44)]).toEqual([...frames(2, 3), ...frames(1, 4)]);
+  });
+
+  test("a write failing after a short write keeps every whole frame that landed", async () => {
+    const root = tmp();
+    // The first audio write lands 10 of 12 bytes, the next one fails (disk full).
+    let n = 0;
+    const store = new FsRecordingStore(root, "recordings", shortWrites(() => (++n === 1 ? { max: 10 } : { fail: true })));
+    const sink = store.open("recordings/c6.wav", { rate: 24000, channels: 2 });
+    await expect(sink.append(frames(3, 5))).rejects.toThrow("ENOSPC");
+    await sink.finish();
+    const wav = readFileSync(join(root, "recordings/c6.wav"));
+    // 2 whole frames (8 bytes); the half frame after them is cut.
+    expect(u32(wav, 40)).toBe(8);
+    expect(u32(wav, 4)).toBe(36 + 8);
+    expect([...wav.subarray(44)]).toEqual([...frames(2, 5)]);
   });
 });
 
@@ -130,6 +162,34 @@ describe("CallManager recordings", () => {
     expect(r.events.some((e) => e.type === "note" && e.level === "warn" && e.message.includes("recording stopped"))).toBe(true);
     await r.persistence.flush();
     expect((await r.repo.getCall("c1"))?.recordingPath).toBe("recordings/c1.wav");
+  });
+
+  test("storage falling 30 s behind stops the recording, so queued audio can't fill memory", async () => {
+    let release!: () => void;
+    const slow = new Promise<void>((r) => (release = r));
+    const appended: number[] = [];
+    const r = await rig({
+      open: () => ({
+        append: async (pcm) => {
+          await slow;
+          appended.push(pcm.length);
+        },
+        finish: async () => "recordings/c1.wav",
+      }),
+    });
+    const w = r.manager.openRecording("c1", 1000, 2);
+    // 5 s blocks at 1 kHz stereo (20 kB each): 6 fit in 30 s, the 7th stops the recording.
+    const block = new Uint8Array(5 * 1000 * 4);
+    // The first block is being written (storage stalls on it) while the rest queue behind it.
+    w.append(block);
+    await Bun.sleep(0);
+    for (let i = 1; i < 12; i++) w.append(block);
+    await Bun.sleep(0);
+    expect(r.events.filter((e) => e.type === "note" && e.message === "recording stopped: storage fell over 30 s behind")).toHaveLength(1);
+    release();
+    expect(await w.finish()).toBe("recordings/c1.wav");
+    // Only the block in flight lands; the queued ones are dropped.
+    expect(appended).toEqual([block.length]);
   });
 
   test("stopAll waits for a recording to be stored", async () => {
