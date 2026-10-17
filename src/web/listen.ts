@@ -91,7 +91,8 @@ export function listenRoutes(d: { clientAssets: ClientAssets; media: DemoMedia }
 
 export const BUILD = Date.now().toString(36);
 /** The plain pages' <body>: their script (src/web/client/site.ts) reads the base and whether analytics are on. */
-export const siteBody = (base: string, analytics?: boolean) => `<body data-base="${esc(base)}"${analytics ? ` data-analytics="1"` : ""}>`;
+export const siteBody = (base: string, analytics?: boolean, cls?: string) =>
+  `<body data-base="${esc(base)}"${cls ? ` class="${cls}"` : ""}${analytics ? ` data-analytics="1"` : ""}>`;
 const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 const json = (v: unknown) => JSON.stringify(v).replace(/</g, "\\u003c");
 
@@ -151,10 +152,12 @@ export const head = (title: string, description: string, css: string) => `<!doct
  * (#wasted: the game page's script keeps it live), the bot page's button (not on it), GitHub (the
  * home page has it in its footer instead, and the bot page's button in its hero: then the counter
  * sits on the right). `player`: the game page's player chip, first on the right (topCss; public.ts
- * moves it on a phone).
+ * moves it on a phone). `play`: the game's button, on the bot page.
  */
-export const top = (base: string, wastedSeconds: number, o: { botLink: boolean; github?: boolean; player?: string }) => {
+export const top = (base: string, wastedSeconds: number, o: { botLink: boolean; github?: boolean; player?: string; play?: boolean }) => {
   const right = `${o.player ?? ""}${o.botLink ? `<a class="rc-own" href="${base}bot">GET YOUR OWN BOT</a>` : ""}${
+    o.play ? `<a class="rc-game" href="${base}play">PLAY THE BOT</a>` : ""
+  }${
     o.github === false ? "" : `<a class="rc-gh" href="${GITHUB}" aria-label="CallSitter on GitHub">${github}</a>`
   }`;
   return `<header class="rc-top${right ? "" : " solo"}"><a class="rc-brand" href="${base}">${logo}CALLSITTER</a><p class="rc-wasted">Scammer time wasted: <b id="wasted">${hms(wastedSeconds)}</b></p>${
@@ -210,6 +213,10 @@ const ICONS = {
   robot: [".....rr.....", ".....dd.....", "..pppppppp..", "..pppppppp..", ".dpkkppkkpd.", ".dpkkppkkpd.", "..pppppppp..", "..pprrrrpp..", "..pppppppp..", "............", "...aaaaaa...", "..aaaaaaaa.."],
   forward: [".pppppp.....", ".pkkkkp.....", ".pkkkkp..a..", ".pkkkkp..aa.", ".pkkkkpaaaaa", ".pkkkkpaaaaa", ".pkkkkp..aa.", ".pkkkkp..a..", ".pkkkkp.....", ".pppppp.....", ".ppkkpp.....", ".pppppp....."],
   popcorn: ["...pp..pp...", "..pppppppp..", ".ppappppapp.", ".pppppapppp.", ".rrpprrpprr.", ".rrpprrpprr.", ".rrpprrpprr.", "..rpprrppr..", "..rpprrppr..", "..rpprrppr..", "...pprrpp...", "...pprrpp..."],
+  plane: ["............", "..........dd", "........dddd", "......dddddd", "...dddddddd.", "ddddddddddd.", "...ddd.ddd..", "....dd.ddd..", "....d..dd...", ".......dd...", "......dd....", "......d....."],
+  sliders: ["............", "...dd.......", "dddddddddddd", "...dd.......", "............", "........dd..", "dddddddddddd", "........dd..", "............", ".....dd.....", "dddddddddddd", ".....dd....."],
+  transcript: ["..dddddddd..", "..d......d..", "..d.dddd.d..", "..d......d..", "..d.dddd.d..", "..d......d..", "..d.dddd.d..", "..d......d..", "..d.ddd..d..", "..d......d..", "..dddddddd..", "............"],
+  gear: [".....dd.....", "..d.dddd.d..", "..dddddddd..", "...dd..dd...", ".ddd....ddd.", ".ddd....ddd.", "...dd..dd...", "..dddddddd..", "..d.dddd.d..", ".....dd.....", "............", "............"],
 };
 /** An inline SVG, one rect per run of same-coloured pixels in a row. */
 const pixelIcon = (rows: string[]) =>
@@ -217,41 +224,56 @@ const pixelIcon = (rows: string[]) =>
     .flatMap((row, y) => [...row.matchAll(/([^.])\1*/g)].map((m) => `<rect x="${m.index}" y="${y}" width="${m[0].length}" height="1" fill="${PX[m[1]!]}"/>`))
     .join("")}</svg>`;
 
-/** "Get your own bot": not open yet, a waitlist (POST call/waitlist; src/web/client/site.ts). */
-export function botPage(base: string, o: { wastedSeconds: number; /** page analytics on (analytics.yaml) */ analytics?: boolean }): string {
-  return `${head("Get your own bot · CallSitter", "Get CallSitter on your own phone: forward your calls to your own bot, get them on Telegram. Join the waitlist.", rootCss + topCss + homeCss + botCss)}
-${siteBody(base, o.analytics)}
+const item = (icon: string[], title: string, text: string) => `<li>${pixelIcon(icon)}<div><b>${title}</b><span>${text}</span></div></li>`;
+
+/** The waitlist's answer to a plain form post (public.ts signup), by its `?waitlist=` outcome: done, or an error under the form. */
+const WAITLIST: Record<string, { done?: string; err?: string }> = {
+  ok: { done: "THANKS! WE'LL KEEP YOU POSTED." },
+  limit: { err: "Too many sign-ups from your network today. Try again tomorrow." },
+  email: { err: "That doesn't look like an email." },
+};
+
+/**
+ * "Get your own bot": not open yet, a waitlist (POST call/waitlist). The home page's top bar, with
+ * the game on its right, and its footer. Its script (src/web/client/site.ts) posts the form; without
+ * it, the form posts itself and the server sends the visitor back here with `waitlist` (the outcome).
+ */
+export function botPage(base: string, o: { wastedSeconds: number; /** page analytics on (analytics.yaml) */ analytics?: boolean; waitlist?: string }): string {
+  const after = o.waitlist === undefined ? {} : (WAITLIST[o.waitlist] ?? { err: "Something went wrong." });
+  return `${head("Get your own bot · CallSitter", "Get CallSitter on your own phone: forward your calls to your own bot, follow them on Telegram. Join the waitlist.", rootCss + topCss + homeCss + botCss)}
+${siteBody(base, o.analytics, "own")}
 <div class="rc-col">
-${top(base, o.wastedSeconds, { botLink: false })}
+${top(base, o.wastedSeconds, { botLink: false, github: false, play: true })}
 <main class="bot">
-  <h1 class="rc-h"><b>GET YOUR OWN BOT.</b><span>It answers the calls you don't. Scammers lose their time, sales calls get a polite no, real callers leave a message.</span></h1>
+  <section class="bot-hero">
+    <h1>GET YOUR OWN BOT.</h1>
+    <p class="bot-sub"><span>It answers the calls you don't.</span> <span>Scammers waste their time.</span><br><span>Sales calls get a polite no.</span> <span>Real callers leave a message.</span></p>
+    <p class="bot-soon">Coming soon. Maybe.</p>
+    <form class="wl" id="wl" method="post" action="${base}call/waitlist" novalidate${after.done ? " hidden" : ""}>
+      <label class="sr" for="wl-in">Your email</label>
+      <input id="wl-in" type="email" name="email" autocomplete="email" inputmode="email" maxlength="254" spellcheck="false" placeholder="Your email" required>
+      <button type="submit" id="wl-ok">KEEP ME POSTED</button>
+    </form>
+    <p class="wl-err" id="wl-err" role="alert"${after.err ? `>${after.err}` : " hidden>"}</p>
+    <p class="wl-done" id="wl-done" role="status"${after.done ? `>${after.done}` : ` hidden>${WAITLIST.ok!.done}`}</p>
+    <p class="bot-diy">Or set it up yourself: <a href="${GITHUB}">GitHub ↗</a></p>
+  </section>
   <section class="bot-sec" aria-labelledby="bot-how">
     <h2 id="bot-how">HOW IT WORKS</h2>
     <ol class="bot-steps">
-      <li>${pixelIcon(ICONS.robot)}<b>REGISTER YOUR BOT</b><span>Pick its voice and how it treats callers. You get a local number, just for you.</span></li>
-      <li>${pixelIcon(ICONS.forward)}<b>FORWARD YOUR CALLS</b><span>With your phone's call forwarding: all calls, or only the ones you miss or are busy for. No app.</span></li>
-      <li>${pixelIcon(ICONS.popcorn)}<b>POPCORN TIME</b><span>Sit back: the bot takes your calls and sends you live updates on Telegram.</span></li>
+      ${item(ICONS.robot, "MAKE IT YOURS", "Pick its voice and attitude. You get a personal number just for your bot.")}
+      ${item(ICONS.forward, "FORWARD YOUR CALLS", "All calls, or just the ones you miss. No app.")}
+      ${item(ICONS.popcorn, "POPCORN TIME", "Your bot takes the calls. You follow along on Telegram.")}
     </ol>
   </section>
-  <section class="bot-sec" aria-labelledby="bot-get">
-    <h2 id="bot-get">WHAT YOU GET</h2>
-    <ul class="bot-feats">
-      <li><b>LIVE UPDATES</b><span>Follow every call on Telegram as it happens, with a summary when it ends.</span></li>
-      <li><b>STEER IT LIVE</b><span>Tell the bot what to say, how to act, or to hang up, right from Telegram.</span></li>
-      <li><b>RECORDINGS</b><span>Listen back to every call, with the transcript.</span></li>
-      <li><b>MAKE IT YOURS</b><span>Its voice, its character, who it lets through, tuned to your taste.</span></li>
-    </ul>
-  </section>
-  <form class="wl" id="wl" method="post" novalidate>
-    <label class="sr" for="wl-in">Your email</label>
-    <input id="wl-in" type="email" name="email" autocomplete="email" inputmode="email" maxlength="254" spellcheck="false" placeholder="you@example.com" required>
-    <button type="submit" id="wl-ok" disabled>JOIN THE WAITLIST</button>
-  </form>
-  <p class="wl-err" id="wl-err" role="alert" hidden></p>
-  <p class="wl-done" id="wl-done" role="status" hidden>THANKS! YOU'RE ON THE LIST.</p>
-  <div class="bot-try"><a class="bot-play" href="${base}play">PLAY THE BOT <i>▶</i></a><span>Call it from your browser</span></div>
+  <ul class="bot-feats" aria-label="What you get">
+    ${item(ICONS.plane, "LIVE UPDATES", "Follow every call on Telegram as it happens, with a summary when it ends.")}
+    ${item(ICONS.sliders, "STEER IT LIVE", "Tell the bot what to say, how to act, or to hang up, right from Telegram.")}
+    ${item(ICONS.transcript, "RECORDINGS", "Listen back to every call, with the transcript.")}
+    ${item(ICONS.gear, "MAKE IT YOURS", "Its voice, its character, who it lets through, tuned to your taste.")}
+  </ul>
 </main>
-${legal(base)}
+${legal(base, { github: true })}
 </div>
 <script src="${base}assets/site.js?v=${BUILD}"></script>
 </body>
@@ -307,12 +329,15 @@ export const topCss = `
 .rc-legal a{color:var(--dim);text-decoration:none}.rc-legal a:hover{color:var(--paper);text-decoration:underline}
 .rc-gh:hover{color:var(--paper)}
 .rc-own:active{transform:translate(2px,2px);box-shadow:2px 2px 0 #000}
+.rc-game{font-family:var(--disp);font-size:24px;line-height:1;letter-spacing:.04em;color:var(--paper);text-decoration:none;white-space:nowrap}
+.rc-game:hover{color:var(--amb)}
 @media (max-width:640px){
 .rc-col{width:auto}
 .rc-top{display:flex;flex-wrap:wrap;padding:10px 16px 8px}
 .rc-right{margin-left:auto;gap:12px;min-height:32px}
 .rc-brand{font-size:28px}
 .rc-own{font-size:19px;padding:6px 10px 7px}
+.rc-game{font-size:20px}
 .rc-wasted{order:3;flex-basis:100%;text-align:left;font-size:14px}
 .rc-wasted b{font-size:21px}
 }
@@ -394,51 +419,79 @@ const homeCss = `
 }
 `;
 
+// The bot page: a centred hero with the waitlist, the steps in three columns, the features in two
+// (all one column on a phone, icons on the left). Its column is the home page's (homeCss).
 const botCss = `
-.bot{max-width:600px;margin:0 auto;padding:7vh 0 40px;text-align:center}
-.bot .rc-h{justify-content:center;margin:0 0 22px}
-.bot .rc-h{flex-direction:column;align-items:center;gap:12px}
-.bot .rc-h b{font-size:64px}
-.bot .rc-h span{max-width:520px;font-size:18px;line-height:1.4}
-.bot-sec{margin:0 0 30px;text-align:left}
-.bot-sec h2{margin:0 0 12px;font-family:var(--disp);font-weight:400;font-size:28px;line-height:1;letter-spacing:.05em;color:var(--dim)}
-.bot-steps,.bot-feats{margin:0;padding:0;list-style:none;display:grid;gap:10px}
-.bot-steps li,.bot-feats li{display:grid;align-content:start;gap:4px;padding:12px 14px;box-shadow:inset 0 0 0 3px var(--line);font-size:16px;line-height:1.4}
-.bot-steps{counter-reset:step}
-.bot-steps li{counter-increment:step;grid-template-columns:auto 1fr;column-gap:16px}
-.bot-steps svg{grid-row:span 2;align-self:center}
-.bot-steps b::before{content:counter(step) ". ";color:var(--amb)}
-.bot-feats{grid-template-columns:1fr 1fr}
-.bot-steps b,.bot-feats b{font-family:var(--disp);font-weight:400;font-size:24px;line-height:1;letter-spacing:.04em;color:var(--paper)}
-.bot-steps span,.bot-feats span{color:var(--dim)}
-.bot .wl{justify-content:center}
-.bot p{margin:0;font-size:18px;line-height:1.4}
-.wl{display:flex;gap:10px;flex-wrap:wrap}
-.wl input{flex:1 1 240px;min-width:0;padding:12px 14px;border:0;border-radius:0;background:var(--ink);color:var(--paper);box-shadow:inset 0 0 0 3px var(--line);font-family:var(--text);font-size:18px}
+.own .rc-col{width:min(1132px,100% - 32px)}
+.bot{padding:0 0 8px}
+.bot-hero{display:flex;flex-direction:column;align-items:center;max-width:820px;margin:0 auto;padding:clamp(36px,7vh,64px) 0 0;text-align:center}
+.bot-hero h1{margin:0 0 18px;font-family:var(--disp);font-weight:400;font-size:clamp(56px,7.8vw,100px);line-height:.85;letter-spacing:.03em;color:var(--amb);text-shadow:4px 4px 0 #000}
+.bot p{margin:0}
+.bot-sub{font-size:22px;line-height:1.4}
+.bot-soon{margin-top:20px!important;font-size:16px;color:var(--dim)}
+.wl{display:flex;gap:12px;width:100%;max-width:760px;margin-top:18px}
+.wl input{flex:1 1 auto;min-width:0;padding:12px 16px;border:0;border-radius:0;background:var(--ink);color:var(--paper);box-shadow:inset 0 0 0 3px var(--line);font-family:var(--text);font-size:18px}
 .wl input::placeholder{color:var(--dim)}
 .wl input:focus{outline:0;box-shadow:inset 0 0 0 3px var(--amb)}
-.wl button{padding:9px 18px 11px;border:0;border-radius:0;background:var(--amb);color:var(--ink);font-family:var(--disp);font-size:26px;line-height:1;letter-spacing:.04em;box-shadow:5px 5px 0 #000;cursor:pointer}
+.wl button{flex:none;padding:9px 28px 11px;border:0;border-radius:0;background:var(--amb);color:var(--ink);font-family:var(--disp);font-size:30px;line-height:1;letter-spacing:.04em;box-shadow:5px 5px 0 #000;cursor:pointer}
+.wl button:hover{transform:translate(-1px,-1px);box-shadow:6px 6px 0 #000}
 .wl button:active{transform:translate(2px,2px);box-shadow:2px 2px 0 #000}
-.wl button:disabled{opacity:.6}
-.bot .wl-err{margin-top:12px;color:var(--red-hi);font-size:16px}
-.bot .wl-done{font-family:var(--disp);font-size:32px;line-height:1;letter-spacing:.03em;color:var(--amb)}
-.bot-try{display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:36px}
-.bot .bot-try span{font-size:14px;color:var(--dim)}
-.bot-play{display:block;padding:8px 20px 10px;background:var(--ink);color:var(--paper);box-shadow:inset 0 0 0 3px var(--red),4px 4px 0 #000;text-decoration:none;font-family:var(--disp);font-size:28px;line-height:1;letter-spacing:.04em}
-.bot-play i{font-style:normal;font-size:.7em;vertical-align:.08em;color:var(--red-hi)}
-.bot-play:hover{background:var(--red)}
-.bot-play:hover i{color:var(--paper)}
-.bot-play:active{transform:translate(2px,2px);box-shadow:inset 0 0 0 3px var(--red),2px 2px 0 #000}
+.wl button:disabled{cursor:wait}
+.wl-err{margin-top:12px!important;color:var(--red-hi);font-size:16px}
+.wl-done{margin-top:18px!important;font-family:var(--disp);font-size:34px;line-height:1;letter-spacing:.03em;color:var(--amb)}
+.bot-diy{margin-top:20px!important;font-size:16px;color:var(--dim)}
+.bot-diy a{color:var(--paper);text-decoration:none;box-shadow:0 2px 0 currentColor}
+.bot-diy a:hover{color:var(--amb)}
+.bot-sec{margin-top:clamp(48px,8vh,72px)}
+.bot-sec h2{margin:0 0 32px;text-align:center;font-family:var(--disp);font-weight:400;font-size:36px;line-height:1;letter-spacing:.05em;color:var(--dim)}
+.bot-steps,.bot-feats{margin:0;padding:0;list-style:none;display:grid}
+.bot li div{display:flex;flex-direction:column;gap:6px}
+.bot li b{font-family:var(--disp);font-weight:400;font-size:28px;line-height:1;letter-spacing:.04em;color:var(--paper)}
+.bot li span{font-size:17px;line-height:1.45;color:#c8c2cf}
+.bot-steps{grid-template-columns:repeat(3,1fr);gap:32px;counter-reset:step}
+.bot-steps li{display:flex;flex-direction:column;align-items:center;gap:18px;text-align:center;counter-increment:step}
+.bot-steps li span{max-width:17em;text-wrap:balance}
+.bot-steps svg{width:72px;height:72px}
+.bot-steps b::before{content:counter(step) ". ";color:var(--amb)}
+.bot-feats{grid-template-columns:1fr 1fr;gap:36px 48px;margin:clamp(48px,8vh,72px) auto 0;max-width:1000px}
+.bot-feats li{display:grid;grid-template-columns:40px 1fr;align-items:start;gap:22px}
+.bot-feats svg{width:40px;height:40px;margin-top:2px}
+.bot-feats b{font-size:24px}
+.bot-feats span{font-size:16px;color:var(--dim)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 [hidden]{display:none!important}
+@media (max-width:860px){
+.bot-steps{grid-template-columns:1fr;gap:24px}
+.bot-steps li{display:grid;grid-template-columns:56px 1fr;align-items:start;gap:20px;text-align:left}
+.bot-steps li span{max-width:none;text-wrap:wrap}
+.bot-steps svg{width:56px;height:56px}
+}
 @media (max-width:640px){
-.bot{padding:48px 16px 32px}
-.bot .rc-h{align-items:center;margin:0 0 16px}
-.bot .rc-h b{font-size:44px}
-.bot .rc-h span{font-size:16px}
-.bot-feats{grid-template-columns:1fr}
-.bot p{font-size:16px}
-.wl button{flex:1 1 100%}
+.own .rc-col{padding:0 16px}
+.own .rc-top{padding-left:0;padding-right:0}
+.bot-hero{align-items:stretch;padding-top:28px;text-align:left}
+.bot-hero h1{margin-bottom:12px;font-size:clamp(44px,14vw,64px);text-shadow:3px 3px 0 #000}
+.bot-sub{font-size:17px}
+.bot-sub span{display:block}
+.bot-sub br{display:none}
+.bot-soon{margin-top:14px!important;font-size:14px}
+.wl{flex-direction:column;gap:10px;margin-top:12px}
+.wl input{font-size:17px}
+.wl button{font-size:26px;box-shadow:4px 4px 0 #000}
+.wl-done{font-size:28px}
+.bot-diy{text-align:center;font-size:14px}
+.bot-sec{margin-top:40px}
+.bot-sec h2{margin-bottom:20px;font-size:30px;text-align:left}
+.bot-steps{gap:20px}
+.bot-steps li{grid-template-columns:48px 1fr;gap:16px}
+.bot-steps svg{width:48px;height:48px}
+.bot li b{font-size:22px}
+.bot li span{font-size:15px}
+.bot-feats{grid-template-columns:1fr;gap:20px;margin-top:32px}
+.bot-feats li{grid-template-columns:32px 1fr;gap:16px}
+.bot-feats svg{width:32px;height:32px}
+.bot-feats b{font-size:20px}
+.bot-feats span{font-size:14px}
 }
 `;
 

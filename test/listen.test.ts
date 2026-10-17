@@ -136,9 +136,11 @@ describe("public page with the real calls", async () => {
     expect(games).not.toContain('id="dial"');
   });
 
-  test("the bot page: the headline and the form, no blurb, no phone number", async () => {
+  test("the bot page: the headline and the form, the game top right, the home page's footer, no phone number", async () => {
     const html = await (await page.request("http://x/bot")).text();
     expect(html).toContain("GET YOUR OWN BOT.");
+    expect(html).toContain('<div class="rc-right"><a class="rc-game" href="/play">PLAY THE BOT</a>');
+    expect(html).toContain('<footer class="rc-legal rc-foot">');
     expect(html).not.toContain("CallSitter answers your phone");
     expect(html).not.toContain('class="rc-own"');
     expect(html).not.toContain("tel:");
