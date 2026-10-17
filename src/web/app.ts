@@ -42,9 +42,7 @@ export function createApp(d: AppDeps) {
   admin.route("/", analyticsAdminRoutes({ repo: d.repo, config: () => d.config.get() }));
   admin.route("/", testCallRoutes(d));
 
-  const pub = d.publicPage ? publicRoutes({ ...d.publicPage, manager: d.manager, repo: d.repo, clientAssets: d.clientAssets, realCalls: !!d.publicPage.demoMedia }) : null;
-  if (pub && d.publicPage?.demoMedia) pub.route("/", listenRoutes({ clientAssets: d.clientAssets, media: d.publicPage.demoMedia }));
-  if (pub) pub.route("/", analyticsRoutes({ repo: d.repo, config: () => d.config.get() }));
+  const pub = d.publicPage ? publicHostRoutes({ ...d.publicPage, manager: d.manager, repo: d.repo, clientAssets: d.clientAssets }) : null;
   if (pub) {
     admin.get("/public/", (c) => c.redirect("/public"));
     // The owner's previews aren't visitors: their page analytics are dropped.
@@ -61,4 +59,15 @@ export function createApp(d: AppDeps) {
   });
 
   return app;
+}
+
+/**
+ * Everything the public host serves besides the webhooks and icons: the pages, their scripts and
+ * the endpoints those call. The tunnels only pass the paths they list (test/tunnel.test.ts).
+ */
+export function publicHostRoutes(d: Omit<PublicDeps, "realCalls"> & { demoMedia?: DemoMedia }) {
+  const pub = publicRoutes({ ...d, realCalls: !!d.demoMedia });
+  if (d.demoMedia) pub.route("/", listenRoutes({ clientAssets: d.clientAssets, media: d.demoMedia }));
+  pub.route("/", analyticsRoutes({ repo: d.repo, config: d.config }));
+  return pub;
 }

@@ -4,7 +4,9 @@ Served on the public host, the one Telnyx calls (`https://callsitter.org/`; a pr
 
 - `/`: the pitch (to the bot page and the game), then the real-call recordings (`src/web/listen.ts`); `/listen/<slug>` opens one, playing. Adding one: [demos/README.md](../demos/README.md).
 - `/play`: an arcade game-select screen with two games (`config/games.yaml`, scoring in `src/core/game.ts`).
-- `/bot`: a "Get your own bot" waitlist (`POST /call/waitlist`).
+- `/bot`: a "Get your own bot" waitlist (`POST /call/waitlist`). Its form also works without the page's script (a plain form post, sent back to `/bot?waitlist=<outcome>`).
+
+The tunnels pass only the public paths they list (`deploy/vps/cloudflared.yml`); `test/tunnel.test.ts` fails when a public route, a page's script included, is missing from them.
 - `/terms`, `/privacy`.
 - `/favicon.ico`, `/apple-touch-icon.png`: the site icon (`src/web/favicon.ts`), built from its pixel grid; the pages embed it as an SVG.
 

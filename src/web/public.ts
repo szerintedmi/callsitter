@@ -40,7 +40,8 @@ import { botPage, DEMOS, findDemo, legal, realCallsPage, top, topCss } from "./l
 //   GET  assets/site.js       the bot and legal pages' script (client/site.ts): analytics, the waitlist
 //   POST call/notify          {email} → 204: tell me when there's game again (shown once the
 //                             day's calls or budget have run out, or the page is closed)
-//   POST call/waitlist        {email} → 204: the bot page's waitlist (same table, list "waitlist")
+//   POST call/waitlist        {email} → 204: the bot page's waitlist (same table, list "waitlist");
+//                             as a plain form post (no script), a redirect back to bot?waitlist=<outcome>
 
 const log = logger("public");
 
@@ -59,6 +60,8 @@ const MAX_SIGNUP_BYTES = 2 * 1024;
 /** IPs whose sign-up times are kept for the per-IP limit; past this the oldest-touched go */
 const MAX_SIGNUP_IPS = 10_000;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** The per-IP sign-up limit counts the network, not the email, and nothing was saved: no "you're on the list". */
+const SIGNUP_LIMIT_MESSAGE = "Too many sign-ups from your network today. Try again tomorrow.";
 
 /** What has run out for everyone (the page then offers a "notify me" form); null: nothing. */
 export type Out = "closed" | "quota" | "budget" | null;
@@ -221,7 +224,9 @@ export function publicRoutes(d: PublicDeps) {
       return findDemo(slug) ? c.html(await home(c.req.path.slice(0, c.req.path.indexOf("listen/")), slug)) : c.notFound();
     });
   } else app.get("/", async (c) => c.html(await game(c.req.path.replace(/\/?$/, "/"))));
-  app.get("/bot", async (c) => c.html(botPage(c.req.path.slice(0, c.req.path.lastIndexOf("bot")), { wastedSeconds: (await wasted()).seconds, analytics: d.config().analytics.enabled })));
+  app.get("/bot", async (c) =>
+    c.html(botPage(c.req.path.slice(0, c.req.path.lastIndexOf("bot")), { wastedSeconds: (await wasted()).seconds, analytics: d.config().analytics.enabled, waitlist: c.req.query("waitlist") })),
+  );
   app.get("/terms", async (c) => c.html(termsPage(c.req.path.slice(0, c.req.path.lastIndexOf("terms")), { wastedSeconds: (await wasted()).seconds, analytics: d.config().analytics.enabled })));
   app.get("/privacy", async (c) => c.html(privacyPage(c.req.path.slice(0, c.req.path.lastIndexOf("privacy")), { wastedSeconds: (await wasted()).seconds, analytics: d.config().analytics.enabled })));
   app.get("/call/lobby", async (c) => c.json(await lobby(), 200, { "Cache-Control": "no-store" }));
@@ -408,15 +413,20 @@ export function publicRoutes(d: PublicDeps) {
   /**
    * An email form's POST: {email} → 204. Always 204, signed up before or not: the form doesn't
    * tell who's on the list. A repeat sign-up refreshes the row and makes it pending again.
+   * `page`: the form's page, for a plain form post (its script didn't run): the answer is a
+   * redirect back to it, with the outcome in `?<list>=` (ok, or the error).
    */
-  const signup = (list: NotifySignup["list"], limitMessage: string) =>
+  const signup = (list: NotifySignup["list"], page?: string) =>
     [
       bodyLimit({ maxSize: MAX_SIGNUP_BYTES, onError: (c) => c.json({ error: "bad_request", message: "Something went wrong." }, 413) }),
       async (c: Context) => {
-        const body: unknown = await c.req.json().catch(() => null);
+        const form = !!page && c.req.header("content-type")?.startsWith("application/x-www-form-urlencoded");
+        const reply = (status: 204 | 400 | 429, error?: string, message?: string) =>
+          form ? c.redirect(`../${page}?${list}=${error ?? "ok"}`, 303) : status === 204 ? c.body(null, 204) : c.json({ error, message }, status);
+        const body: unknown = await (form ? c.req.parseBody() : c.req.json()).catch(() => null);
         const raw = body && typeof body === "object" ? (body as { email?: unknown }).email : undefined;
         const email = typeof raw === "string" ? raw.trim().toLowerCase() : "";
-        if (email.length > 254 || !EMAIL.test(email)) return c.json({ error: "email", message: "That doesn't look like an email." }, 400);
+        if (email.length > 254 || !EMAIL.test(email)) return reply(400, "email", "That doesn't look like an email.");
         const ip = c.req.header("cf-connecting-ip") ?? "local";
         const key = `${list} ${ip}`;
         const now = Date.now();
@@ -425,7 +435,7 @@ export function publicRoutes(d: PublicDeps) {
         signupsByIp.delete(key); // re-set below: the most recently touched goes last
         if (recent.length >= d.config().public.notify_per_ip_per_day) {
           signupsByIp.set(key, recent);
-          return c.json({ error: "limit", message: limitMessage }, 429);
+          return reply(429, "limit", SIGNUP_LIMIT_MESSAGE);
         }
         signupsByIp.set(key, [...recent, now]);
         // Worked out here, not taken from the page.
@@ -441,11 +451,11 @@ export function publicRoutes(d: PublicDeps) {
         });
         if (list === "notify") log.info("notify signup", { reason });
         else log.info("waitlist signup");
-        return c.body(null, 204);
+        return reply(204);
       },
     ] as const;
-  app.post("/call/notify", ...signup("notify", "Got it already. We'll let you know!"));
-  app.post("/call/waitlist", ...signup("waitlist", "Got it already. You're on the list!"));
+  app.post("/call/notify", ...signup("notify"));
+  app.post("/call/waitlist", ...signup("waitlist", "bot"));
 
   app.post("/call/:id/connected", (c) => {
     connected.get(c.req.param("id"))?.();

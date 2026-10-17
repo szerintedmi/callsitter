@@ -486,9 +486,9 @@ describe("public page (fake OpenAI)", () => {
     // the form's script (src/web/client/site.ts) posts to <base>call/waitlist and tracks the page
     expect(html).toContain('<body data-base="/"');
     expect(html).toContain('src="/assets/site.js?v=');
-    // without the script the form can't submit: a GET would put the email in the URL
-    expect(html).toContain('<form class="wl" id="wl" method="post"');
-    expect(html).toContain('id="wl-ok" disabled');
+    // without the script the form posts itself (a POST: the email stays out of the URL)
+    expect(html).toContain('<form class="wl" id="wl" method="post" action="/call/waitlist"');
+    expect(html).toContain('<button type="submit" id="wl-ok">');
     expect(html).toContain('<a class="rc-brand" href="/"');
     expect(html).not.toContain("CallSitter answers your phone");
     expect(html).not.toContain("tel:");
@@ -528,9 +528,39 @@ describe("public page (fake OpenAI)", () => {
     expect((await post("waitlist", { email: "c@example.com" }, { "cf-connecting-ip": "10.6.6.4" })).status).toBe(204);
     const limited = await post("waitlist", { email: "d@example.com" }, { "cf-connecting-ip": "10.6.6.4" });
     expect(limited.status).toBe(429);
-    expect(await limited.json()).toMatchObject({ error: "limit" });
+    expect(await limited.json()).toEqual({ error: "limit", message: "Too many sign-ups from your network today. Try again tomorrow." });
     expect(db.select().from(notifySignups).all().filter((r) => r.list === "waitlist").map((r) => r.email)).toEqual(["bo@example.com", "c@example.com"]);
     config.set({ ...config.get(), public: { ...defaults } });
+  });
+
+  test("waitlist without the page's script: a plain form post, sent back to the bot page with the outcome", async () => {
+    db.delete(notifySignups).run();
+    config.set({ ...config.get(), public: { ...defaults, notify_per_ip_per_day: 1 } });
+    const post = (email: string) =>
+      fetch(`${base()}/call/waitlist`, {
+        method: "POST",
+        redirect: "manual",
+        headers: { origin: base(), "content-type": "application/x-www-form-urlencoded", "cf-connecting-ip": "10.6.7.1" },
+        body: new URLSearchParams({ email }).toString(),
+      });
+    const outcome = (res: Response) => [res.status, res.headers.get("location")];
+    expect(outcome(await post("nope"))).toEqual([303, "../bot?waitlist=email"]);
+    expect(outcome(await post("Form@Example.com"))).toEqual([303, "../bot?waitlist=ok"]);
+    expect(outcome(await post("again@example.com"))).toEqual([303, "../bot?waitlist=limit"]);
+    expect(db.select().from(notifySignups).all().map((r) => [r.email, r.list])).toEqual([["form@example.com", "waitlist"]]);
+    config.set({ ...config.get(), public: { ...defaults } });
+
+    const page = async (q: string) => (await fetch(`${base()}/bot?waitlist=${q}`)).text();
+    const ok = await page("ok");
+    expect(ok).toContain('action="/call/waitlist" novalidate hidden>');
+    expect(ok).toContain(`<p class="wl-done" id="wl-done" role="status">THANKS! WE'LL KEEP YOU POSTED.</p>`);
+    // the limit is per IP and nothing was saved: an error, the form still there, never "on the list"
+    for (const [q, err] of [["limit", "Too many sign-ups from your network today. Try again tomorrow."], ["email", "That doesn't look like an email."]]) {
+      const html = await page(q!);
+      expect(html).toContain('action="/call/waitlist" novalidate>');
+      expect(html).toContain(`<p class="wl-err" id="wl-err" role="alert">${err}</p>`);
+      expect(html).toContain('<p class="wl-done" id="wl-done" role="status" hidden>');
+    }
   });
 
   test("public calls are capped at limits.yaml public.max_call_seconds", async () => {
