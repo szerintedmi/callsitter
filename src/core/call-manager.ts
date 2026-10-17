@@ -2,7 +2,9 @@ import type { AudioFormat, Codec } from "./audio";
 import { CallSession, type CallSessionDeps } from "./call-session";
 import { withCarrier } from "./cost";
 import { CallGate, callSecondsCap, type Channel, type LimitHit } from "./limits";
-import type { BlobStore, EventBus, MediaChannel, OwnerAudioLeg, Repo, TakeoverHandle, VoiceAgent } from "./ports";
+import { logger } from "./log";
+import type { BlobStore, EventBus, MediaChannel, OwnerAudioLeg, RecordingStore, RecordingWriter, Repo, TakeoverHandle, VoiceAgent } from "./ports";
+import { bufferedRecordings } from "./recording";
 import { TakeoverTokens, takeoverUri } from "./takeover";
 import type { CallMeta, EndedBy, SipHeader } from "./types";
 
@@ -12,6 +14,8 @@ import type { CallMeta, EndedBy, SipHeader } from "./types";
 export type SharedDeps = Omit<CallSessionDeps, "meta" | "callControlId" | "media" | "mediaViaVoice" | "onStopped" | "dryRun"> & {
   repo: Repo;
   blobs: BlobStore;
+  /** where recordings are written while calls run (default: in memory, then put to `blobs`) */
+  recordings?: RecordingStore;
   /**
    * TELNYX_TAKEOVER_SIP_DOMAIN: the Call Control app's SIP subdomain a taken-over OpenAI SIP call
    * is transferred to (telegram.yaml takeover); without it, calls can't be taken over.
@@ -36,6 +40,8 @@ const KEEP_ENDED_MS = 10 * 60_000;
 /** For calls whose audio doesn't pass through us (OpenAI SIP): agent audio copies are dropped. */
 export const NO_MEDIA: MediaChannel = { sendAudio() {}, clear() {}, close() {} };
 
+const recLog = logger("recording");
+
 export class CallManager {
   private sessions = new Map<string, CallSession>();
   /** sessions whose call has ended: `until` is null while the wrap-up (the summary) runs, then when to forget them */
@@ -54,8 +60,10 @@ export class CallManager {
   readonly gate: CallGate;
   /** what a taken-over OpenAI SIP call's transferred leg dials, to be matched to its call */
   private takeoverTokens: TakeoverTokens;
+  private recordings: RecordingStore;
 
   constructor(private d: SharedDeps) {
+    this.recordings = d.recordings ?? bufferedRecordings(d.blobs);
     this.gate = new CallGate({ repo: d.repo, config: d.config, clock: d.clock });
     this.takeoverTokens = new TakeoverTokens(d.clock);
     d.bus.subscribe((ev) => {
@@ -429,10 +437,68 @@ export class CallManager {
       (async () => {
         const key = `recordings/${callId}.${ext}`;
         await this.d.blobs.put(key, data, ext === "mp3" ? "audio/mpeg" : "audio/wav");
-        const call = await this.d.repo.getCall(callId);
-        this.d.bus.publish({ type: "recording", callId, at: call ? this.d.clock.now() - call.startedAt : 0, path: key });
+        await this.recordingStored(callId, key);
       })(),
     );
+  }
+
+  /**
+   * A recording of the call written while it runs (`recordings/<call id>.wav`): appends go to the
+   * store in order, without blocking the caller; finish() stores it, publishes the `recording`
+   * event and is waited for by stopAll. A failed write is logged and stops the recording (what
+   * was written is still stored); it never fails the call.
+   */
+  openRecording(callId: string, rate: number, channels: number): RecordingWriter {
+    const sink = this.recordings.open(`recordings/${callId}.wav`, { rate, channels });
+    let chain = Promise.resolve();
+    let failed = false;
+    let finished: Promise<string | null> | undefined;
+    return {
+      append: (pcm) => {
+        if (failed || finished) return;
+        chain = chain
+          .then(() => (failed ? undefined : sink.append(pcm)))
+          .catch((err) => {
+            if (failed) return;
+            failed = true;
+            recLog.warn("recording write failed: the rest of the call isn't recorded", { callId, err });
+            void this.note(callId, "warn", "recording stopped: writing it failed").catch(() => undefined);
+          });
+      },
+      finish: () =>
+        (finished ??= this.track(
+          chain
+            .then(() => sink.finish())
+            .then(async (path) => {
+              await this.recordingStored(callId, path);
+              return path;
+            })
+            .catch((err) => {
+              recLog.warn("recording not saved", { callId, err });
+              return null;
+            }),
+        )),
+    };
+  }
+
+  /**
+   * Stores the recordings a crash left unfinished (RecordingStore.recover), each as its call's
+   * recording unless the call has one already.
+   */
+  async recoverRecordings() {
+    for (const key of (await this.recordings.recover?.()) ?? []) {
+      const callId = key.match(/^recordings\/(.+?)(?:\.recovered)?\.wav$/)?.[1];
+      const call = callId ? await this.d.repo.getCall(callId) : null;
+      if (call && !call.recordingPath) {
+        await this.recordingStored(call.id, key);
+        recLog.info("recovered the recording of an interrupted call", { callId: call.id, path: key });
+      } else recLog.info(`recovered an interrupted recording: ${key} (${call ? "the call has another recording" : "no such call"})`, { callId: call?.id });
+    }
+  }
+
+  private async recordingStored(callId: string, path: string) {
+    const call = await this.d.repo.getCall(callId);
+    this.d.bus.publish({ type: "recording", callId, at: call ? this.d.clock.now() - call.startedAt : 0, path });
   }
 
   private track<T>(p: Promise<T>): Promise<T> {

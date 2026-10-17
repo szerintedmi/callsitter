@@ -8,6 +8,7 @@ import { OpenAiLiveAgent } from "../adapters/openai-live/session";
 import { OpenAiSip } from "../adapters/openai-live/sip";
 import { OpenAiWebRtc } from "../adapters/openai-live/webrtc";
 import { FsBlobStore } from "../adapters/storage/fs-blob";
+import { FsRecordingStore } from "../adapters/storage/fs-recording";
 import { openSqlite, SqliteRepo } from "../adapters/storage/sqlite";
 import { TelegramBot } from "../adapters/telegram/bot";
 import { TelnyxApi } from "../adapters/telnyx/api";
@@ -177,6 +178,7 @@ const manager = new CallManager({
   clock: { now: () => Date.now() },
   repo,
   blobs,
+  recordings: new FsRecordingStore(env.DATA_DIR),
 });
 
 const app = createApp({
@@ -209,8 +211,10 @@ const app = createApp({
   },
 });
 
-// Close calls left open by a previous run, then keep sweeping for calls whose media never connected.
+// Close calls left open by a previous run (and keep the recordings they were writing), then keep
+// sweeping for calls whose media never connected.
 await manager.reapOrphans(0, "server restarted");
+await manager.recoverRecordings().catch((err) => logger("recording").error("recovering recordings failed", { err }));
 setInterval(() => void manager.reapOrphans(60_000, "no media connected within 60 s").catch((err) => logger("calls").error("reaping orphans failed", { err })), 30_000);
 
 const listening = new AbortController();

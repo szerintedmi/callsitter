@@ -150,7 +150,6 @@ export function openAiSipRoutes(d: SipRoutesDeps) {
       return;
     }
     await d.manager.sipHeaders(callId, "openai", headers, { mediaSecurity });
-    const record = sc.record;
     // OpenAI answers before the browser's WebRTC leg can play audio: hold the greeting until
     // the page says it's connected (or test_greeting_wait_ms), or "Hello?" goes unheard.
     const greetAfter = test
@@ -158,12 +157,7 @@ export function openAiSipRoutes(d: SipRoutesDeps) {
       : undefined;
     const voice = d.sip.voiceAgent(sessionId, {
       greetAfter,
-      onRecording: record
-        ? (wav) =>
-            void d.manager
-              .saveRecording(callId, wav, "wav")
-              .catch((err) => logger("call").warn("recording not saved", { callId, err }))
-        : undefined,
+      record: sc.record ? (rate, channels) => d.manager.openRecording(callId, rate, channels) : undefined,
     });
     try {
       // attachMedia accepts the call (voice.connect); on failure it hangs up and records why.

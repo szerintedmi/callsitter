@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import type { UnwrapWebhookEvent } from "openai/resources/webhooks/webhooks";
 import { fromPcm16, Resampler } from "../../core/audio";
-import type { CallRecording, VoiceAgent, VoiceSession, VoiceSessionHandlers, VoiceSessionOptions } from "../../core/ports";
+import type { CallRecording, RecordingWriter, VoiceAgent, VoiceSession, VoiceSessionHandlers, VoiceSessionOptions } from "../../core/ports";
 import { StereoRecorder } from "../../core/wav";
 import { attachSideband, LIVE_URL, liveInstructions } from "./session";
 
@@ -71,7 +71,7 @@ export class OpenAiSip {
    * (SIP negotiates the audio format, so there is none) and attaches the sideband
    * (recordedSideband). Its session can transfer the call (refer: a SIP REFER).
    */
-  voiceAgent(sessionId: string, opts: { onRecording?: (wav: ArrayBuffer) => void; greetAfter?: Promise<void> } = {}): VoiceAgent {
+  voiceAgent(sessionId: string, opts: SidebandOptions = {}): VoiceAgent {
     return {
       connect: async (o: VoiceSessionOptions, h: VoiceSessionHandlers): Promise<VoiceSession> => {
         await this.client.live.sessions.accept(
@@ -105,12 +105,19 @@ export async function hangupSession(client: OpenAI, sessionId: string) {
   }
 }
 
+export interface SidebandOptions {
+  /** records the call: opens where the recording is written (CallManager.openRecording) */
+  record?: (rate: number, channels: number) => RecordingWriter;
+  /** the greeting waits for it */
+  greetAfter?: Promise<void>;
+}
+
 /**
- * Attaches the sideband to a started session (SIP accept, or WebRTC create). With `onRecording`,
- * the reflected audio is recorded as a stereo 24 kHz WAV (caller left, agent right) and handed
- * over when the session closes, or, once keepRecording has been called (a takeover), when its
- * finish() is: the rest of the call goes on the same tracks, the owner on the agent's.
- * With `greetAfter`, the greeting waits for it.
+ * Attaches the sideband to a started session (SIP accept, or WebRTC create). With `record`, the
+ * reflected audio is recorded as a stereo 24 kHz WAV (caller left, agent right), written as the
+ * call goes and finished when the session closes, or, once keepRecording has been called (a
+ * takeover), when its finish() is: the rest of the call goes on the same tracks, the owner on the
+ * agent's.
  */
 export async function recordedSideband(
   apiKey: string,
@@ -118,16 +125,11 @@ export async function recordedSideband(
   sessionId: string,
   o: VoiceSessionOptions,
   h: VoiceSessionHandlers,
-  opts: { onRecording?: (wav: ArrayBuffer) => void; greetAfter?: Promise<void> },
+  opts: SidebandOptions,
 ): Promise<VoiceSession> {
-  const recorder = opts.onRecording ? new StereoRecorder(RECORDING_RATE, Date.now()) : undefined;
-  let saved = false;
+  const recorder = opts.record ? new StereoRecorder(RECORDING_RATE, Date.now(), opts.record(RECORDING_RATE, 2)) : undefined;
   let kept: CallRecording | null = null;
-  const save = () => {
-    if (!recorder || saved) return;
-    saved = true;
-    opts.onRecording!(recorder.toWav());
-  };
+  const save = () => void recorder?.finish();
   const url = `${liveUrl ?? LIVE_URL}/${encodeURIComponent(sessionId)}/attach`;
   const session = await attachSideband(
     url,

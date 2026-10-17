@@ -158,7 +158,7 @@ export function testCallRoutes(d: TestCallDeps) {
       let session: CallSession | undefined;
       let started = false;
       // Browser calls have no carrier recording: record mic (left) and what Live sent (right).
-      const recorder = new StereoRecorder(16000, Date.now());
+      const recorder = new StereoRecorder(16000, Date.now(), d.manager.openRecording(callId, 16000, 2));
       let unsubscribe: (() => void) | undefined;
       let underruns = 0;
       let underrunNotedAt = 0;
@@ -169,11 +169,7 @@ export function testCallRoutes(d: TestCallDeps) {
         unsubscribe = d.manager.bus.subscribe((ev) => {
           if (ev.callId === callId) ws.send(JSON.stringify({ type: "event", event: ev }));
         });
-        const media = new BrowserMediaChannel(ws, d.testCallCloseGraceMs ?? CLOSE_GRACE_MS, recorder, () => {
-          d.manager
-            .saveRecording(callId, recorder.toWav(), "wav")
-            .catch((err) => log.warn("recording not saved", { callId, err }));
-        });
+        const media = new BrowserMediaChannel(ws, d.testCallCloseGraceMs ?? CLOSE_GRACE_MS, recorder, () => void recorder.finish());
         d.browserCalls.register(ccid, () => media.close());
         const hit = await d.manager.registerIncoming({ callId, callControlId: ccid, from: "browser", to: "test call", channel: "test" });
         if (hit) {

@@ -25,7 +25,7 @@ Commands are in the [README](../README.md#run). Setup of Telnyx, Telegram, the t
 
 `/test-call` on the admin host (linked from the call list). Both routes use the real Live, Jev and Luna, and get a Telegram status message, so you can try steering. Luna's tools run dry by default: she can't hang up. Use headphones, or the agent hears itself.
 
-- **Browser**: the mic's 16 kHz PCM16 goes over a WebSocket, both ways; the server runs a normal call session with only the phone leg replaced (`src/web/test-call.ts`). Recorded as a stereo WAV: mic left, the audio Live sent right, at arrival time. Listed with the caller `browser`.
+- **Browser**: the mic's 16 kHz PCM16 goes over a WebSocket, both ways; the server runs a normal call session with only the phone leg replaced (`src/web/test-call.ts`). Recorded as a stereo WAV: mic left, the audio Live sent right, at arrival time, written to disk as the call goes, like a SIP call's ([setup](setup.md#openai-sip)). Listed with the caller `browser`.
 - **SIP**: the call reaches OpenAI over SIP, as a real call does. A Telnyx WebRTC client can't dial a SIP URI (`404 Invalid destination number D11`), so the page dials `callsittertest<nonce>` on the credential connection, which parks it; `/telnyx/webhook` then `transfer`s it to `sip:<project>@sip.api.openai.com` (TLS, SRTP) with the nonce in `X-CallSitter-Test`. Listed as `browser (SIP)`. The page's **Debug log** shows the Telnyx call states and the server's log lines.
 
 ## Call page

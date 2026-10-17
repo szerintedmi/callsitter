@@ -92,7 +92,7 @@ export interface CallRecording {
   caller(pcm16: Int16Array, rate: number): void;
   /** the owner's audio as it arrives (on the agent's track): mono PCM16 at `rate` Hz */
   owner(pcm16: Int16Array, rate: number): void;
-  /** hands the recording over (once) */
+  /** stores the recording (once) */
   finish(): void;
 }
 
@@ -311,6 +311,31 @@ export interface NotifySignup {
 export interface BlobStore {
   put(key: string, data: ArrayBuffer | Uint8Array, contentType: string): Promise<string>;
   get(key: string): Promise<{ body: ReadableStream | Blob; contentType: string } | null>;
+}
+
+/**
+ * Where recordings are written while a call runs (a PCM16 WAV per key, readable through the
+ * BlobStore once finished), so a crash keeps what was written.
+ */
+export interface RecordingStore {
+  open(key: string, format: { rate: number; channels: number }): RecordingSink;
+  /** finishes the recordings a previous run left unfinished (a crash); resolves to their keys */
+  recover?(): Promise<string[]>;
+}
+
+/** One recording being written. Calls are made one at a time: each after the previous resolved. */
+export interface RecordingSink {
+  /** interleaved little-endian PCM16 frames */
+  append(pcm: Uint8Array): Promise<void>;
+  /** completes the file with what was appended; resolves to its key */
+  finish(): Promise<string>;
+}
+
+/** What a StereoRecorder writes to: CallManager.openRecording queues these for a RecordingSink. */
+export interface RecordingWriter {
+  append(pcm: Uint8Array): void;
+  /** once, after the last append: resolves to the stored path, or null if nothing was stored */
+  finish(): Promise<string | null>;
 }
 
 /** How a message to the owner looks, beyond its plain text. */

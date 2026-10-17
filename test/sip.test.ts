@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpenAiSip, sipUser } from "../src/adapters/openai-live/sip";
 import { FsBlobStore } from "../src/adapters/storage/fs-blob";
+import { FsRecordingStore } from "../src/adapters/storage/fs-recording";
 import { openSqlite, SqliteRepo } from "../src/adapters/storage/sqlite";
 import { TelnyxApi } from "../src/adapters/telnyx/api";
 import { TelnyxVerifier } from "../src/adapters/telnyx/signature";
@@ -105,6 +106,7 @@ beforeAll(async () => {
     clock: { now: () => Date.now() },
     repo,
     blobs,
+    recordings: new FsRecordingStore(dataDir),
   });
   const app = createApp({
     browserCalls,
