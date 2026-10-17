@@ -119,6 +119,8 @@ export interface PlayerConfig {
   base: string;
   /** the public site, on the video's end card */
   site?: string;
+  /** the build, on the media URLs: a deploy's new files miss the browser's and Cloudflare's caches */
+  v: string;
   /** the recorder's: the rooms' layout, fixed (else from the frame's shape) */
   layout?: Layout;
   /** the recorder's: keep text off a tall frame's bottom fifth and right edge (Shorts' and Reels' title and buttons) */
@@ -192,7 +194,7 @@ export function realCallsPage(
   base: string,
   o: { selected: string; autoplay: boolean; wastedSeconds: number; /** page analytics on (analytics.yaml) */ analytics?: boolean },
 ): string {
-  const config: PlayerConfig = { demos: DEMOS, selected: o.selected, autoplay: o.autoplay, render: false, base };
+  const config: PlayerConfig = { demos: DEMOS, selected: o.selected, autoplay: o.autoplay, render: false, base, v: BUILD };
   const tabs = DEMOS.map(
     (x, i) =>
       `<a class="rc-tab s-${x.scene}" href="${base}listen/${x.slug}" data-slug="${x.slug}" data-notrack><i>${String(i + 1).padStart(2, "0")}</i>${esc(x.title)}</a>`,
@@ -295,7 +297,7 @@ ${legal(base, { github: true })}
 }
 
 function renderPage(base: string, demo: Demo, o: { poster: boolean; layout?: Layout; safe: boolean }) {
-  const config: PlayerConfig = { demos: DEMOS, selected: demo.slug, autoplay: false, render: true, ...o, base, site: "callsitter.org" };
+  const config: PlayerConfig = { demos: DEMOS, selected: demo.slug, autoplay: false, render: true, ...o, base, site: "callsitter.org", v: BUILD };
   return `<!doctype html>
 <html lang="en">
 <head>
