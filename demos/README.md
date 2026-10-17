@@ -26,6 +26,6 @@ The inputs name the people being redacted, so they stay in `data/demos/<slug>/` 
 
 - `--from`/`--to` for a clip.
 - `--size 1280x720` for a smaller frame.
-- `--still 12,34` for single PNG frames.
+- `--still 12,34` for single PNG frames, to `data/demos/stills/` (`--out <dir>` for another folder).
 
 The MP4s are too big for git. Upload them to YouTube, or drag one into a GitHub comment or README edit to get a playable link.
