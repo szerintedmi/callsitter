@@ -9,7 +9,9 @@ import type { MessageLayout, OwnerButtonPress, OwnerChat, OwnerMessage } from ".
 // (getUpdates), which needs no public URL; it fails while a webhook is set, and only one poller
 // per bot works at a time, so dev and production need separate bots. Collapsed parts of a message
 // are expandable_blockquote entities (offsets in UTF-16 code units, as JS strings count), and
-// buttons are an inline keyboard whose presses arrive as callback queries.
+// buttons are an inline keyboard whose presses arrive as callback queries. A web_app button opens
+// a Mini App, only in a private chat: in a group Telegram rejects the whole message ("Available
+// only in private chats between a user and the bot", InlineKeyboardButton), so it's left out there.
 
 const log = logger("telegram");
 
@@ -34,13 +36,18 @@ const POLL_TIMEOUT_S = 50;
 const RETRY_MIN_MS = 1000;
 const RETRY_MAX_MS = 60_000;
 
-/** MessageLayout as sendMessage/editMessageText parameters. */
-function layoutParams(layout: MessageLayout | undefined, edit: boolean): Record<string, unknown> {
+/** an InlineKeyboardButton: a press comes back as a callback query, or it opens a Mini App */
+type TgButton = { text: string; callback_data: string } | { text: string; web_app: { url: string } };
+
+/** MessageLayout as sendMessage/editMessageText parameters; `webApps` only in a private chat. */
+function layoutParams(layout: MessageLayout | undefined, edit: boolean, webApps: boolean): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (layout?.collapsed?.length) out.entities = layout.collapsed.map((q) => ({ type: "expandable_blockquote", offset: q.offset, length: q.length }));
-  const rows = layout?.buttons?.filter((r) => r.length) ?? [];
+  const rows = (layout?.buttons ?? [])
+    .map((r) => r.flatMap((b): TgButton[] => (b.webApp === undefined ? [{ text: b.label, callback_data: b.data }] : webApps ? [{ text: b.label, web_app: { url: b.webApp } }] : [])))
+    .filter((r) => r.length);
   // An edit without buttons removes the ones the message had.
-  if (rows.length || edit) out.reply_markup = { inline_keyboard: rows.map((r) => r.map((b) => ({ text: b.label, callback_data: b.data }))) };
+  if (rows.length || edit) out.reply_markup = { inline_keyboard: rows };
   return out;
 }
 
@@ -71,6 +78,11 @@ export class TelegramBot implements OwnerChat {
     return /^-?[0-9]+$/.test(this.o.chatId);
   }
 
+  /** A private chat with a user (a positive id); groups are negative, channels too or @names. */
+  get isPrivate(): boolean {
+    return /^[1-9][0-9]*$/.test(this.o.chatId);
+  }
+
   // The token is part of the URL: keep it out of error messages, which reach logs and Luna.
   private redact(s: string) {
     return s.replaceAll(this.o.botToken, "<token>");
@@ -98,7 +110,7 @@ export class TelegramBot implements OwnerChat {
       chat_id: this.o.chatId,
       text,
       link_preview_options: { is_disabled: true },
-      ...layoutParams(opts.layout, false),
+      ...layoutParams(opts.layout, false, this.isPrivate),
       ...(opts.silent ? { disable_notification: true } : {}),
       ...(opts.replyTo !== undefined ? { reply_parameters: { message_id: opts.replyTo, allow_sending_without_reply: true } } : {}),
     });
@@ -112,7 +124,7 @@ export class TelegramBot implements OwnerChat {
         message_id: messageId,
         text,
         link_preview_options: { is_disabled: true },
-        ...layoutParams(layout, true),
+        ...layoutParams(layout, true, this.isPrivate),
       });
     } catch (err) {
       // The same text again: nothing to do.

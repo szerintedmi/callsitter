@@ -223,7 +223,16 @@ export type CallEvent =
       info?: Record<string, string>;
     }
   /** the carrier's account of the hangup (Telnyx call.hangup: cause, who hung up, SIP code, call quality), by field name */
-  | { type: "carrier.hangup"; callId: string; at: number; source: "telnyx"; info: Record<string, string> };
+  | { type: "carrier.hangup"; callId: string; at: number; source: "telnyx"; info: Record<string, string> }
+  /**
+   * The owner took the call over from Telegram (telegram.yaml takeover): the agent says the
+   * handover line, then the call moves to the owner's page and the bot stops steering it.
+   */
+  | { type: "takeover.started"; callId: string; at: number }
+  /** the owner's page hears the caller (the transferred leg's audio flows) */
+  | { type: "takeover.live"; callId: string; at: number }
+  /** the takeover didn't happen: the agent carries on, or the call ended (call.ended follows) */
+  | { type: "takeover.failed"; callId: string; at: number; reason: string };
 
 /** A SIP INVITE header as a vendor reports it (untrusted call metadata). */
 export interface SipHeader {

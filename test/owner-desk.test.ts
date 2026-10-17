@@ -15,6 +15,7 @@ async function rig(
     canSteer?: boolean;
     failSends?: number;
     accepts?: (meta: CallMeta) => boolean;
+    takeoverUrl?: (callId: string) => string | undefined;
     /** shared with another desk (another chat) */
     bus?: MemoryEventBus;
   } = {},
@@ -57,6 +58,7 @@ async function rig(
     callLink: (id) => `https://admin.example.com/calls/${id}`,
     canSteer: o.canSteer ?? true,
     ...(o.accepts ? { accepts: o.accepts } : {}),
+    ...(o.takeoverUrl ? { takeoverUrl: o.takeoverUrl } : {}),
     steer: (callId, text, as) => {
       steered.push({ callId, text, as });
       return o.steer?.(callId, text, as) ?? { ok: true };
@@ -498,5 +500,95 @@ describe("owner desk: declined calls", () => {
     r.advance(60_000);
     await settle();
     expect(r.edits).toEqual([]);
+  });
+});
+
+describe("owner desk: takeover", () => {
+  const url = (id: string) => `https://hooks.example.com/takeover/${id}`;
+  async function takeoverRig(o: Parameters<typeof rig>[0] = {}) {
+    const r = await rig({ takeoverUrl: url, ...o });
+    r.config.telegram.takeover.enabled = true;
+    return r;
+  }
+  const takeoverRow = (layout?: MessageLayout) => layout?.buttons?.find((row) => row.some((b) => b.webApp !== undefined));
+
+  test("a live phone call's status message has a Take over button opening the takeover page", async () => {
+    const r = await takeoverRig();
+    r.start("c1");
+    await settle();
+    expect(takeoverRow(r.sent[0]!.layout)).toEqual([{ label: r.config.telegram.takeover.button_label, webApp: url("c1") }]);
+    // The steering buttons are still there.
+    expect(r.sent[0]!.layout?.buttons?.some((row) => row.some((b) => b.data?.startsWith("steer:")))).toBe(true);
+  });
+
+  test("no button for other channels, when turned off, or without a takeover URL", async () => {
+    const r = await takeoverRig();
+    r.start("p1", "public");
+    r.start("t1", "+441", { channel: "test" });
+    await settle();
+    r.config.telegram.takeover.enabled = false;
+    r.start("c1");
+    await settle();
+    for (const m of r.sent) expect(takeoverRow(m.layout)).toBeUndefined();
+
+    const none = await takeoverRig({ takeoverUrl: () => undefined });
+    none.start("c2");
+    await settle();
+    expect(takeoverRow(none.sent[0]!.layout)).toBeUndefined();
+  });
+
+  test("taken over: the message says so, the buttons go, steering is off, /hangup hangs up at once", async () => {
+    const r = await takeoverRig();
+    r.start("c1");
+    await settle();
+    const status = r.sent[0]!;
+    r.advance(65_000);
+    r.bus.publish({ type: "takeover.started", callId: "c1", at: 65_000 });
+    await settle();
+    expect(r.lastEdit()).toContain("🎧 You took over · +441");
+    expect(r.lastEdit()).toContain("You took over at 1:05 (connecting…): steering is off");
+    r.bus.publish({ type: "takeover.live", callId: "c1", at: 67_000 });
+    await settle();
+    expect(r.lastEdit()).toContain("You took over at 1:05: steering is off");
+    expect(r.lastEdit()).not.toContain("Reply to steer");
+    expect(r.edits.at(-1)!.layout?.buttons).toBeUndefined();
+
+    await r.message("say hi", status.id);
+    expect(r.steered).toEqual([]);
+    expect(r.sent.at(-1)!.text).toBe("You took this call over: steering is off.");
+    await r.desk.onButton({ pressId: "q1", messageId: status.id, data: "steer:0" });
+    expect(r.answers.at(-1)).toEqual({ pressId: "q1", notice: "You took this call over: steering is off." });
+    expect(r.steered).toEqual([]);
+    await r.message("/hangup", status.id);
+    expect(r.hungUp).toEqual(["c1"]);
+    expect(r.steered).toEqual([]);
+    expect(r.sent.at(-1)!.text).toBe("Hanging up.");
+
+    r.bus.publish({ type: "call.ended", callId: "c1", at: 90_000, endedAt: 0, reason: "caller hung up", costUsd: 0, lunaCalls: 0, jevTicks: 0 });
+    await settle();
+    expect(r.lastEdit()).toContain("✅ Call ended");
+    expect(r.lastEdit()).toContain("🎧 You took over at 1:05");
+    expect(r.lastEdit()).not.toContain("steering is off");
+    expect(r.edits.at(-1)!.layout?.buttons).toBeUndefined();
+  });
+
+  test("a failed takeover brings the button back and says why", async () => {
+    const r = await takeoverRig();
+    r.start("c1");
+    r.bus.publish({ type: "takeover.started", callId: "c1", at: 1000 });
+    await settle();
+    r.bus.publish({ type: "takeover.failed", callId: "c1", at: 2000, reason: "the refer was refused" });
+    await settle();
+    expect(r.lastEdit()).toContain("⚠️ Takeover failed: the refer was refused");
+    expect(r.lastEdit()).toContain("📞 Incoming call");
+    expect(takeoverRow(r.edits.at(-1)!.layout)).toEqual([{ label: r.config.telegram.takeover.button_label, webApp: url("c1") }]);
+  });
+
+  test("an ended call has no button", async () => {
+    const r = await takeoverRig();
+    r.start("c1");
+    r.bus.publish({ type: "call.ended", callId: "c1", at: 5000, endedAt: 0, reason: "caller hung up", costUsd: 0, lunaCalls: 0, jevTicks: 0 });
+    await settle();
+    expect(takeoverRow(r.edits.at(-1)!.layout)).toBeUndefined();
   });
 });

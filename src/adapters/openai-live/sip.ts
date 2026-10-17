@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { UnwrapWebhookEvent } from "openai/resources/webhooks/webhooks";
-import type { VoiceAgent, VoiceSession, VoiceSessionHandlers, VoiceSessionOptions } from "../../core/ports";
+import { fromPcm16, Resampler } from "../../core/audio";
+import type { CallRecording, VoiceAgent, VoiceSession, VoiceSessionHandlers, VoiceSessionOptions } from "../../core/ports";
 import { StereoRecorder } from "../../core/wav";
 import { attachSideband, LIVE_URL, liveInstructions } from "./session";
 
@@ -68,7 +69,7 @@ export class OpenAiSip {
   /**
    * A voice agent for one incoming SIP session: connect() accepts the call with the Live config
    * (SIP negotiates the audio format, so there is none) and attaches the sideband
-   * (recordedSideband).
+   * (recordedSideband). Its session can transfer the call (refer: a SIP REFER).
    */
   voiceAgent(sessionId: string, opts: { onRecording?: (wav: ArrayBuffer) => void; greetAfter?: Promise<void> } = {}): VoiceAgent {
     return {
@@ -87,7 +88,8 @@ export class OpenAiSip {
           },
           { signal: o.signal },
         );
-        return recordedSideband(this.o.apiKey, this.o.liveUrl, sessionId, o, h, opts);
+        const session = await recordedSideband(this.o.apiKey, this.o.liveUrl, sessionId, o, h, opts);
+        return { ...session, refer: (targetUri, signal) => this.client.live.sessions.refer(sessionId, { target_uri: targetUri }, { signal }) };
       },
     };
   }
@@ -106,9 +108,11 @@ export async function hangupSession(client: OpenAI, sessionId: string) {
 /**
  * Attaches the sideband to a started session (SIP accept, or WebRTC create). With `onRecording`,
  * the reflected audio is recorded as a stereo 24 kHz WAV (caller left, agent right) and handed
- * over when the session closes. With `greetAfter`, the greeting waits for it.
+ * over when the session closes, or, once keepRecording has been called (a takeover), when its
+ * finish() is: the rest of the call goes on the same tracks, the owner on the agent's.
+ * With `greetAfter`, the greeting waits for it.
  */
-export function recordedSideband(
+export async function recordedSideband(
   apiKey: string,
   liveUrl: string | undefined,
   sessionId: string,
@@ -116,23 +120,67 @@ export function recordedSideband(
   h: VoiceSessionHandlers,
   opts: { onRecording?: (wav: ArrayBuffer) => void; greetAfter?: Promise<void> },
 ): Promise<VoiceSession> {
-  const recorder = opts.onRecording ? new StereoRecorder(24000, Date.now()) : undefined;
+  const recorder = opts.onRecording ? new StereoRecorder(RECORDING_RATE, Date.now()) : undefined;
   let saved = false;
+  let kept: CallRecording | null = null;
+  const save = () => {
+    if (!recorder || saved) return;
+    saved = true;
+    opts.onRecording!(recorder.toWav());
+  };
   const url = `${liveUrl ?? LIVE_URL}/${encodeURIComponent(sessionId)}/attach`;
-  return attachSideband(
+  const session = await attachSideband(
     url,
     apiKey,
     o,
     {
       ...h,
       onClose: (reason) => {
-        if (recorder && !saved) {
-          saved = true;
-          opts.onRecording!(recorder.toWav());
-        }
+        if (!kept) save();
         h.onClose(reason);
       },
     },
     { recorder, greetAfter: opts.greetAfter },
   );
+  return {
+    sendAudio: (b64) => session.sendAudio(b64),
+    append: (as, text, id) => session.append(as, text, id),
+    close: () => session.close(),
+    keepRecording: (maxSeconds) => {
+      if (!recorder) return null;
+      recorder.extend(maxSeconds);
+      kept ??= continuedRecording(recorder, save);
+      return kept;
+    },
+  };
+}
+
+/** the sideband reflects 24 kHz PCM16, so the recording is at that rate */
+const RECORDING_RATE = 24_000;
+
+/**
+ * The rest of the call on the sideband's recorder, after a takeover. Audio is placed by its
+ * arrival (wall clock): the caller track picks up after a silent gap (the transfer), the owner's
+ * goes on the agent track.
+ */
+function continuedRecording(recorder: StereoRecorder, save: () => void): CallRecording {
+  const rates = new Map<string, Resampler>();
+  const to24k = (key: string, pcm: Int16Array, rate: number) => {
+    let r = rates.get(key);
+    if (r?.from !== rate) rates.set(key, (r = new Resampler(rate, RECORDING_RATE)));
+    return fromPcm16(r.push(pcm), "pcm24");
+  };
+  let callerStarted = false;
+  return {
+    caller(pcm, rate) {
+      const now = Date.now();
+      if (!callerStarted) recorder.padCaller(now);
+      callerStarted = true;
+      recorder.addCaller(to24k("caller", pcm, rate));
+    },
+    owner(pcm, rate) {
+      recorder.addAgent(to24k("owner", pcm, rate), Date.now());
+    },
+    finish: save,
+  };
 }

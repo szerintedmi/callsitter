@@ -18,6 +18,7 @@ import { ConfigStore, loadConfig, publicChatConfig, type AppConfig } from "../co
 import { MemoryEventBus } from "../core/event-bus";
 import { logger } from "../core/log";
 import { OwnerDesk } from "../core/owner-desk";
+import { verifyInitData } from "../core/telegram-auth";
 import type { OwnerButtonPress, OwnerMessage } from "../core/ports";
 import type { CallMeta } from "../core/types";
 import { attachPersistence } from "../core/persist";
@@ -80,6 +81,16 @@ else if (!telegram.canListen) log.warn("Telegram steering off: TELEGRAM_CHAT_ID 
 if (publicTelegram && !publicTelegram.canListen) {
   log.warn("Telegram steering off for public calls: TELEGRAM_PUBLIC_CHAT_ID is a channel, which can't message the bot");
 }
+// Owner takeover (telegram.yaml takeover): the main desk's "Take over" button opens the Mini App
+// at /takeover/<id> on the public host. Telegram allows Mini App buttons in a private chat only,
+// whose id is the owner's user id, and wants an https URL. TELNYX_TAKEOVER_SIP_DOMAIN is where
+// a SIP call is referred to (CallManager refuses every takeover without it).
+const takeoverBase = env.PUBLIC_WS_BASE.replace(/^ws/, "http");
+const takeover =
+  env.TELEGRAM_BOT_TOKEN && env.TELNYX_TAKEOVER_SIP_DOMAIN && telegram?.isPrivate && takeoverBase.startsWith("https://")
+    ? { botToken: env.TELEGRAM_BOT_TOKEN, ownerUserId: Number(env.TELEGRAM_CHAT_ID) }
+    : undefined;
+if (telegram && !takeover) log.info("call takeover off: it needs TELNYX_TAKEOVER_SIP_DOMAIN, TELEGRAM_CHAT_ID to be a private chat and PUBLIC_WS_BASE to be wss://");
 const callLink = env.ADMIN_HOST ? (id: string) => `https://${env.ADMIN_HOST}/calls/${encodeURIComponent(id)}` : undefined;
 
 const repo = new SqliteRepo(openSqlite(join(env.DATA_DIR, "callsitter.db")));
@@ -99,7 +110,7 @@ const persistence = attachPersistence(bus, repo);
 // Status messages and steering (telegram.yaml), one desk per chat. `manager` is only read once a
 // message arrives.
 const isPublic = (m: CallMeta) => m.channel === "public";
-const deskFor = (chat: TelegramBot, cfg: () => AppConfig, accepts?: (m: CallMeta) => boolean) =>
+const deskFor = (chat: TelegramBot, cfg: () => AppConfig, accepts?: (m: CallMeta) => boolean, takeoverUrl?: (callId: string) => string) =>
   new OwnerDesk({
     bus,
     chat,
@@ -108,13 +119,21 @@ const deskFor = (chat: TelegramBot, cfg: () => AppConfig, accepts?: (m: CallMeta
     callLink,
     canSteer: chat.canListen,
     ...(accepts ? { accepts } : {}),
+    ...(takeoverUrl ? { takeoverUrl } : {}),
     steer: (callId, text, as) => manager.get(callId)?.steerFromOwner(text, as) ?? { ok: false, reason: "the call isn't connected yet" },
     enterStage: (callId, stage, label) =>
       manager.get(callId)?.stageFromOwner(stage, label) ?? { ok: false, reason: "the call isn't connected yet" },
     hangUp: (callId) => manager.get(callId)?.hangUpFromOwner() ?? { ok: false, reason: "the call isn't connected yet" },
     extend: (callId, minutes) => manager.get(callId)?.extendFromOwner(minutes) ?? { ok: false, reason: "the call isn't connected yet" },
   });
-const mainDesk = telegram ? deskFor(telegram, () => config.get(), publicTelegram ? (m) => !isPublic(m) : undefined) : undefined;
+const mainDesk = telegram
+  ? deskFor(
+      telegram,
+      () => config.get(),
+      publicTelegram ? (m) => !isPublic(m) : undefined,
+      takeover ? (callId) => `${takeoverBase}/takeover/${encodeURIComponent(callId)}` : undefined,
+    )
+  : undefined;
 const publicDesk = telegram && publicTelegram ? deskFor(publicTelegram, () => publicChatConfig(config.get()), isPublic) : undefined;
 
 const telnyx = new TelnyxApi({ apiKey: env.TELNYX_API_KEY });
@@ -147,6 +166,7 @@ log.info(`OpenAI SIP ${sip ? "on (/openai/webhook)" : "off"}; browser SIP test $
 
 const manager = new CallManager({
   config: () => config.get(),
+  takeoverSipDomain: env.TELNYX_TAKEOVER_SIP_DOMAIN,
   voice,
   greetings,
   classifier: new JevClassifier({ apiKey: env.TYPESAFE_API_KEY }),
@@ -183,6 +203,10 @@ const app = createApp({
     demoMedia,
   },
   clientAssets: await clientAssets({ rebuild: process.env.NODE_ENV !== "production" }),
+  takeover: takeover && {
+    ownerUserId: takeover.ownerUserId,
+    verifyInitData: (initData) => verifyInitData(initData, takeover.botToken, config.get().telegram.takeover.init_data_max_age_s),
+  },
 });
 
 // Close calls left open by a previous run, then keep sweeping for calls whose media never connected.

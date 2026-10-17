@@ -23,6 +23,11 @@ export class StereoRecorder {
     private maxSamples = rate * 60 * 20,
   ) {}
 
+  /** Records up to `seconds` from the start, if that's longer than it would have (never shorter). */
+  extend(seconds: number) {
+    this.maxSamples = Math.max(this.maxSamples, Math.round(seconds * this.rate));
+  }
+
   /**
    * Little-endian PCM16 caller audio that arrived at `now` (wall clock). Without `now` the track
    * starts with the recording (SIP sideband: reflected audio covers the whole session).
@@ -39,6 +44,17 @@ export class StereoRecorder {
     const pcm = toPcm16(bytes, "l16");
     this.caller.push(pcm);
     this.callerSamples += pcm.length;
+  }
+
+  /**
+   * Silence on the caller track up to `now` (wall clock), if it's behind: e.g. the gap between a
+   * SIP sideband's end and a takeover's caller audio, so what follows lines up with the agent track.
+   */
+  padCaller(now: number) {
+    const at = Math.min(this.maxSamples, Math.round(((now - this.startedAt) / 1000) * this.rate));
+    if (at <= this.callerSamples) return;
+    this.caller.push(new Int16Array(at - this.callerSamples));
+    this.callerSamples = at;
   }
 
   /** Little-endian PCM16 agent audio that arrived at `now` (wall clock). */

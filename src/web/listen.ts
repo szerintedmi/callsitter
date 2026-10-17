@@ -232,7 +232,7 @@ const ICONS = {
   plane: ["............", "..........dd", "........dddd", "......dddddd", "...dddddddd.", "ddddddddddd.", "...ddd.ddd..", "....dd.ddd..", "....d..dd...", ".......dd...", "......dd....", "......d....."],
   sliders: ["............", "...dd.......", "dddddddddddd", "...dd.......", "............", "........dd..", "dddddddddddd", "........dd..", "............", ".....dd.....", "dddddddddddd", ".....dd....."],
   transcript: ["..dddddddd..", "..d......d..", "..d.dddd.d..", "..d......d..", "..d.dddd.d..", "..d......d..", "..d.dddd.d..", "..d......d..", "..d.ddd..d..", "..d......d..", "..dddddddd..", "............"],
-  gear: [".....dd.....", "..d.dddd.d..", "..dddddddd..", "...dd..dd...", ".ddd....ddd.", ".ddd....ddd.", "...dd..dd...", "..dddddddd..", "..d.dddd.d..", ".....dd.....", "............", "............"],
+  phone: ["ddd.........", "dddd........", "dddd........", ".ddd........", "..dd........", "..ddd.......", "...ddd......", "....ddd.....", ".....dddddd.", "......dddddd", "........dddd", ".........ddd"],
 };
 /** An inline SVG, one rect per run of same-coloured pixels in a row. */
 const pixelIcon = (rows: string[]) =>
@@ -277,7 +277,7 @@ ${top(base, o.wastedSeconds, { botLink: false, github: false, play: true })}
   <section class="bot-sec" aria-labelledby="bot-how">
     <h2 id="bot-how">HOW IT WORKS</h2>
     <ol class="bot-steps">
-      ${item(ICONS.robot, "MAKE IT YOURS", "Pick its voice and attitude. You get a personal number just for your bot.")}
+      ${item(ICONS.robot, "MAKE IT YOURS", "Pick its voice and attitude. It gets its own number.")}
       ${item(ICONS.forward, "FORWARD YOUR CALLS", "All calls, or just the ones you miss. No app.")}
       ${item(ICONS.popcorn, "POPCORN TIME", "Your bot takes the calls. You follow along on Telegram.")}
     </ol>
@@ -285,8 +285,8 @@ ${top(base, o.wastedSeconds, { botLink: false, github: false, play: true })}
   <ul class="bot-feats" aria-label="What you get">
     ${item(ICONS.plane, "LIVE UPDATES", "Follow every call on Telegram as it happens, with a summary when it ends.")}
     ${item(ICONS.sliders, "STEER IT LIVE", "Tell the bot what to say, how to act, or to hang up, right from Telegram.")}
+    ${item(ICONS.phone, "TAKE OVER", "One tap in Telegram puts you on the line.")}
     ${item(ICONS.transcript, "RECORDINGS", "Listen back to every call, with the transcript.")}
-    ${item(ICONS.gear, "MAKE IT YOURS", "Its voice, its character, who it lets through, tuned to your taste.")}
   </ul>
 </main>
 ${legal(base, { github: true })}

@@ -23,6 +23,12 @@ const Env = z.object({
   TELNYX_SIP_CREDENTIAL_ID: z.string().min(1).optional(),
   /** its credential connection (parks the browser's calls; our webhook transfers them to OpenAI) */
   TELNYX_SIP_CONNECTION_ID: z.string().min(1).optional(),
+  /**
+   * The Call Control app's SIP subdomain (e.g. callsitter.sip.telnyx.com): a call the owner takes
+   * over from Telegram (telegram.yaml takeover) leaves OpenAI SIP by a REFER to it. Takeovers are
+   * off without it.
+   */
+  TELNYX_TAKEOVER_SIP_DOMAIN: z.string().regex(/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i, "a hostname, e.g. callsitter.sip.telnyx.com").optional(),
   TYPESAFE_API_KEY: z.string().min(1),
   MEDIA_TOKEN_SECRET: z.string().min(32, "use at least 32 random characters"),
   /** Telegram bot (@BotFather) that messages the owner; messages to the owner are off unless both are set */

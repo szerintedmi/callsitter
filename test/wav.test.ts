@@ -36,4 +36,21 @@ describe("wav", () => {
     expect(samples(wav, 0)).toEqual([0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2]);
     expect(samples(wav, 1)).toEqual([0, 0, 0, 5, 5, 6, 6, 0, 0, 7, 0]);
   });
+
+  test("recorder: drops audio past maxSamples; extend() records further and never shrinks", () => {
+    const r = new StereoRecorder(1000, 0, 2);
+    r.addCaller(le(1, 1));
+    r.addCaller(le(2)); // past the 2-sample limit: dropped
+    r.addAgentAt(le(5), 2); // starts at the limit: dropped
+    expect(samples(r.toWav(), 0)).toEqual([1, 1]);
+    r.extend(0.001); // 1 sample: shorter than it has, ignored
+    r.addCaller(le(3));
+    expect(samples(r.toWav(), 0)).toEqual([1, 1]);
+    r.extend(0.004); // 4 samples
+    r.addCaller(le(3));
+    r.addAgentAt(le(7), 3);
+    const wav = r.toWav();
+    expect(samples(wav, 0)).toEqual([1, 1, 3, 0]);
+    expect(samples(wav, 1)).toEqual([0, 0, 0, 7]);
+  });
 });

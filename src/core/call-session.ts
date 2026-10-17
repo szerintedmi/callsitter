@@ -3,12 +3,17 @@ import { liveInstructions, ownerAppendText, TIME_UP, type AppConfig, type LiveAp
 import { logger } from "./log";
 import { errMsg, Orchestrator, type Steer } from "./orchestrator";
 import { SpeechTrace } from "./speech-trace";
+import { OwnerBridge } from "./takeover";
 import type {
   Agent,
+  CallRecording,
   Classifier,
   Clock,
   EventBus,
   MediaChannel,
+  OwnerAudioLeg,
+  OwnerPageStats,
+  TakeoverHandle,
   Telephony,
   VoiceAgent,
   VoiceSession,
@@ -17,6 +22,7 @@ import type {
 import type { CallMeta, EndedBy } from "./types";
 
 const log = logger("call");
+const takeoverLog = logger("takeover");
 
 // One phone call: media leg ↔ voice session, with the orchestrator steering.
 // Maps 1:1 to a Durable Object in the Cloudflare port.
@@ -66,9 +72,32 @@ const LIVE_CLOSED: Record<string, { by: EndedBy; text: string }> = {
 
 /**
  * idle → connecting (Live connecting, greeting playing) → active → stopping (hung up: Luna
- * draining, summary) → finalized. The call deadline runs from connecting on.
+ * draining, summary) → finalized. The call deadline runs from connecting on. The owner's takeover
+ * (telegram.yaml takeover): active → handing_over (the handover line, then the REFER and the
+ * transferred leg connecting; back to active if it fails) → taken_over (the owner talks, the bot
+ * is out) → stopping.
  */
-export type CallPhase = "idle" | "connecting" | "active" | "stopping" | "finalized";
+export type CallPhase = "idle" | "connecting" | "active" | "handing_over" | "taken_over" | "stopping" | "finalized";
+
+/** One takeover, from the owner's button press on. */
+interface Takeover {
+  /** the owner's page; null while it's gone (reconnect_grace_ms) */
+  leg: OwnerAudioLeg | null;
+  /** bumped per page connection, so an old handle goes quiet */
+  gen: number;
+  /** what the current page presents to reconnect (TakeoverHandle.reconnectToken); new per connection */
+  reconnectToken: string;
+  /** the REFER went out (OpenAI SIP): Live's session closing is expected from here on */
+  referred: boolean;
+  /** the transferred leg's call control id, once Telnyx has offered it */
+  callControlId?: string;
+  bridge: OwnerBridge | null;
+  /** each page connection's latest counters (TakeoverHandle.pageStats), by gen */
+  pageStats: Map<number, OwnerPageStats>;
+  legTimer?: ReturnType<typeof setTimeout>;
+  graceTimer?: ReturnType<typeof setTimeout>;
+  capTimer?: ReturnType<typeof setTimeout>;
+}
 
 export class CallSession {
   readonly orch: Orchestrator;
@@ -124,6 +153,16 @@ export class CallSession {
   private earlyCallerAudio: string[] = [];
   /** OpenAI SIP: what the watchdog heard, logged for checking against a recording */
   private trace: SpeechTrace | null;
+  /** the owner's takeover, from the button press until the call ends (null again if it failed) */
+  private takeover: Takeover | null = null;
+  /** when Live's part of the call ended (takeover): it's billed up to here, not to the hangup */
+  private liveEndedAt = 0;
+  /** when the owner took over (wall clock) */
+  private takenOverAt = 0;
+  /** Live's session closed while handing over (after the REFER, as expected) */
+  private voiceGone = false;
+  /** the voice session's recording, kept going through the takeover; handed over at the end */
+  private keptRecording: CallRecording | null = null;
 
   constructor(private d: CallSessionDeps) {
     this.orch = new Orchestrator({
@@ -232,6 +271,10 @@ export class CallSession {
 
     this.lastActivityAt = Math.max(this.lastActivityAt, this.d.clock.now());
     this.callerAudioAt = this.d.clock.now();
+    this.startPolling();
+  }
+
+  private startPolling() {
     this.pollTimer = setInterval(() => {
       this.keepInputRunning();
       this.orch.poll();
@@ -247,7 +290,7 @@ export class CallSession {
       // OpenAI SIP: the caller's audio goes straight to Live; the sideband's copy drives the
       // silence watchdog and steering holds, like media-leg audio does.
       onCallerAudio: (b64) => {
-        if (this.stopped) return;
+        if (this.stopped || this._phase === "taken_over") return;
         this.callerAudioAt = this.d.clock.now();
         const bytes = b64decode(b64);
         this.trace?.callerAudio(this.orch.elapsed(), bytes.length / BYTES_PER_MS[this.codec]);
@@ -263,6 +306,8 @@ export class CallSession {
       },
       onTranscriptDone: (s, id, text) => this.orch.onTranscriptDone(s, id, text),
       onInterrupt: () => {
+        // Taken over: the media leg plays the owner now.
+        if (this._phase === "taken_over") return;
         this.d.media.clear();
         // Queued agent audio is dropped, so it no longer counts as talking.
         this.agentPlayoutUntil = this.agentSpeechUntil = this.d.clock.now();
@@ -271,10 +316,19 @@ export class CallSession {
       // Luna's answer goes out through the steering queue with the delegation's id.
       onDelegation: (req) => void this.orch.delegate(req),
       onUsage: (u) => this.onUsage(u.seconds, u.contextRatio),
-      onError: (err) => this.note("error", err.message),
+      onError: (err) => {
+        // Once the call has moved on (takeover), Live's session going away is expected.
+        if (this._phase !== "taken_over" && !this.takeover?.referred) this.note("error", err.message);
+      },
       onClose: (reason) => {
-        // While connecting, a failed connect rejects instead (and says why).
-        if (this._phase !== "active") return;
+        // The REFER ends Live's session: the call goes on, on the transferred leg.
+        if (this.takeover?.referred || this._phase === "taken_over") {
+          this.voiceGone = true;
+          return;
+        }
+        // While connecting, a failed connect rejects instead (and says why). Handing over: the
+        // caller hung up during the handover line, so the call ends.
+        if (this._phase !== "active" && this._phase !== "handing_over") return;
         const known = reason ? LIVE_CLOSED[reason] : undefined;
         const why = reason ? `voice session closed: ${known?.text ?? reason.replaceAll("_", " ")} (${reason})` : "voice session closed";
         const by = known?.by ?? "live";
@@ -286,9 +340,15 @@ export class CallSession {
     };
   }
 
-  /** Caller audio from the media leg, already in the voice session's format. */
+  /** Caller audio from the media leg, already in the voice session's format (taken over: the transferred leg's). */
   onCallerAudio(b64: string) {
     if (this.stopped) return;
+    if (this._phase === "taken_over") {
+      const t = this.takeover!;
+      const pcm = t.bridge!.callerAudio(b64);
+      t.leg?.sendAudio(pcm);
+      return;
+    }
     this.callerAudioAt = this.d.clock.now();
     this.stalledSince = null;
     if (this.voice) this.voice.sendAudio(b64);
@@ -333,7 +393,8 @@ export class CallSession {
 
   /** Agent audio goes straight to the media leg; gpt-live-1 handles interruptions itself. */
   private onAgentAudio(b64: string) {
-    if (this.stopped) return;
+    // Taken over: what Live still sends as it closes mustn't reach the caller.
+    if (this.stopped || this._phase === "taken_over") return;
     this.d.media.sendAudio(b64);
     const bytes = b64decode(b64);
     const now = this.d.clock.now();
@@ -363,6 +424,8 @@ export class CallSession {
    */
   private tellLive(m: Steer) {
     const now = this.d.clock.now();
+    // Taken over: Live is gone (a Luna answer still in flight, say).
+    if (this._phase === "taken_over") return this.appended(m, 0, true);
     if (m.key) {
       // e.g. an older stage text still waiting: the newer one replaces it, unless it's the owner's
       // stage button and this one is held for the owner
@@ -384,6 +447,7 @@ export class CallSession {
     const st = this.d.config().telegram.steering;
     if (!st.enabled) return { ok: false, reason: "steering is turned off (telegram.yaml)" };
     if (this.stopped) return { ok: false, reason: "that call has ended" };
+    if (this.takeover) return { ok: false, reason: TAKEN_OVER };
     if (this._phase !== "active") return { ok: false, reason: "the call isn't connected yet" };
     const text = message.trim();
     if (!text) return { ok: false, reason: "the message is empty" };
@@ -400,6 +464,7 @@ export class CallSession {
   stageFromOwner(stage: string, label: string): OwnerSteerResult {
     if (!this.d.config().telegram.steering.enabled) return { ok: false, reason: "steering is turned off (telegram.yaml)" };
     if (this.stopped) return { ok: false, reason: "that call has ended" };
+    if (this.takeover) return { ok: false, reason: TAKEN_OVER };
     if (this._phase !== "active") return { ok: false, reason: "the call isn't connected yet" };
     if (!this.orch.enterStage(stage, label)) return { ok: false, reason: `there's no ${stage} stage in call-flow.yaml` };
     this.ownerSteerAt = this.d.clock.now();
@@ -412,6 +477,11 @@ export class CallSession {
    */
   hangUpFromOwner(): OwnerSteerResult {
     if (this.stopped) return { ok: false, reason: "that call has ended" };
+    // Taken over (or handing over): no goodbye from the agent, it's the owner's call now.
+    if (this.takeover) {
+      void this.hangup("the owner hung up from Telegram", "owner");
+      return { ok: true };
+    }
     if (this._phase !== "active") return { ok: false, reason: "the call isn't connected yet" };
     void this.hangupAfterGoodbye("the owner hung up from Telegram", "owner");
     return { ok: true };
@@ -424,12 +494,252 @@ export class CallSession {
   extendFromOwner(minutes: number): OwnerExtendResult {
     if (!this.d.config().telegram.steering.enabled) return { ok: false, reason: "steering is turned off (telegram.yaml)" };
     if (this.stopped) return { ok: false, reason: "that call has ended" };
+    if (this.takeover) return { ok: false, reason: TAKEN_OVER };
     if (this.timeIsUp) return { ok: false, reason: "the agent is already saying goodbye" };
     this.orch.extendedMs += minutes * 60_000;
     this.scheduleDeadline();
     const maxCallSeconds = this.maxCallMs() / 1000;
     this.note("info", `the owner added ${minutes} min: the call can run ${Math.round(maxCallSeconds / 60)} min`);
     return { ok: true, maxCallSeconds };
+  }
+
+  /** The voice vendor carries the phone leg (OpenAI SIP): a takeover transfers it (refer). */
+  get overVoice(): boolean {
+    return !!this.d.mediaViaVoice;
+  }
+
+  get channel() {
+    return this.d.meta.channel;
+  }
+
+  /** Taken over (or handing over), and not ended: the owner's page may (re)attach. */
+  get takenOver(): boolean {
+    return !!this.takeover && !this.stopped;
+  }
+
+  /** Taken over (or handing over) and the owner's page is gone, within reconnect_grace_ms. */
+  get ownerAway(): boolean {
+    return this.takenOver && !this.takeover!.leg;
+  }
+
+  /** Whether `token` is the current page's reconnect token (TakeoverHandle.reconnectToken). */
+  reconnectTokenValid(token: string): boolean {
+    const want = this.takenOver ? this.takeover!.reconnectToken : "";
+    if (!want || token.length !== want.length) return false;
+    let diff = 0;
+    for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ token.charCodeAt(i);
+    return diff === 0;
+  }
+
+  /** Why the owner can't take this call over now (telegram.yaml takeover), or null. */
+  takeoverBlocked(): string | null {
+    if (this.stopped) return "that call has ended";
+    if (this.takeover) return "the call is already taken over";
+    if (this._phase !== "active") return "the call isn't connected yet";
+    if (this.pendingHangup || this.timeIsUp) return "the call is ending";
+    if (this.d.mediaViaVoice && !this.voice?.refer) return "this call can't be transferred";
+    return null;
+  }
+
+  /**
+   * The owner takes the call over (telegram.yaml takeover) on their page, `leg`. The agent says
+   * the handover line and the bot stops steering; then the call moves: over OpenAI SIP by a REFER
+   * to `referTo` (its transferred leg connects through attachTakeoverLeg), over the media stream
+   * at once. Returns straight away; `leg` hears how it goes.
+   */
+  takeOver(leg: OwnerAudioLeg, referTo: string | null): TakeoverHandle {
+    const why = this.takeoverBlocked();
+    if (why) throw new Error(why);
+    if (!!referTo !== !!this.d.mediaViaVoice) throw new Error(referTo ? "only a call over OpenAI SIP is transferred" : "a call over OpenAI SIP needs a transfer target");
+    const t: Takeover = { leg, gen: 1, reconnectToken: newToken(), referred: false, bridge: null, pageStats: new Map() };
+    this.takeover = t;
+    this._phase = "handing_over";
+    // No Jev, watchdog or held steering while handing over; the deadline is the takeover's own.
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.pollTimer = null;
+    if (this.maxTimer) clearTimeout(this.maxTimer);
+    if (this.timeUpTimer) clearTimeout(this.timeUpTimer);
+    leg.notify({ type: "connecting" });
+    this.d.bus.publish({ type: "takeover.started", callId: this.callId, at: this.orch.elapsed() });
+    log.info(`owner taking over (${referTo ? "transfer" : "media stream"})`, { callId: this.callId });
+    void this.handOver(t, referTo).catch((err) => {
+      log.error("takeover failed", { callId: this.callId, err });
+      if (this.takeover === t && this._phase === "handing_over") this.takeoverFailed(t, `takeover failed: ${errMsg(err)}`);
+    });
+    return this.takeoverHandle(t);
+  }
+
+  /**
+   * The owner's page connects again (within reconnect_grace_ms of ownerLeft, or before its old
+   * connection is known to be gone: behind a tunnel a dead socket can linger). It takes the call
+   * over from the old connection, whose handle goes quiet, so its late close changes nothing.
+   */
+  reattachOwner(leg: OwnerAudioLeg): TakeoverHandle {
+    const t = this.takeover;
+    if (!t || this.stopped) throw new Error(this.stopped ? "that call has ended" : "the call isn't taken over");
+    clearTimeout(t.graceTimer);
+    const old = t.leg;
+    t.leg = leg;
+    t.gen++;
+    t.reconnectToken = newToken();
+    if (old) {
+      old.notify({ type: "error", message: "The call moved to a newer connection." });
+      old.close();
+    }
+    t.bridge?.ownerReconnected();
+    leg.notify(this._phase === "taken_over" ? { type: "live" } : { type: "connecting" });
+    this.note("info", "the owner's page reconnected");
+    return this.takeoverHandle(t);
+  }
+
+  private takeoverHandle(t: Takeover): TakeoverHandle {
+    const gen = t.gen;
+    const current = () => this.takeover === t && t.gen === gen && !this.stopped;
+    return {
+      reconnectToken: t.reconnectToken,
+      ownerAudio: (pcm16) => {
+        if (!current() || this._phase !== "taken_over") return;
+        this.d.media.sendAudio(t.bridge!.ownerAudio(pcm16));
+      },
+      ownerLeft: () => {
+        if (!current() || !t.leg) return;
+        t.leg = null;
+        const grace = this.d.config().telegram.takeover.reconnect_grace_ms;
+        this.note("info", `the owner's page disconnected: hanging up unless it's back within ${Math.round(grace / 1000)} s`);
+        t.graceTimer = setTimeout(() => void this.hangup("the owner left the call", "owner"), grace);
+      },
+      // At the carrier too: the transferred leg (or, still handing over, the SIP call).
+      hangUp: () => {
+        if (current()) void this.hangup("the owner hung up", "owner");
+      },
+      // Kept per connection: a page opened again counts from zero.
+      pageStats: (s) => {
+        if (this.takeover === t) t.pageStats.set(gen, s);
+      },
+    };
+  }
+
+  private async handOver(t: Takeover, referTo: string | null) {
+    const tk = this.d.config().telegram.takeover;
+    this.sayNow(tk.handover_text);
+    await this.waitForSpeech(this.d.clock.now(), tk.max_handover_wait_ms);
+    if (this.takeover !== t || this.stopped) return;
+    if (!referTo) {
+      // The media stream: the leg stays, Live goes.
+      this.d.media.clear();
+      this.liveEndedAt = this.d.clock.now();
+      this.enterTakenOver(t, this.codec as Codec);
+      void this.voice?.close();
+      return;
+    }
+    // The recording has to last the rest of the call: the leg's wait plus the takeover's limit.
+    const recordFor = (this.d.clock.now() - this.answeredAt + tk.leg_timeout_ms) / 1000 + tk.max_seconds + 60;
+    // Every attempt: a retry after a failed transfer needs the longer limit too (keepRecording
+    // returns the same recording each time).
+    this.keptRecording = this.voice?.keepRecording?.(recordFor) ?? this.keptRecording;
+    t.referred = true;
+    // leg_timeout_ms covers the REFER request too: a stalled one is aborted, so the call can't
+    // sit handing over (no deadline, no agent) for as long as the SDK would retry.
+    const abort = new AbortController();
+    let accepted = false;
+    t.legTimer = setTimeout(() => {
+      if (this.takeover !== t || this._phase !== "handing_over") return;
+      abort.abort();
+      const why = accepted ? "the transferred call didn't connect" : "the transfer request timed out";
+      this.d.bus.publish({ type: "takeover.failed", callId: this.callId, at: this.orch.elapsed(), reason: why });
+      t.leg?.notify({ type: "error", message: why });
+      // Hang up whatever holds the caller: the transferred leg if Telnyx offered it, OpenAI's
+      // call if the REFER never went through; after an accepted REFER with no leg, nothing does.
+      if (t.callControlId || !accepted) void this.hangup(why, "system");
+      else void this.stop(why, "system");
+    }, tk.leg_timeout_ms);
+    try {
+      await this.voice!.refer!(referTo, abort.signal);
+    } catch (err) {
+      // Timed out: the timer has ended the call.
+      if (abort.signal.aborted) return;
+      clearTimeout(t.legTimer);
+      t.referred = false;
+      if (this.takeover !== t || this.stopped) return;
+      // A REFER that failed after the session closed anyway leaves nothing to carry on with.
+      if (this.voiceGone) return void this.stop(`transfer failed and the voice session closed: ${errMsg(err)}`, "system");
+      return this.takeoverFailed(t, `the transfer failed: ${errMsg(err)}`);
+    }
+    accepted = true;
+    if (this.takeover !== t || this.stopped) return;
+    // OpenAI hands the call to Telnyx now: Live's billing ends here.
+    this.liveEndedAt = this.d.clock.now();
+  }
+
+  /** Sends `text` to Live as commentary at once (the agent says it in its own words). */
+  private sayNow(text: string) {
+    this.voice?.append("commentary", text);
+    this.appended({ message: { as: "commentary", text, send: "now", max_hold_ms: null }, source: "owner" }, 0, false);
+  }
+
+  /** Until the agent has started speaking after `since` and finished, or `maxMs` has passed. */
+  private waitForSpeech(since: number, maxMs: number): Promise<void> {
+    const pause = this.d.config().flow.timing.agent_idle.agent_pause_ms;
+    return new Promise((resolve) => {
+      const check = () => {
+        const now = this.d.clock.now();
+        const said = this.agentSpeechAt >= since && now >= this.agentSpeechUntil + pause;
+        if (this.stopped || said || now - since >= maxMs) return resolve();
+        setTimeout(check, 100);
+      };
+      check();
+    });
+  }
+
+  /** The REFER failed: the agent carries on, and the owner's page says why. */
+  private takeoverFailed(t: Takeover, reason: string) {
+    clearTimeout(t.legTimer);
+    clearTimeout(t.graceTimer);
+    this.takeover = null;
+    this._phase = "active";
+    this.scheduleDeadline();
+    this.startPolling();
+    this.note("warn", reason);
+    log.warn(`takeover failed, the agent carries on: ${reason}`, { callId: this.callId });
+    this.d.bus.publish({ type: "takeover.failed", callId: this.callId, at: this.orch.elapsed(), reason });
+    t.leg?.notify({ type: "error", message: reason });
+    this.sayNow(this.d.config().telegram.takeover.failed_text);
+  }
+
+  /**
+   * Telnyx offers the transferred leg (its call.initiated matched this call's token): from now
+   * on hanging up goes to it. False if this call isn't waiting for one.
+   */
+  takeoverLegOffered(callControlId: string): boolean {
+    const t = this.takeover;
+    if (!t?.referred || t.callControlId || this._phase !== "handing_over") return false;
+    t.callControlId = callControlId;
+    this.d.callControlId = callControlId;
+    return true;
+  }
+
+  /** The transferred leg's media stream connected: the owner talks to the caller over it. */
+  attachTakeoverLeg(media: MediaChannel, codec: Codec) {
+    const t = this.takeover;
+    if (!t?.callControlId || this._phase !== "handing_over") throw new Error(`call ${this.callId} isn't waiting for a transferred leg`);
+    clearTimeout(t.legTimer);
+    this.d.media = media;
+    this.d.mediaViaVoice = false;
+    this.enterTakenOver(t, codec);
+  }
+
+  private enterTakenOver(t: Takeover, codec: Codec) {
+    const tk = this.d.config().telegram.takeover;
+    this._phase = "taken_over";
+    this.takenOverAt = this.d.clock.now();
+    t.bridge = new OwnerBridge(codec, this.keptRecording, this.d.clock);
+    // The bot is out: no more Jev, Luna or rolling summaries.
+    this.orch.end();
+    this.held = [];
+    t.capTimer = setTimeout(() => void this.hangup("takeover time limit reached", "system"), tk.max_seconds * 1000);
+    this.d.bus.publish({ type: "takeover.live", callId: this.callId, at: this.orch.elapsed() });
+    takeoverLog.info("the owner took the call over", { callId: this.callId });
+    t.leg?.notify({ type: "live" });
   }
 
   /** max_call_seconds plus what the owner added (ms) */
@@ -588,6 +898,8 @@ export class CallSession {
    * goodbye play out first, as it usually replies "Alright, I'll end the call now".
    */
   private hangupAfterGoodbye(reason: string, by: EndedBy): Promise<void> {
+    // The call flow or Luna (a result still in flight) can't end a call the owner has taken over.
+    if (this.takeover && by === "bot") return Promise.resolve();
     if (this.pendingHangup) return this.pendingHangup.done;
     let resolve!: () => void;
     const done = new Promise<void>((r) => (resolve = r));
@@ -626,7 +938,24 @@ export class CallSession {
     let phoneDown: Promise<void> | undefined;
     // Assigned before anything below can call back in here (e.g. aborting the connect closes Live).
     this.stopping = new Promise<void>((r) => (begin = r)).then(() => this.finalize(reason, by, phoneDown));
+    const was = this._phase;
     this._phase = "stopping";
+    const t = this.takeover;
+    if (t) {
+      clearTimeout(t.legTimer);
+      clearTimeout(t.graceTimer);
+      clearTimeout(t.capTimer);
+      if (was === "handing_over") this.d.bus.publish({ type: "takeover.failed", callId: this.callId, at: this.orch.elapsed(), reason: `the call ended: ${reason}` });
+      t.leg?.notify({ type: "ended", reason });
+      t.leg?.close();
+      t.leg = null;
+      if (t.bridge) {
+        // How the takeover's audio went, to judge its quality afterwards.
+        const { text, fields } = t.bridge.summary(t.gen - 1, [...t.pageStats.values()]);
+        takeoverLog.info(text, { callId: this.callId, ...fields });
+        this.note("info", text);
+      }
+    }
     this.endedAt = this.d.clock.now();
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.maxTimer) clearTimeout(this.maxTimer);
@@ -659,8 +988,8 @@ export class CallSession {
 
     // Let a running Luna call finish first, so call.ended and the summary include what it did.
     await this.orch.drain(cfg.luna.drain_timeout_ms);
-    // Live bills per second of session: from answer to hangup.
-    const liveSeconds = this.answeredAt ? (this.endedAt - this.answeredAt) / 1000 : 0;
+    // Live bills per second of session: from answer to hangup, or to the takeover.
+    const liveSeconds = this.answeredAt ? ((this.liveEndedAt || this.endedAt) - this.answeredAt) / 1000 : 0;
     const costs = this.orch.costs.total(liveSeconds);
     this.billedLiveSeconds = liveSeconds;
     this.d.bus.publish({
@@ -695,7 +1024,9 @@ export class CallSession {
 
     const transcript = this.orch.transcript.all();
     const last = this.orch.lastProgress;
-    if (last && last.callerRev === this.orch.transcript.callerRev) {
+    // Taken over: the summary says so, which the last rolling one doesn't.
+    const takenOverAt = this.takenOverAt ? this.takenOverAt - this.d.meta.startedAt : undefined;
+    if (last && last.callerRev === this.orch.transcript.callerRev && takenOverAt === undefined) {
       // The caller said nothing after the last rolling summary: it's the final one.
       this.d.bus.publish({ type: "summary", callId: this.callId, at: this.orch.elapsed(), text: last.summary, reused: true });
     } else if (cfg.luna.summarize_on_hangup && transcript.some((e) => e.speaker === "caller")) {
@@ -706,6 +1037,7 @@ export class CallSession {
           previousResponseId: this.orch.lunaResponseId,
           ownerMessages: this.orch.ownerMessages,
           stage: this.orch.stage,
+          ...(takenOverAt !== undefined ? { takenOverAt } : {}),
         });
         const usage = res.usage ? this.orch.costs.addLuna(res.usage) : undefined;
         if (res.text) this.d.bus.publish({ type: "summary", callId: this.callId, at: this.orch.elapsed(), text: res.text, ...(usage ? { usage } : {}) });
@@ -715,10 +1047,19 @@ export class CallSession {
       }
     }
     // The voice session has shut down and handed over its recording (OpenAI SIP). Read again
-    // here: one that finished connecting during hangup is closed by start().
+    // here: one that finished connecting during hangup is closed by start(). A recording kept
+    // through a takeover is handed over now.
     await this.voice?.close();
+    this.keptRecording?.finish();
     this._phase = "finalized";
   }
+}
+
+const TAKEN_OVER = "you've taken this call over";
+
+/** 128 random bits, hex */
+function newToken(): string {
+  return [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** Whether `p` settles within `ms` (it is left running either way). */

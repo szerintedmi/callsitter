@@ -29,6 +29,8 @@ Calls to my number divert to a Telnyx number, where an OpenAI **gpt-live-1** age
 
 **Steering from Telegram:** reply to a status message, or send one while a call is live, and it reaches the agent as a `SUPERVISOR:` line: plain text as commentary, `!` for instructions (cuts the agent off), `~` for thinking. The **Genuine**, **Scam** and **Spam** buttons move the call into that stage (`genuine`, `waste_time`, `decline_spam`) as if Jev had decided; **Hang up** (or `/hangup`) has the agent say goodbye, then ends the call. A message alone can't end a call. Up to 3 replies Luna suggests go as commentary (`telegram.yaml → steering.suggestions`). The automatic flow keeps running, but a stage text it sends within 30 s of your message or button waits until then, so it doesn't replace what you said (`steering.hold_stage_ms`). Your messages show on the call page as "owner → Live".
 
+**Taking a call over:** a **Take over** button under a live call's status message (private chat only) opens a page inside Telegram. The agent tells the caller it's putting them through, and from then on I talk to the caller myself, through the page's microphone and speaker. Over OpenAI SIP the call is transferred (SIP REFER) to the Telnyx Call Control app and bridged through the server; the bot stops, the recording keeps going, and Live is billed only up to the handover ([setup](docs/setup.md#owner-takeover)). The admin call page has the same **Take over** button; it opens the page in a new tab, signed in by Cloudflare Access instead of Telegram.
+
 **Costs** come from what the vendors report: Live per second, Luna's tokens (uncached, cached, cache writes, output, times the service tier) and Jev's input tokens (`cost.yaml`). Each call stores the breakdown; the call list, the call page and the final Telegram update show it.
 
 **Limits** (`limits.yaml`, `src/core/limits.ts`), per channel (the phone number, admin test calls, the public page): spend, calls a day, calls at once, calls per caller a day and call length, counted over a rolling 24 h from the call list. Once the last 24 h's phone calls have cost $20, the next caller hears busy (SIP 486) before anything billed starts, and I get one Telegram line about it; the call that crosses the cap runs to its end.
@@ -53,7 +55,7 @@ bun run dev               # http://127.0.0.1:8787/ (admin UI), config hot-reload
 ## Docs
 
 - [Development](docs/development.md): replay, evals, test calls, the code layout, the config files and what reaches Live when.
-- [Setup](docs/setup.md): Telnyx, Telegram, the Cloudflare tunnel, OpenAI SIP.
+- [Setup](docs/setup.md): Telnyx, Telegram, the Cloudflare tunnel, OpenAI SIP, owner takeover.
 - [Public site](docs/public-site.md): the real-call pages, the games and their caps.
 - [Vendor APIs](docs/vendor-apis.md): how the design maps to Live, Jev and Telnyx, and what's been verified on real calls.
 - [Production deploy](docs/deploy.md): the VPS, deploys, backups, copying prod data.

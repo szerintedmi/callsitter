@@ -646,6 +646,30 @@ export const TelegramConfig = z.object({
       suggestions: z.object({ enabled: z.boolean().default(true), as: z.enum(LIVE_APPENDS).default("commentary") }).prefault({}),
     })
     .prefault({}),
+  // The owner takes a live phone call over from Telegram (a Mini App button on the status message,
+  // private chat only): the agent says handover_text, the call moves to the owner's page (OpenAI
+  // SIP: a REFER to TELNYX_TAKEOVER_SIP_DOMAIN; the media stream: straight away) and the bot
+  // stops steering. Off without TELNYX_TAKEOVER_SIP_DOMAIN.
+  takeover: z
+    .object({
+      enabled: z.boolean().default(true),
+      button_label: z.string().min(1).max(30).default("Take over"),
+      // said by the agent (as commentary) before the call moves to the owner
+      handover_text: z.string().min(1).max(500).default("SUPERVISOR: The owner is taking this call over now. Tell the caller in one short sentence that you're putting them through, then stay quiet."),
+      // said (as commentary) if the transfer fails and the agent carries on
+      failed_text: z.string().min(1).max(500).default("SUPERVISOR: The owner couldn't take the call after all. Tell the caller briefly, then carry on as before."),
+      // the handover line may play this long before the call moves anyway
+      max_handover_wait_ms: z.number().int().min(0).default(4000),
+      // OpenAI SIP: the call ends if the transferred leg hasn't connected this long after the REFER
+      leg_timeout_ms: z.number().int().min(1000).default(10_000),
+      // the Mini App's initData older than this is refused (it's signed at the button tap)
+      init_data_max_age_s: z.number().int().min(10).default(600),
+      // the owner's page may reconnect this long before the call hangs up
+      reconnect_grace_ms: z.number().int().min(0).default(10_000),
+      // a taken-over call hangs up this long after the takeover
+      max_seconds: z.number().int().min(60).default(3600),
+    })
+    .prefault({}),
   // Public-page calls' chat (TELEGRAM_PUBLIC_CHAT_ID), in place of status.min_edit_interval_ms and
   // status.urgent_alert there: a group allows ~20 messages a minute, and game callers fake urgency.
   public: z

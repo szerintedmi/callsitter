@@ -8,6 +8,7 @@
 // from a decision to its effect: a text reaching Live (bold dashed: held until the agent is
 // idle), a Luna call starting, the hang-up. The Live lane takes the colour of the stage whose text it got last.
 // The owner's Telegram steering reaches Live as its own rows ("owner → Live").
+// A takeover: the handover (flow lane, a bar until the owner hears the caller), then a divider: the rest is the owner's, not transcribed.
 // Hovering a row shows its details: Jev's answers, Luna's task, reply, tool calls and what
 // reached Live, and full texts sent to Live.
 
@@ -171,6 +172,8 @@ export function createTimeline(root: HTMLElement): Timeline {
   let flowLuna: HTMLElement | null = null;
   let flowHangup: HTMLElement | null = null;
   let lunaReply: HTMLElement | null = null;
+  /** the owner's takeover under way: from the handover line to the owner's page hearing the caller */
+  let takeover: HTMLElement | null = null;
   /** the last stage text that reached Live (Luna's replies to a rule included) */
   type LiveText = { stage: string; at: number; as?: string };
   let liveText: LiveText | null = null;
@@ -578,6 +581,28 @@ export function createTimeline(root: HTMLElement): Timeline {
       case "note":
         row({ kind: "note " + ev.level, at: ev.at, body: esc(ev.message) });
         break;
+      case "takeover.started": {
+        // The owner asked from Telegram: the call flow has Live say the handover line, then transfers the call.
+        const { r } = row({ kind: "takeover", at: ev.at, dots: [["f", "flow"]], body: '<b>🎧 owner takes over</b> <span class="muted">· the agent says the handover line, then the call moves to the owner</span>' });
+        takeover = r;
+        break;
+      }
+      case "takeover.live": {
+        // From here the call is the owner's: nothing after it is transcribed.
+        const { g } = row({ kind: "takeover live", at: ev.at, body: "🎧 owner took over at " + clock(ev.at) + ' <span class="muted">— not transcribed</span>' });
+        connect("f", takeover, g, true);
+        takeover = null;
+        g.querySelector<HTMLElement>(".ln.l")!.classList.add("above");
+        liveStage = null;
+        set(st.status, '<span class="tag owner">taken over</span>');
+        break;
+      }
+      case "takeover.failed": {
+        const { g } = row({ kind: "note warn", at: ev.at, body: "takeover failed: " + esc(ev.reason) });
+        connect("f", takeover, g, true);
+        takeover = null;
+        break;
+      }
       case "call.ended": {
         endedAt = startedAt === null ? null : startedAt + ev.at;
         // Calls from before costs were recorded only have the estimate.

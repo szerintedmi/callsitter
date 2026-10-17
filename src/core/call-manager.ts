@@ -1,8 +1,9 @@
-import type { AudioFormat } from "./audio";
+import type { AudioFormat, Codec } from "./audio";
 import { CallSession, type CallSessionDeps } from "./call-session";
 import { withCarrier } from "./cost";
 import { CallGate, callSecondsCap, type Channel, type LimitHit } from "./limits";
-import type { BlobStore, EventBus, MediaChannel, Repo, VoiceAgent } from "./ports";
+import type { BlobStore, EventBus, MediaChannel, OwnerAudioLeg, Repo, TakeoverHandle, VoiceAgent } from "./ports";
+import { TakeoverTokens, takeoverUri } from "./takeover";
 import type { CallMeta, EndedBy, SipHeader } from "./types";
 
 // Registry of live calls plus the call lifecycle (incoming → media → hangup → recording), and
@@ -11,6 +12,11 @@ import type { CallMeta, EndedBy, SipHeader } from "./types";
 export type SharedDeps = Omit<CallSessionDeps, "meta" | "callControlId" | "media" | "mediaViaVoice" | "onStopped" | "dryRun"> & {
   repo: Repo;
   blobs: BlobStore;
+  /**
+   * TELNYX_TAKEOVER_SIP_DOMAIN: the Call Control app's SIP subdomain a taken-over OpenAI SIP call
+   * is transferred to (telegram.yaml takeover); without it, calls can't be taken over.
+   */
+  takeoverSipDomain?: string;
 };
 
 export interface AttachOptions {
@@ -46,9 +52,12 @@ export class CallManager {
 
   /** limits.yaml: whether a new call fits its channel's limits; a slot is released when the call ends */
   readonly gate: CallGate;
+  /** what a taken-over OpenAI SIP call's transferred leg dials, to be matched to its call */
+  private takeoverTokens: TakeoverTokens;
 
   constructor(private d: SharedDeps) {
     this.gate = new CallGate({ repo: d.repo, config: d.config, clock: d.clock });
+    this.takeoverTokens = new TakeoverTokens(d.clock);
     d.bus.subscribe((ev) => {
       if (ev.type === "call.ended") this.gate.release(ev.callId);
     });
@@ -226,6 +235,7 @@ export class CallManager {
       dryRun: opts.dryRun,
       onStopped: () => {
         if (this.sessions.get(callId) === session) this.sessions.delete(callId);
+        this.takeoverTokens.revoke(callId);
         // The summary is still to come.
         if (session.finished) {
           const entry = { session, until: null as number | null };
@@ -250,6 +260,77 @@ export class CallManager {
 
   get(callId: string) {
     return this.sessions.get(callId);
+  }
+
+  /** The SIP domain transferred legs arrive on (TELNYX_TAKEOVER_SIP_DOMAIN), if takeovers are set up. */
+  get takeoverSipDomain(): string | undefined {
+    return this.d.takeoverSipDomain;
+  }
+
+  /** Why no call can be taken over (telegram.yaml takeover off, no TELNYX_TAKEOVER_SIP_DOMAIN), or null. */
+  takeoverOff(): string | null {
+    if (!this.d.config().telegram.takeover.enabled) return "taking calls over is turned off (telegram.yaml takeover)";
+    if (!this.d.takeoverSipDomain) return "taking calls over isn't set up (TELNYX_TAKEOVER_SIP_DOMAIN)";
+    return null;
+  }
+
+  /** Why `callId` can't be taken over now (not live, not a phone call, already taken over, feature off), or null. */
+  canTakeOver(callId: string): string | null {
+    const off = this.takeoverOff();
+    if (off) return off;
+    const s = this.sessions.get(callId);
+    if (!s) return this.pending.has(callId) || this.attaching.has(callId) ? "the call isn't connected yet" : "that call has ended";
+    if (s.channel !== "phone") return "only phone calls can be taken over";
+    // Already the owner's: their page (re)attaches, replacing a connection that may be dead.
+    if (s.takenOver) return null;
+    return s.takeoverBlocked();
+  }
+
+  /**
+   * Starts the takeover (or re-attaches the owner within reconnect_grace_ms after ownerLeft).
+   * Resolves once the takeover has started (the leg may still be connecting; the leg gets
+   * notify({type:"connecting"}) then {type:"live"} when audio flows). Throws with a readable
+   * message if it can't start (same reasons as canTakeOver).
+   */
+  async takeOver(callId: string, leg: OwnerAudioLeg): Promise<TakeoverHandle> {
+    const why = this.canTakeOver(callId);
+    if (why) throw new Error(why);
+    const s = this.sessions.get(callId)!;
+    if (s.takenOver) return s.reattachOwner(leg);
+    const tk = this.d.config().telegram.takeover;
+    // Valid from now until the transferred leg is due (plus the REFER request's own time).
+    const ttl = tk.max_handover_wait_ms + tk.leg_timeout_ms + 30_000;
+    const referTo = s.overVoice ? takeoverUri(this.takeoverTokens.create(callId, ttl), this.d.takeoverSipDomain!) : null;
+    return s.takeOver(leg, referTo);
+  }
+
+  /**
+   * The owner's page reconnects with its handle's reconnectToken (Telegram's initData may be
+   * stale by now): it takes the call over from its old connection. Throws if the token isn't the
+   * current one or the call has ended.
+   */
+  resumeTakeover(callId: string, reconnectToken: string, leg: OwnerAudioLeg): TakeoverHandle {
+    const s = this.sessions.get(callId);
+    if (!s?.reconnectTokenValid(reconnectToken)) throw new Error(s?.takenOver ? "that connection was replaced" : "that call has ended");
+    return s.reattachOwner(leg);
+  }
+
+  /**
+   * Telnyx offers a transferred leg that dialled `token`: the call it belongs to (whose hangups
+   * now go to `callControlId`), or null if the token is unknown, expired or used, or that call
+   * isn't waiting for one. Refuse the leg then.
+   */
+  claimTakeoverLeg(token: string, callControlId: string): string | null {
+    const callId = this.takeoverTokens.claim(token);
+    if (!callId) return null;
+    return this.sessions.get(callId)?.takeoverLegOffered(callControlId) ? callId : null;
+  }
+
+  /** The transferred leg's media stream connected; throws if its call isn't waiting for it. */
+  attachTakeoverLeg(callId: string, media: MediaChannel, codec: Codec): void {
+    const s = this.sessions.get(callId);
+    if (!s) throw new Error(`call ${callId} has ended`);
+    s.attachTakeoverLeg(media, codec);
   }
 
   async hangup(callId: string, reason: string, by: EndedBy = "system") {

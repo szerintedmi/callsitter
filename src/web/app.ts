@@ -6,6 +6,7 @@ import { iconRoutes } from "./favicon";
 import { BrowserSipCalls, openAiSipRoutes, type SipRoutesDeps } from "./openai-sip";
 import { listenRoutes, type DemoMedia } from "./listen";
 import { publicRoutes, type PublicDeps } from "./public";
+import { adminTakeoverRoutes, takeoverRoutes, type TakeoverRoutesDeps } from "./takeover";
 import { telnyxRoutes, type TelnyxRoutesDeps } from "./telnyx";
 import { testCallRoutes, type BrowserCalls, type BrowserSipDeps } from "./test-call";
 
@@ -21,15 +22,22 @@ export interface AppDeps extends TelnyxRoutesDeps, AdminDeps {
   /** the public "Scam me" page at the root of `host` (and at /public on the admin host); with
    * `demoMedia`, also the real-call players at /listen */
   publicPage?: Omit<PublicDeps, "manager" | "repo" | "clientAssets"> & { host: string; demoMedia?: DemoMedia };
+  /** the owner's takeover Mini App (/takeover/…); absent without Telegram to a private chat. The
+   * admin call page's takeover (/calls/<id>/takeover) doesn't need it. */
+  takeover?: Omit<TakeoverRoutesDeps, "manager" | "upgradeWebSocket" | "clientAssets">;
 }
 
 export function createApp(d: AppDeps) {
   const app = new Hono();
 
-  // Webhooks, media, health and the icons: on any host (the tunnel only routes these paths on the public host).
+  // Webhooks, media, health, the icons and the takeover Mini App (which can't pass Cloudflare
+  // Access; it checks Telegram's initData): on any host (the tunnel only routes these paths on the public host).
   app.get("/healthz", (c) => c.text("ok"));
   app.route("/", iconRoutes());
   app.route("/", telnyxRoutes(d));
+  if (d.takeover) {
+    app.route("/", takeoverRoutes({ ...d.takeover, manager: d.manager, upgradeWebSocket: d.upgradeWebSocket, clientAssets: d.clientAssets }));
+  }
   if (d.openAiSip) {
     app.route("/", openAiSipRoutes({ ...d.openAiSip, manager: d.manager, repo: d.repo, config: d.config, browserSip: d.browserSip?.calls ?? new BrowserSipCalls() }));
   }
@@ -38,7 +46,10 @@ export function createApp(d: AppDeps) {
   // public UI and the two never share a browser origin. The guard also requires the Access JWT.
   const admin = new Hono();
   admin.use("*", adminGuard(d.adminAuth, d.adminGuardDeps));
-  admin.route("/", adminRoutes(d));
+  admin.route("/", adminRoutes({ ...d, takeoverOff: () => d.manager.takeoverOff() }));
+  // The call page's takeover: the guard is the owner check, so its hello needs no initData. Never
+  // mount it outside `admin` (test/takeover-admin.test.ts).
+  admin.route("/", adminTakeoverRoutes({ manager: d.manager, upgradeWebSocket: d.upgradeWebSocket }));
   admin.route("/", analyticsAdminRoutes({ repo: d.repo, config: () => d.config.get() }));
   admin.route("/", testCallRoutes(d));
 

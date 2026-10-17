@@ -1,6 +1,6 @@
 # Production tunnel, rendered to /etc/cloudflared/config.yml by bootstrap.sh (placeholders from
 # /etc/callsitter/deploy.conf). cloudflared runs on the host as a systemd service.
-#   HOOKS_HOST  public: the Telnyx/OpenAI webhooks, media streams, /healthz, the public page (/, /call…) and /listen…
+#   HOOKS_HOST  public: the Telnyx/OpenAI webhooks, media streams, /healthz, the public page (/, /call…), /listen… and the owner's takeover Mini App (/takeover/…)
 #   ADMIN_HOST  admin UI, behind a Cloudflare Access application (the app verifies the Access JWT)
 #   SSH_HOST    SSH, behind a Cloudflare Access application (your login + the deploy service token)
 tunnel: __TUNNEL_ID__
@@ -8,7 +8,7 @@ credentials-file: /etc/cloudflared/__TUNNEL_ID__.json
 
 ingress:
   - hostname: __HOOKS_HOST__
-    path: ^/(telnyx/webhook|openai/webhook|media/.*|healthz|call(/.*)?|play|bot|terms|privacy|listen(/.*)?|favicon\.ico|apple-touch-icon\.png|assets/(public|listen|site)\.js)?$
+    path: ^/(telnyx/webhook|openai/webhook|media/.*|healthz|call(/.*)?|play|bot|terms|privacy|listen(/.*)?|takeover/[^/]+|takeover/ws/[^/]+|favicon\.ico|apple-touch-icon\.png|assets/(public|listen|site|takeover|test-call-worklet)\.js)?$
     service: http://127.0.0.1:8787
   - hostname: __HOOKS_HOST__
     service: http_status:404

@@ -11,9 +11,10 @@ credentials-file: /Users/you/.cloudflared/<tunnel-id>.json
 # origincert: /Users/you/.cloudflared/cert.pem   # if cert.pem isn't in the default location
 
 ingress:
-  # Public: the Telnyx and OpenAI webhooks, media stream, health, and the public page (/, /call…).
+  # Public: the Telnyx and OpenAI webhooks, media stream, health, the public page (/, /call…) and the
+  # owner's takeover Mini App (/takeover/…).
   - hostname: hooks.example.com
-    path: ^/(telnyx/webhook|openai/webhook|media/.*|healthz|call(/.*)?|play|bot|terms|privacy|listen(/.*)?|favicon\.ico|apple-touch-icon\.png|assets/(public|listen|site)\.js)?$
+    path: ^/(telnyx/webhook|openai/webhook|media/.*|healthz|call(/.*)?|play|bot|terms|privacy|listen(/.*)?|takeover/[^/]+|takeover/ws/[^/]+|favicon\.ico|apple-touch-icon\.png|assets/(public|listen|site|takeover|test-call-worklet)\.js)?$
     service: http://127.0.0.1:8787
   - hostname: hooks.example.com
     service: http_status:404
