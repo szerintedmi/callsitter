@@ -37,6 +37,7 @@ import { botPage, DEMOS, findDemo, legal, realCallsPage, top, topCss } from "./l
 //   GET  call/:id/result      the game's score, rank and leaderboard once the call has ended
 //   GET  bot                  "Get your own bot": a waitlist form (listen.ts botPage)
 //   GET  terms, privacy       the terms and the privacy notice (legal.ts)
+//   GET  assets/site.js       the bot and legal pages' script (client/site.ts): analytics, the waitlist
 //   POST call/notify          {email} → 204: tell me when there's game again (shown once the
 //                             day's calls or budget have run out, or the page is closed)
 //   POST call/waitlist        {email} → 204: the bot page's waitlist (same table, list "waitlist")
@@ -220,17 +221,18 @@ export function publicRoutes(d: PublicDeps) {
       return findDemo(slug) ? c.html(await home(c.req.path.slice(0, c.req.path.indexOf("listen/")), slug)) : c.notFound();
     });
   } else app.get("/", async (c) => c.html(await game(c.req.path.replace(/\/?$/, "/"))));
-  app.get("/bot", async (c) => c.html(botPage(c.req.path.slice(0, c.req.path.lastIndexOf("bot")), { wastedSeconds: (await wasted()).seconds })));
-  app.get("/terms", async (c) => c.html(termsPage(c.req.path.slice(0, c.req.path.lastIndexOf("terms")), { wastedSeconds: (await wasted()).seconds })));
-  app.get("/privacy", async (c) => c.html(privacyPage(c.req.path.slice(0, c.req.path.lastIndexOf("privacy")), { wastedSeconds: (await wasted()).seconds })));
+  app.get("/bot", async (c) => c.html(botPage(c.req.path.slice(0, c.req.path.lastIndexOf("bot")), { wastedSeconds: (await wasted()).seconds, analytics: d.config().analytics.enabled })));
+  app.get("/terms", async (c) => c.html(termsPage(c.req.path.slice(0, c.req.path.lastIndexOf("terms")), { wastedSeconds: (await wasted()).seconds, analytics: d.config().analytics.enabled })));
+  app.get("/privacy", async (c) => c.html(privacyPage(c.req.path.slice(0, c.req.path.lastIndexOf("privacy")), { wastedSeconds: (await wasted()).seconds, analytics: d.config().analytics.enabled })));
   app.get("/call/lobby", async (c) => c.json(await lobby(), 200, { "Cache-Control": "no-store" }));
 
-  app.get("/assets/public.js", async (c) => {
-    const body = await d.clientAssets("public.js");
-    return body === undefined
-      ? c.notFound()
-      : new Response(body, { headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-cache" } });
-  });
+  for (const name of ["public.js", "site.js"])
+    app.get(`/assets/${name}`, async (c) => {
+      const body = await d.clientAssets(name);
+      return body === undefined
+        ? c.notFound()
+        : new Response(body, { headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-cache" } });
+    });
 
   // POSTs only from this page: another site's script can't start calls on a visitor's behalf.
   const sameOrigin: MiddlewareHandler = async (c, next) => {
@@ -668,7 +670,7 @@ const scriptJson = (v: unknown) => JSON.stringify(v).replaceAll("<", "\\u003c");
 
 const half = (game: Game, title: string, goal: string, sprite: string) => `
       <div class="half ${game}" data-game="${game}" role="button" tabindex="0" aria-label="${title}">
-        <button class="x" type="button" aria-label="Back">✕</button>
+        <button class="x" type="button" aria-label="Back" data-track="game_back">✕</button>
         <canvas class="sprite" data-sprite="${sprite}" width="24" height="24"></canvas>
         <h2>${title}</h2>
         <p class="goal">${goal}</p>
@@ -696,9 +698,9 @@ const page = (base: string, lobby: Lobby, realCalls?: boolean, analytics?: boole
   <section class="scr" id="s-home">
 ${
   realCalls
-    ? `    <div class="ptop"><div class="rc-col">${top(base, lobby.wasted.seconds, { botLink: true, player: `<button class="chip" type="button" data-chip hidden></button>` })}</div></div>`
+    ? `    <div class="ptop"><div class="rc-col">${top(base, lobby.wasted.seconds, { botLink: true, player: `<button class="chip" type="button" data-chip data-track="change_name" hidden></button>` })}</div></div>`
     : `    <header class="band hero">
-      <h1><button type="button" data-home>${logo}CALLSITTER</button></h1><button class="chip" type="button" data-chip hidden></button>
+      <h1><button type="button" data-home data-track="home">${logo}CALLSITTER</button></h1><button class="chip" type="button" data-chip data-track="change_name" hidden></button>
       <p class="tagline">WASTE THE TIME OF SCAMMERS WHO CALL YOU</p>
       <p class="wasted"><b id="wasted">0:00:00</b><span>SCAMMER TIME WASTED SO FAR</span></p>
     </header>`
@@ -709,7 +711,7 @@ ${
   </section>
 
   <section class="scr callbg" id="s-call" hidden>
-    <header class="cbar"><span class="cbrand">${logo}CALLSITTER</span><button class="chip" type="button" data-chip></button></header>
+    <header class="cbar"><span class="cbrand">${logo}CALLSITTER</span><button class="chip" type="button" data-chip data-track="change_name"></button></header>
     <div class="cstage">
       <div class="mission" id="mission"><span class="mtab" id="m-tab"></span><span class="card-top"><b id="m-name"></b><span class="hard" id="m-hard" hidden>HARD</span></span><p id="m-brief"></p></div>
       <div class="clock"><span class="lbl" id="c-lbl">CALLING…</span><div class="cnum"><b id="c-time">00:00</b><span class="cside" id="c-side" hidden><span class="xb" id="c-x"></span><span class="pts">PTS</span></span></div></div>
@@ -720,7 +722,7 @@ ${
   </section>
 
   <section class="scr modebg" id="s-result" hidden>
-    <header class="band"><h1><button type="button" data-home>${logo}CALLSITTER</button></h1><button class="chip" type="button" data-chip hidden></button></header>
+    <header class="band"><h1><button type="button" data-home data-track="home">${logo}CALLSITTER</button></h1><button class="chip" type="button" data-chip data-track="change_name" hidden></button></header>
     <div class="stage">
       <h2 id="r-title"></h2>
       <div class="r-score"><span class="r-lbl" id="r-lbl" hidden></span><b id="r-time"></b><span id="r-rank"></span></div>
@@ -732,7 +734,7 @@ ${
   </section>
 
   <section class="scr modebg" id="s-out" hidden>
-    <header class="band"><h1><button type="button" data-home>${logo}CALLSITTER</button></h1><button class="chip" type="button" data-chip hidden></button></header>
+    <header class="band"><h1><button type="button" data-home data-track="home">${logo}CALLSITTER</button></h1><button class="chip" type="button" data-chip data-track="change_name" hidden></button></header>
     <div class="stage">
       <h2 id="out-title">OUT OF GAME</h2>
       <p class="out-msg" id="out-msg">WE'VE RUN OUT OF GAME FOR TODAY. CHECK BACK LATER!</p>
@@ -748,7 +750,7 @@ ${
   </section>
 
   <section class="scr modebg overlay" id="s-name" hidden>
-    <header class="band"><button class="back" type="button" id="name-x" aria-label="Close">✕</button><h1><button type="button" data-home>${logo}CALLSITTER</button></h1></header>
+    <header class="band"><button class="back" type="button" id="name-x" aria-label="Close" data-track="name_close">✕</button><h1><button type="button" data-home data-track="home">${logo}CALLSITTER</button></h1></header>
     <div class="stage">
       <span class="tag" id="name-tag"></span>
       <h2>PLAYER NAME</h2>

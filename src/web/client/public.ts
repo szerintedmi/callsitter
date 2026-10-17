@@ -16,7 +16,7 @@ interface Result { game: Game; goal: string; player: string; scoreMs: number | n
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const base = document.body.dataset.base || "/";
-// Page analytics (track.ts): links and [data-track] buttons, plus the game and goal picked below.
+// Page analytics (track.ts): links and [data-track] buttons, plus the game, goal and name steps below.
 startTracking(base);
 let lobby = JSON.parse($("lobby").textContent || "{}") as Lobby;
 const LABEL: Record<Game, string> = { scam: "SCAM ME", get_through: "GET THROUGH" };
@@ -173,6 +173,7 @@ function stepGoal(g: Game, dir: number) {
   const n = lobby.games[g].length;
   goalIdx[g] = (goalIdx[g] + dir + n) % n;
   store.set(`goal-${g}`, goalOf(g).id);
+  track("click", { action: "goal", target: `${g}/${goalOf(g).id}` });
   drawDetail(g, dir);
 }
 
@@ -195,6 +196,7 @@ split.querySelectorAll<HTMLElement>(".half").forEach((h) => {
   h.addEventListener("keydown", (e) => {
     if ((e.key === "Enter" || e.key === " ") && e.target === h) {
       e.preventDefault();
+      if (!h.classList.contains("on")) track("click", { action: "game", target: g });
       splitSet(h.classList.contains("on") ? null : g);
     }
   });
@@ -296,6 +298,7 @@ slots.addEventListener("click", (e) => {
 $("name-x").addEventListener("click", closeName);
 $("name-ok").addEventListener("click", () => {
   if (!nameDraft) return nameIn.focus({ preventScroll: true });
+  track("click", { action: namePurpose === "call" ? "name_call" : "name_save" });
   player = nameDraft;
   store.set("player", player);
   closeName();

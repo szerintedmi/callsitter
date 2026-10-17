@@ -1,7 +1,7 @@
 // The terms and the privacy notice (/terms, /privacy; public.ts): two short plain pages in the public
 // pages' look (listen.ts head, top). They name nobody: "I" am whoever runs the site, reachable through
 // the GitHub repository. Every statement here follows what the code does; change them together.
-import { head, legal, rootCss, top, topCss } from "./listen";
+import { BUILD, head, legal, rootCss, siteBody, top, topCss } from "./listen";
 
 const REPO = "https://github.com/szerintedmi/callsitter";
 const UPDATED = "16 October 2026";
@@ -17,11 +17,13 @@ const css = `
 @media (max-width:640px){.lg{padding:20px 16px 32px;font-size:16px}.lg h1{font-size:44px}}
 `;
 
-const page = (base: string, title: string, description: string, wastedSeconds: number, body: string) =>
+type PageOpts = { wastedSeconds: number; /** page analytics on (analytics.yaml) */ analytics?: boolean };
+
+const page = (base: string, title: string, description: string, o: PageOpts, body: string) =>
   `${head(`${title} · CallSitter`, description, rootCss + topCss + css)}
-<body>
+${siteBody(base, o.analytics)}
 <div class="rc-col">
-${top(base, wastedSeconds, { botLink: false })}
+${top(base, o.wastedSeconds, { botLink: false })}
 <main class="lg">
 <h1>${title.toUpperCase()}</h1>
 <p class="upd">Last updated ${UPDATED}</p>
@@ -29,15 +31,16 @@ ${body}
 </main>
 ${legal(base)}
 </div>
+<script src="${base}assets/site.js?v=${BUILD}"></script>
 </body>
 </html>`;
 
-export const termsPage = (base: string, o: { wastedSeconds: number }) =>
+export const termsPage = (base: string, o: PageOpts) =>
   page(
     base,
     "Terms",
     "The terms of use of CallSitter, a hobby project.",
-    o.wastedSeconds,
+    o,
     `<p>CallSitter is a hobby project run by one person. By using this site you agree to these terms. If you don't, please don't use it.</p>
 <h2>WHAT THIS IS</h2>
 <p>The site plays recordings of real calls answered by a bot, and lets you call the bot from your browser as a game. It is provided as is, for fun, with no warranty of any kind, and it may change, break or go away at any time.</p>
@@ -56,12 +59,12 @@ export const termsPage = (base: string, o: { wastedSeconds: number }) =>
 <p>I may update these terms by editing this page. Questions go to the project's <a href="${REPO}">GitHub repository</a>.</p>`,
   );
 
-export const privacyPage = (base: string, o: { wastedSeconds: number }) =>
+export const privacyPage = (base: string, o: PageOpts) =>
   page(
     base,
     "Privacy",
     "What CallSitter keeps about its visitors and why.",
-    o.wastedSeconds,
+    o,
     `<p>CallSitter is a hobby project run by one person. This is what the site keeps about you, and why.</p>
 <h2>CALLS TO THE BOT</h2>
 <p>When you call the bot from your browser, the call is recorded and transcribed, and kept with the player name you typed, the time, the outcome of the game and your IP address (used to limit calls). The audio is processed live by OpenAI and the transcript by other AI vendors to run the bot. I may listen to calls to improve it. Calls are kept for as long as the project runs; I won't publish them with anything that identifies you.</p>

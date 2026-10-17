@@ -2,7 +2,7 @@
 // for YouTube, or to attach to the README.
 //
 //   bun demos/tools/record.ts <slug> [--out <file>] [--fps 30] [--size 1920x1080] [--from <s>] [--to <s>] [--workers 4]
-//   bun demos/tools/record.ts <slug> --still <s>[,<s>…] [--poster]   PNG frames (--poster: with the ▶, for the README)
+//   bun demos/tools/record.ts <slug> --still <s>[,<s>…] [--poster] [--out <dir>]   PNG frames (--poster: with the ▶, for the README)
 //
 // Uses the installed Google Chrome (playwright-core doesn't download one). The page renders any time
 // on request (window.demo.seek), so workers record their own stretch in parallel and the parts are
@@ -61,8 +61,9 @@ const seekShot = async (page: Page, t: number, type: "jpeg" | "png") => {
 try {
   if (values.still) {
     const { page } = await openPage();
+    const dir = values.out ?? "data/demos/stills";
     for (const t of values.still.split(",").map(Number)) {
-      const out = `data/demos/stills/${slug}-${t}${values.poster ? "-poster" : ""}.png`;
+      const out = `${dir}/${slug}-${t}${values.poster ? "-poster" : ""}.png`;
       await Bun.write(out, await seekShot(page, t, "png"));
       console.log(out);
     }
