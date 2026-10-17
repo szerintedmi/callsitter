@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { logger } from "../../core/log";
 import type { VoiceAgent, VoiceSession, VoiceSessionHandlers, VoiceSessionOptions } from "../../core/ports";
 import { liveInstructions } from "./session";
-import { hangupSession, recordedSideband } from "./sip";
+import { hangupSession, recordedSideband, type SidebandOptions } from "./sip";
 
 const log = logger("live");
 
@@ -39,7 +39,7 @@ export class OpenAiWebRtc {
    */
   voiceAgent(
     offerSdp: string,
-    opts: { onAnswer: (a: WebRtcAnswer) => void; onRecording?: (wav: ArrayBuffer) => void; greetAfter?: Promise<void> },
+    opts: SidebandOptions & { onAnswer: (a: WebRtcAnswer) => void },
   ): VoiceAgent {
     return {
       connect: async (o: VoiceSessionOptions, h: VoiceSessionHandlers): Promise<VoiceSession> => {

@@ -12,7 +12,9 @@ const log = logger("owner");
 // to any message about a call steers that call; any other message steers the newest live call.
 // Buttons under a live call's status message send telegram.yaml steering.buttons texts or move the
 // call into a call-flow stage, and Luna's suggestions from her latest rolling summary
-// (steering.suggestions).
+// (steering.suggestions). A live phone call's status message also has a "Take over" button
+// (telegram.yaml takeover) that opens the takeover page as a Telegram Mini App; while the owner
+// has the call, steering is off and the message says so.
 // A desk serves one chat. With `accepts`, it only takes the calls that match (public-page calls
 // can have a chat of their own); each desk keeps its own message ids, since Telegram numbers
 // messages per chat, so "the newest live call" means the newest one in that chat.
@@ -36,6 +38,8 @@ export interface OwnerDeskDeps {
   canSteer: boolean;
   /** the calls this desk's chat is about; all of them when unset */
   accepts?: (meta: CallMeta) => boolean;
+  /** the takeover page for a call (an https URL), or undefined: no "Take over" button on this desk */
+  takeoverUrl?: (callId: string) => string | undefined;
 }
 
 /** Telegram's limit for a message's text */
@@ -64,7 +68,14 @@ const AS_EFFECT: Record<LiveAppend, string> = {
 interface CallView {
   callId: string;
   from: string;
+  channel: CallMeta["channel"];
   startedAt: number;
+  /** the owner took the call over, this far into it (ms) */
+  takenOverAt?: number;
+  /** the owner's page hears the caller */
+  takeoverLive?: boolean;
+  /** why the latest takeover failed (the agent carries on) */
+  takeoverFailed?: string;
   /** resolves to the status message's id, or null if it couldn't be sent */
   message: Promise<number | null>;
   verdict?: { verdict: Verdict; confidence: number; urgency: number };
@@ -123,7 +134,7 @@ export class OwnerDesk {
     if (ev.type === "call.started") {
       if (this.d.accepts && !this.d.accepts(ev.meta)) return;
       if (ev.meta.declined) return this.declined(ev.callId, ev.meta.from, ev.meta.declined);
-      return this.open(ev.callId, ev.meta.from, ev.meta.startedAt);
+      return this.open(ev.callId, ev.meta.from, ev.meta.channel, ev.meta.startedAt);
     }
     const v = this.views.get(ev.callId);
     if (!v) return;
@@ -155,6 +166,26 @@ export class OwnerDesk {
       case "summary":
         v.summary = ev.text;
         break;
+      case "takeover.started":
+        v.takenOverAt = ev.at;
+        delete v.takeoverFailed;
+        break;
+      case "takeover.live":
+        v.takeoverLive = true;
+        break;
+      case "takeover.failed":
+        delete v.takenOverAt;
+        delete v.takeoverLive;
+        v.takeoverFailed = ev.reason;
+        break;
+      case "recording.failed":
+        // A reply, so it notifies; the status message itself doesn't change. Not in the public
+        // group: it's for the owner.
+        if (v.channel === "public") return;
+        void v.message
+          .then((replyTo) => this.sendFor(v.callId, `⚠️ ${capitalized(ev.reason)} (at ${clock(ev.at)}).`, replyTo !== null ? { replyTo } : {}))
+          .catch((err) => log.warn("recording failure not sent", { callId: v.callId, err }));
+        return;
       default:
         return;
     }
@@ -200,11 +231,12 @@ export class OwnerDesk {
     this.d.chat.send(text).catch((err) => log.warn("declined call message not sent", { callId, err }));
   }
 
-  private open(callId: string, from: string, startedAt: number) {
+  private open(callId: string, from: string, channel: CallMeta["channel"], startedAt: number) {
     if (!this.showsStatus || this.views.has(callId)) return;
     const v: CallView = {
       callId,
       from,
+      channel,
       startedAt,
       message: Promise.resolve(null),
       steers: [],
@@ -309,6 +341,11 @@ export class OwnerDesk {
     }
     const v = this.views.get(callId);
     if (!v || v.ended) return void (await reply("That call has ended."));
+    if (v.takenOverAt !== undefined) {
+      if (!hangUp) return void (await reply("You took this call over: steering is off."));
+      const res = this.d.hangUp(v.callId);
+      return void (await reply(res.ok ? "Hanging up." : `Not hung up: ${res.reason}.`));
+    }
     if (hangUp) {
       const res = this.hangUpCall(v);
       return void (await reply(res.ok ? "Hanging up after the goodbye." : `Not hung up: ${res.reason}.`));
@@ -343,6 +380,7 @@ export class OwnerDesk {
     }
     if (!button) return void (await answer("That button no longer does anything."));
     if (!callId || !v || v.ended) return void (await answer("That call has ended."));
+    if (v.takenOverAt !== undefined) return void (await answer("You took this call over: steering is off."));
     if (!this.steeringOn()) return void (await answer("Steering is turned off."));
     if ("extend_minutes" in button) {
       const res = this.d.extend(v.callId, button.extend_minutes);
@@ -423,15 +461,20 @@ export class OwnerDesk {
    */
   render(v: CallView): { text: string; layout: MessageLayout } {
     const now = v.ended ? v.startedAt + v.ended.at : this.d.clock.now();
+    const takenOver = v.takenOverAt !== undefined;
     const head = v.ended
       ? `✅ Call ended · ${v.from || "unknown caller"} · ${clock(now - v.startedAt)} · ${v.ended.reason}`
-      : `📞 Incoming call · ${v.from || "unknown caller"} · ${clock(now - v.startedAt)}${v.limitMs ? ` of ${clock(v.limitMs)}` : ""}`;
+      : `${takenOver ? "🎧 You took over" : "📞 Incoming call"} · ${v.from || "unknown caller"} · ${clock(now - v.startedAt)}${v.limitMs ? ` of ${clock(v.limitMs)}` : ""}`;
     const c = v.verdict;
     const state = [
       c ? `${this.leaning(c) ? "leaning " : ""}${c.verdict} ${Math.round(c.confidence * 100)}% · urgency ${c.urgency.toFixed(2)}` : v.ended ? "" : "listening…",
       v.stage ? `stage: ${v.stage.replaceAll("_", " ")}` : "",
     ].filter(Boolean).join(" · ");
     const before = [state ? `${head}\n${state}` : head];
+    if (takenOver) {
+      before.push(`🎧 You took over at ${clock(v.takenOverAt!)}${v.ended ? "" : `${v.takeoverLive ? "" : " (connecting…)"}: steering is off`}`);
+    }
+    else if (v.takeoverFailed && !v.ended) before.push(`⚠️ Takeover failed: ${cut(v.takeoverFailed, MAX_LINE_CHARS)}. The agent carries on.`);
     const summary = v.summary ?? v.progress?.summary;
     if (summary) before.push(`📝 ${cut(summary, 800)}`);
     if (v.progress?.questions.length) before.push(v.progress.questions.map((q) => `❓ ${cut(q, MAX_LINE_CHARS)}`).join("\n"));
@@ -442,7 +485,7 @@ export class OwnerDesk {
         ["🗣 Your steering" + (more ? ` (last ${shown.length} of ${v.steers.length})` : ""), ...shown.map((s) => `${clock(s.at)} ${s.as}: ${cut(s.text, 300)}`)].join("\n"),
       );
     }
-    const steerable = !v.ended && this.steeringOn();
+    const steerable = !v.ended && !takenOver && this.steeringOn();
     const after: string[] = [];
     if (v.ended && v.costs) after.push(`💰 ${describeCosts(v.costs)}`);
     if (steerable) after.push("↩️ Reply to steer the agent (/help)");
@@ -474,7 +517,10 @@ export class OwnerDesk {
     } else if (after.length) {
       text += sep + after.join(sep);
     }
-    const buttons: { label: string; data: string }[][] = [];
+    const buttons: NonNullable<MessageLayout["buttons"]> = [];
+    const takeover = this.d.config().telegram.takeover;
+    const takeoverUrl = !v.ended && !takenOver && v.channel === "phone" && takeover.enabled ? this.d.takeoverUrl?.(v.callId) : undefined;
+    if (takeoverUrl) buttons.push([{ label: takeover.button_label, webApp: takeoverUrl }]);
     if (steerable) {
       const st = this.d.config().telegram.steering;
       if (st.buttons.length) buttons.push(st.buttons.map((b, i) => ({ label: b.label, data: `${BUTTON}${i}` })));
@@ -504,6 +550,8 @@ export function parseOwnerMessage(st: TelegramConfig["steering"], message: strin
 function cut(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
+
+const capitalized = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** m:ss */
 function clock(ms: number): string {

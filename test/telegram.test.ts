@@ -53,6 +53,27 @@ describe("Telegram bot", () => {
     expect(calls[2]).toEqual({ method: "answerCallbackQuery", body: { callback_query_id: "q1", text: "Sent: It's a genuine call." } });
   });
 
+  test("a webApp button is a web_app button in a private chat, left out in a group", async () => {
+    const layout = {
+      buttons: [[{ label: "🎧 Take over", webApp: "https://hooks.example.com/takeover/c1" }], [{ label: "Genuine", data: "steer:0" }]],
+    };
+    const priv = bot(() => Response.json({ ok: true, result: { message_id: 7 } }));
+    await priv.b.send("call", { layout });
+    await priv.b.edit(7, "call", layout);
+    for (const c of priv.calls) {
+      expect(c.body.reply_markup).toEqual({
+        inline_keyboard: [[{ text: "🎧 Take over", web_app: { url: "https://hooks.example.com/takeover/c1" } }], [{ text: "Genuine", callback_data: "steer:0" }]],
+      });
+    }
+    for (const chatId of ["-1001234", "@channel"]) {
+      const group = bot(() => Response.json({ ok: true, result: { message_id: 7 } }), chatId);
+      await group.b.send("call", { layout });
+      await group.b.send("call", { layout: { buttons: [[{ label: "🎧 Take over", webApp: "https://x/takeover/c1" }]] } });
+      expect(group.calls[0]!.body.reply_markup).toEqual({ inline_keyboard: [[{ text: "Genuine", callback_data: "steer:0" }]] });
+      expect(group.calls[1]!.body.reply_markup).toBeUndefined();
+    }
+  });
+
   test("edits a message; the same text again is not an error", async () => {
     const { b, calls } = bot(() =>
       Response.json({ ok: false, error_code: 400, description: "Bad Request: message is not modified: specified new message content and reply markup are exactly the same" }, { status: 400 }),

@@ -173,14 +173,19 @@ export class LunaAgent implements Agent {
   async summarize(
     meta: CallMeta,
     transcript: readonly TranscriptEntry[],
-    opts: { previousResponseId?: string; ownerMessages?: readonly string[]; stage?: string | null } = {},
+    opts: { previousResponseId?: string; ownerMessages?: readonly string[]; stage?: string | null; takenOverAt?: number } = {},
   ): Promise<SummaryResult> {
     const cfg = this.opts.config();
+    // The owner talked to the caller themselves from then on, untranscribed.
+    const reason =
+      opts.takenOverAt === undefined
+        ? "end-of-call summary"
+        : `end-of-call summary. The owner took the call over at ${clockTime(opts.takenOverAt)} and talked to the caller themselves; that part isn't transcribed. Say so at the end of the summary.`;
     const res = await this.createChained(opts.previousResponseId, (prev) =>
       this.client.responses.create({
         model: cfg.model,
         instructions: cfg.summary_instructions,
-        input: renderContext(meta, transcript, null, "end-of-call summary", opts.ownerMessages, opts.stage),
+        input: renderContext(meta, transcript, null, reason, opts.ownerMessages, opts.stage),
         previous_response_id: prev,
         reasoning: { effort: "low" },
         store: false,
@@ -246,3 +251,9 @@ const PROGRESS_SCHEMA = {
   required: ["summary", "questions", "suggestions", "alert"],
   additionalProperties: false,
 };
+
+/** m:ss into the call */
+function clockTime(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}

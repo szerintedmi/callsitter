@@ -5,7 +5,7 @@ import { LIVE_URL } from "../src/adapters/openai-live/session";
 import { b64decode, b64encode, BYTES_PER_MS, levelDbfs } from "../src/core/audio";
 import { helpText, liveInstructions, LUNA_RESPONSE, ownerAppendText, type AppConfig, type LiveAppend, type TellLive } from "../src/core/config";
 import { parseOwnerMessage } from "../src/core/owner-desk";
-import { StereoRecorder } from "../src/core/wav";
+import { StereoRecorder, WavBuffer } from "../src/core/wav";
 import { parseHistory, type Line, type LiveCase, type Settings } from "./cases";
 import type { Judge } from "./judge";
 import type { Outcome } from "./run";
@@ -167,7 +167,8 @@ function converse(o: Conversation): Promise<{ text: string; delegated: boolean; 
     let delegated = false;
     let afterSent = false;
     let pump: ReturnType<typeof setInterval> | undefined;
-    let rec = new StereoRecorder(24000, Date.now());
+    let wav = new WavBuffer(24000, 2);
+    let rec = new StereoRecorder(24000, Date.now(), wav);
     const deadline = setTimeout(() => finish(true), o.timeoutMs);
 
     const finish = (timedOut: boolean) => {
@@ -175,7 +176,8 @@ function converse(o: Conversation): Promise<{ text: string; delegated: boolean; 
       clearTimeout(deadline);
       send({ type: "session.close" });
       setTimeout(() => ws.close(), 200);
-      resolve({ text: reply.replace(/\s+/g, " ").trim(), delegated, timedOut, wav: rec.toWav() });
+      void rec.finish(); // WavBuffer: the WAV is complete once finish() returns
+      resolve({ text: reply.replace(/\s+/g, " ").trim(), delegated, timedOut, wav: wav.wav() });
     };
 
     // Live only advances while input audio arrives: silence, then the caller, then silence.
@@ -223,7 +225,8 @@ function converse(o: Conversation): Promise<{ text: string; delegated: boolean; 
         case "session.started":
           for (const t of o.told) send({ type: APPEND_EVENT[t.as], delegation_id: null, content: t.text });
           start = Date.now();
-          rec = new StereoRecorder(24000, start);
+          wav = new WavBuffer(24000, 2);
+          rec = new StereoRecorder(24000, start, wav);
           pump = setInterval(tick, 10);
           break;
         case "session.output_audio.delta": {

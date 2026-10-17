@@ -343,12 +343,7 @@ export function publicRoutes(d: PublicDeps) {
     const voice = d.webrtc.voiceAgent(body.sdp, {
       onAnswer: answered,
       greetAfter,
-      onRecording: cfg.connection.sip.record
-        ? (wav) =>
-            void d.manager
-              .saveRecording(callId, wav, "wav")
-              .catch((err) => logger("call").warn("recording not saved", { callId, err }))
-        : undefined,
+      record: cfg.connection.sip.record ? (rate, channels) => d.manager.openRecording(callId, rate, channels) : undefined,
     });
     // Admitted (limits.yaml public) before anything billed: the Live session starts in attachMedia.
     let hit: LimitHit | "failed" | null;

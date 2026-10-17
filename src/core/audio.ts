@@ -76,3 +76,98 @@ export function swap16(bytes: Uint8Array): Uint8Array {
   }
   return out;
 }
+
+/** Linear PCM16 sample → G.711 μ-law byte (ITU-T G.711, as in Sun's g711.c). */
+function linToUlaw(s: number): number {
+  let v = s >> 2;
+  let mask = 0xff;
+  if (v < 0) {
+    v = -v;
+    mask = 0x7f;
+  }
+  v = Math.min(v, 8159) + 0x21;
+  let seg = 0;
+  while (seg < 8 && v > (0x40 << seg) - 1) seg++;
+  if (seg >= 8) return 0x7f ^ mask;
+  return ((seg << 4) | ((v >> (seg + 1)) & 0x0f)) ^ mask;
+}
+/** Linear PCM16 sample → G.711 A-law byte. */
+function linToAlaw(s: number): number {
+  let v = s >> 3;
+  let mask = 0xd5;
+  if (v < 0) {
+    v = -v - 1;
+    mask = 0x55;
+  }
+  let seg = 0;
+  while (seg < 8 && v > (0x20 << seg) - 1) seg++;
+  if (seg >= 8) return 0x7f ^ mask;
+  const mant = seg < 2 ? (v >> 1) & 0x0f : (v >> seg) & 0x0f;
+  return ((seg << 4) | mant) ^ mask;
+}
+
+/** Linear PCM16 samples → a chunk in `codec` (toPcm16's inverse; L16/PCM little-endian). */
+export function fromPcm16(pcm: Int16Array, codec: AudioFormat): Uint8Array<ArrayBuffer> {
+  if (codec === "l16" || codec === "pcm24") {
+    const out = new Uint8Array(pcm.length * 2);
+    for (let i = 0; i < pcm.length; i++) {
+      out[2 * i] = pcm[i]! & 0xff;
+      out[2 * i + 1] = (pcm[i]! >> 8) & 0xff;
+    }
+    return out;
+  }
+  const encode = codec === "pcmu" ? linToUlaw : linToAlaw;
+  return Uint8Array.from(pcm, (s) => encode(s));
+}
+
+/**
+ * Streaming linear-interpolation resampler for one mono PCM16 stream (e.g. 8 kHz phone audio ↔
+ * the owner's 16 kHz page). Chunks join without clicks: it carries the last sample and the
+ * fractional position over. Downsampling low-passes first ([1 2 1]/4), enough for speech.
+ */
+export class Resampler {
+  /** the previous chunk's last sample (input sample -1) */
+  private last = 0;
+  /** the two input samples before the current chunk, for the low-pass */
+  private prev: [number, number] = [0, 0];
+  /** where the next output sample falls, in input samples from `last` */
+  private pos = 1;
+
+  constructor(
+    readonly from: number,
+    readonly to: number,
+  ) {}
+
+  push(pcm: Int16Array): Int16Array {
+    if (this.from === this.to || !pcm.length) return pcm;
+    let input = pcm;
+    if (this.to < this.from) {
+      input = new Int16Array(pcm.length);
+      let [a, b] = this.prev;
+      for (let i = 0; i < pcm.length; i++) {
+        const c = pcm[i]!;
+        input[i] = (a + 2 * b + c) >> 2;
+        a = b;
+        b = c;
+      }
+      this.prev = [a, b];
+    }
+    const step = this.from / this.to;
+    const n = input.length;
+    const out = new Int16Array(Math.ceil((n + 1 - this.pos) / step) + 1);
+    let k = 0;
+    let p = this.pos;
+    // x(0) is `last`, x(i + 1) is input[i]
+    while (p <= n) {
+      const i = Math.floor(p);
+      const f = p - i;
+      const x0 = i === 0 ? this.last : input[i - 1]!;
+      const x1 = i === n ? x0 : input[i]!;
+      out[k++] = Math.round(x0 + (x1 - x0) * f);
+      p += step;
+    }
+    this.pos = p - n;
+    this.last = input[n - 1]!;
+    return out.subarray(0, k);
+  }
+}

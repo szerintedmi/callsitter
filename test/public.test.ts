@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpenAiWebRtc } from "../src/adapters/openai-live/webrtc";
 import { FsBlobStore } from "../src/adapters/storage/fs-blob";
+import { FsRecordingStore } from "../src/adapters/storage/fs-recording";
 import { notifySignups, pageEvents } from "../src/adapters/storage/schema";
 import { openSqlite, SqliteRepo } from "../src/adapters/storage/sqlite";
 import { TelnyxApi } from "../src/adapters/telnyx/api";
@@ -95,6 +96,7 @@ beforeAll(async () => {
     clock: { now: () => Date.now() },
     repo,
     blobs: new FsBlobStore(dataDir),
+    recordings: new FsRecordingStore(dataDir),
   });
   const app = createApp({
     browserCalls,

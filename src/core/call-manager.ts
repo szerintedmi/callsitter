@@ -1,8 +1,12 @@
-import type { AudioFormat } from "./audio";
+import type { AudioFormat, Codec } from "./audio";
 import { CallSession, type CallSessionDeps } from "./call-session";
 import { withCarrier } from "./cost";
 import { CallGate, callSecondsCap, type Channel, type LimitHit } from "./limits";
-import type { BlobStore, EventBus, MediaChannel, Repo, VoiceAgent } from "./ports";
+import { logger } from "./log";
+import { errMsg } from "./orchestrator";
+import type { BlobStore, EventBus, MediaChannel, OwnerAudioLeg, RecordingStore, RecordingWriter, Repo, TakeoverHandle, VoiceAgent } from "./ports";
+import { bufferedRecordings } from "./recording";
+import { TakeoverTokens, takeoverUri } from "./takeover";
 import type { CallMeta, EndedBy, SipHeader } from "./types";
 
 // Registry of live calls plus the call lifecycle (incoming → media → hangup → recording), and
@@ -11,6 +15,13 @@ import type { CallMeta, EndedBy, SipHeader } from "./types";
 export type SharedDeps = Omit<CallSessionDeps, "meta" | "callControlId" | "media" | "mediaViaVoice" | "onStopped" | "dryRun"> & {
   repo: Repo;
   blobs: BlobStore;
+  /** where recordings are written while calls run (default: in memory, then put to `blobs`) */
+  recordings?: RecordingStore;
+  /**
+   * TELNYX_TAKEOVER_SIP_DOMAIN: the Call Control app's SIP subdomain a taken-over OpenAI SIP call
+   * is transferred to (telegram.yaml takeover); without it, calls can't be taken over.
+   */
+  takeoverSipDomain?: string;
 };
 
 export interface AttachOptions {
@@ -30,6 +41,10 @@ const KEEP_ENDED_MS = 10 * 60_000;
 /** For calls whose audio doesn't pass through us (OpenAI SIP): agent audio copies are dropped. */
 export const NO_MEDIA: MediaChannel = { sendAudio() {}, clear() {}, close() {} };
 
+/** Seconds of recording audio that may wait for storage before the recording stops (memory bound). */
+const MAX_QUEUED_RECORDING_S = 30;
+const recLog = logger("recording");
+
 export class CallManager {
   private sessions = new Map<string, CallSession>();
   /** sessions whose call has ended: `until` is null while the wrap-up (the summary) runs, then when to forget them */
@@ -46,9 +61,14 @@ export class CallManager {
 
   /** limits.yaml: whether a new call fits its channel's limits; a slot is released when the call ends */
   readonly gate: CallGate;
+  /** what a taken-over OpenAI SIP call's transferred leg dials, to be matched to its call */
+  private takeoverTokens: TakeoverTokens;
+  private recordings: RecordingStore;
 
   constructor(private d: SharedDeps) {
+    this.recordings = d.recordings ?? bufferedRecordings(d.blobs);
     this.gate = new CallGate({ repo: d.repo, config: d.config, clock: d.clock });
+    this.takeoverTokens = new TakeoverTokens(d.clock);
     d.bus.subscribe((ev) => {
       if (ev.type === "call.ended") this.gate.release(ev.callId);
     });
@@ -226,6 +246,7 @@ export class CallManager {
       dryRun: opts.dryRun,
       onStopped: () => {
         if (this.sessions.get(callId) === session) this.sessions.delete(callId);
+        this.takeoverTokens.revoke(callId);
         // The summary is still to come.
         if (session.finished) {
           const entry = { session, until: null as number | null };
@@ -250,6 +271,77 @@ export class CallManager {
 
   get(callId: string) {
     return this.sessions.get(callId);
+  }
+
+  /** The SIP domain transferred legs arrive on (TELNYX_TAKEOVER_SIP_DOMAIN), if takeovers are set up. */
+  get takeoverSipDomain(): string | undefined {
+    return this.d.takeoverSipDomain;
+  }
+
+  /** Why no call can be taken over (telegram.yaml takeover off, no TELNYX_TAKEOVER_SIP_DOMAIN), or null. */
+  takeoverOff(): string | null {
+    if (!this.d.config().telegram.takeover.enabled) return "taking calls over is turned off (telegram.yaml takeover)";
+    if (!this.d.takeoverSipDomain) return "taking calls over isn't set up (TELNYX_TAKEOVER_SIP_DOMAIN)";
+    return null;
+  }
+
+  /** Why `callId` can't be taken over now (not live, not a phone call, already taken over, feature off), or null. */
+  canTakeOver(callId: string): string | null {
+    const off = this.takeoverOff();
+    if (off) return off;
+    const s = this.sessions.get(callId);
+    if (!s) return this.pending.has(callId) || this.attaching.has(callId) ? "the call isn't connected yet" : "that call has ended";
+    if (s.channel !== "phone") return "only phone calls can be taken over";
+    // Already the owner's: their page (re)attaches, replacing a connection that may be dead.
+    if (s.takenOver) return null;
+    return s.takeoverBlocked();
+  }
+
+  /**
+   * Starts the takeover (or re-attaches the owner within reconnect_grace_ms after ownerLeft).
+   * Resolves once the takeover has started (the leg may still be connecting; the leg gets
+   * notify({type:"connecting"}) then {type:"live"} when audio flows). Throws with a readable
+   * message if it can't start (same reasons as canTakeOver).
+   */
+  async takeOver(callId: string, leg: OwnerAudioLeg): Promise<TakeoverHandle> {
+    const why = this.canTakeOver(callId);
+    if (why) throw new Error(why);
+    const s = this.sessions.get(callId)!;
+    if (s.takenOver) return s.reattachOwner(leg);
+    const tk = this.d.config().telegram.takeover;
+    // Valid from now until the transferred leg is due (plus the REFER request's own time).
+    const ttl = tk.max_handover_wait_ms + tk.leg_timeout_ms + 30_000;
+    const referTo = s.overVoice ? takeoverUri(this.takeoverTokens.create(callId, ttl), this.d.takeoverSipDomain!) : null;
+    return s.takeOver(leg, referTo);
+  }
+
+  /**
+   * The owner's page reconnects with its handle's reconnectToken (Telegram's initData may be
+   * stale by now): it takes the call over from its old connection. Throws if the token isn't the
+   * current one or the call has ended.
+   */
+  resumeTakeover(callId: string, reconnectToken: string, leg: OwnerAudioLeg): TakeoverHandle {
+    const s = this.sessions.get(callId);
+    if (!s?.reconnectTokenValid(reconnectToken)) throw new Error(s?.takenOver ? "that connection was replaced" : "that call has ended");
+    return s.reattachOwner(leg);
+  }
+
+  /**
+   * Telnyx offers a transferred leg that dialled `token`: the call it belongs to (whose hangups
+   * now go to `callControlId`), or null if the token is unknown, expired or used, or that call
+   * isn't waiting for one. Refuse the leg then.
+   */
+  claimTakeoverLeg(token: string, callControlId: string): string | null {
+    const callId = this.takeoverTokens.claim(token);
+    if (!callId) return null;
+    return this.sessions.get(callId)?.takeoverLegOffered(callControlId) ? callId : null;
+  }
+
+  /** The transferred leg's media stream connected; throws if its call isn't waiting for it. */
+  attachTakeoverLeg(callId: string, media: MediaChannel, codec: Codec): void {
+    const s = this.sessions.get(callId);
+    if (!s) throw new Error(`call ${callId} has ended`);
+    s.attachTakeoverLeg(media, codec);
   }
 
   async hangup(callId: string, reason: string, by: EndedBy = "system") {
@@ -321,6 +413,13 @@ export class CallManager {
     return call ? Math.max(0, this.d.clock.now() - call.startedAt) : null;
   }
 
+  /** The recording stopped: an error on the call's timeline and a Telegram reply (never said to the caller). */
+  private async recordingFailed(callId: string, reason: string) {
+    const call = await this.d.repo.getCall(callId);
+    if (!call) return;
+    this.d.bus.publish({ type: "recording.failed", callId, at: Math.max(0, this.d.clock.now() - call.startedAt), reason });
+  }
+
   /** Records a note on a call, e.g. a telephony error outside the voice session. */
   async note(callId: string, level: "info" | "warn" | "error", message: string) {
     const call = await this.d.repo.getCall(callId);
@@ -348,10 +447,76 @@ export class CallManager {
       (async () => {
         const key = `recordings/${callId}.${ext}`;
         await this.d.blobs.put(key, data, ext === "mp3" ? "audio/mpeg" : "audio/wav");
-        const call = await this.d.repo.getCall(callId);
-        this.d.bus.publish({ type: "recording", callId, at: call ? this.d.clock.now() - call.startedAt : 0, path: key });
+        await this.recordingStored(callId, key);
       })(),
     );
+  }
+
+  /**
+   * A recording of the call written while it runs (`recordings/<call id>.wav`): appends go to the
+   * store in order, without blocking the caller; finish() stores it, publishes the `recording`
+   * event and is waited for by stopAll. A failed write is logged and stops the recording (what
+   * was written is still stored); it never fails the call. So does storage falling more than
+   * MAX_QUEUED_RECORDING_S behind, so a slow disk can't fill memory with queued audio.
+   */
+  openRecording(callId: string, rate: number, channels: number): RecordingWriter {
+    const sink = this.recordings.open(`recordings/${callId}.wav`, { rate, channels });
+    const maxQueued = MAX_QUEUED_RECORDING_S * rate * channels * 2;
+    let chain = Promise.resolve();
+    let queued = 0;
+    let failed = false;
+    let finished: Promise<string | null> | undefined;
+    const stop = (why: string, err?: unknown) => {
+      if (failed) return;
+      failed = true;
+      recLog.error(`recording ${why}: the rest of the call isn't recorded`, { callId, err });
+      void this.recordingFailed(callId, `recording stopped: ${why}`).catch(() => undefined);
+    };
+    return {
+      append: (pcm) => {
+        if (failed || finished) return;
+        if (queued + pcm.length > maxQueued) return stop(`storage fell over ${MAX_QUEUED_RECORDING_S} s behind`);
+        queued += pcm.length;
+        chain = chain
+          .then(() => (failed ? undefined : sink.append(pcm)))
+          .catch((err) => stop("writing it failed", err))
+          .finally(() => void (queued -= pcm.length));
+      },
+      finish: () =>
+        (finished ??= this.track(
+          chain
+            .then(() => sink.finish())
+            .then(async (path) => {
+              await this.recordingStored(callId, path);
+              return path;
+            })
+            .catch(async (err) => {
+              recLog.error("recording not saved", { callId, err });
+              await this.recordingFailed(callId, `recording not saved: ${errMsg(err)}`).catch(() => undefined);
+              return null;
+            }),
+        )),
+    };
+  }
+
+  /**
+   * Stores the recordings a crash left unfinished (RecordingStore.recover), each as its call's
+   * recording unless the call has one already.
+   */
+  async recoverRecordings() {
+    for (const key of (await this.recordings.recover?.()) ?? []) {
+      const callId = key.match(/^recordings\/(.+?)(?:\.recovered)?\.wav$/)?.[1];
+      const call = callId ? await this.d.repo.getCall(callId) : null;
+      if (call && !call.recordingPath) {
+        await this.recordingStored(call.id, key);
+        recLog.info("recovered the recording of an interrupted call", { callId: call.id, path: key });
+      } else recLog.info(`recovered an interrupted recording: ${key} (${call ? "the call has another recording" : "no such call"})`, { callId: call?.id });
+    }
+  }
+
+  private async recordingStored(callId: string, path: string) {
+    const call = await this.d.repo.getCall(callId);
+    this.d.bus.publish({ type: "recording", callId, at: call ? this.d.clock.now() - call.startedAt : 0, path });
   }
 
   private track<T>(p: Promise<T>): Promise<T> {

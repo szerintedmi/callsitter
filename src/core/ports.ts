@@ -71,8 +71,29 @@ export interface VoiceSession {
   sendAudio(payloadB64: string): void;
   /** appends `text` to the session as instructions, thinking or commentary; with `delegationId` it answers that delegation */
   append(as: LiveAppend, text: string, delegationId?: string): void;
-  /** resolves once the session has shut down (and handed over anything it recorded) */
+  /** resolves once the session has shut down (and handed over anything it recorded, unless keepRecording took it) */
   close(): Promise<void>;
+  /**
+   * OpenAI SIP: transfers the call (a SIP REFER) to `targetUri`; resolves once the vendor has
+   * accepted it, rejects once `signal` aborts. The session ends once the carrier has followed it.
+   */
+  refer?(targetUri: string, signal: AbortSignal): Promise<void>;
+  /**
+   * The session's own recording (OpenAI SIP) goes on past close(), for the rest of the call
+   * after a takeover, up to `maxSeconds` from the call's start; null if it records nothing.
+   * close() no longer hands it over: finish() does.
+   */
+  keepRecording?(maxSeconds: number): CallRecording | null;
+}
+
+/** A recording that outlives its voice session (keepRecording): the takeover's part of the call. */
+export interface CallRecording {
+  /** caller audio as it arrives: mono PCM16 at `rate` Hz */
+  caller(pcm16: Int16Array, rate: number): void;
+  /** the owner's audio as it arrives (on the agent's track): mono PCM16 at `rate` Hz */
+  owner(pcm16: Int16Array, rate: number): void;
+  /** stores the recording (once) */
+  finish(): void;
 }
 
 export interface VoiceAgent {
@@ -158,7 +179,13 @@ export interface Agent {
   summarize(
     meta: CallMeta,
     transcript: readonly TranscriptEntry[],
-    opts?: { previousResponseId?: string; ownerMessages?: readonly string[]; stage?: string | null },
+    opts?: {
+      previousResponseId?: string;
+      ownerMessages?: readonly string[];
+      stage?: string | null;
+      /** the owner took the call over this long into it (ms): the transcript ends there */
+      takenOverAt?: number;
+    },
   ): Promise<SummaryResult>;
   /** Rolling summary for the owner's status message (luna.yaml progress); agents without it have none. */
   progress?(
@@ -286,12 +313,84 @@ export interface BlobStore {
   get(key: string): Promise<{ body: ReadableStream | Blob; contentType: string } | null>;
 }
 
+/**
+ * Where recordings are written while a call runs (a PCM16 WAV per key, readable through the
+ * BlobStore once finished), so a crash keeps what was written.
+ */
+export interface RecordingStore {
+  open(key: string, format: { rate: number; channels: number }): RecordingSink;
+  /** finishes the recordings a previous run left unfinished (a crash); resolves to their keys */
+  recover?(): Promise<string[]>;
+}
+
+/** One recording being written. Calls are made one at a time: each after the previous resolved. */
+export interface RecordingSink {
+  /** interleaved little-endian PCM16 frames */
+  append(pcm: Uint8Array): Promise<void>;
+  /** completes the file with what was appended; resolves to its key */
+  finish(): Promise<string>;
+}
+
+/** What a StereoRecorder writes to: CallManager.openRecording queues these for a RecordingSink. */
+export interface RecordingWriter {
+  append(pcm: Uint8Array): void;
+  /** once, after the last append: resolves to the stored path, or null if nothing was stored */
+  finish(): Promise<string | null>;
+}
+
 /** How a message to the owner looks, beyond its plain text. */
 export interface MessageLayout {
   /** ranges of the text shown collapsed, tap to expand (Telegram: expandable_blockquote) */
   collapsed?: { offset: number; length: number }[];
-  /** buttons under the message, in rows; pressing one comes back as an OwnerButtonPress */
-  buttons?: { label: string; data: string }[][];
+  /**
+   * buttons under the message, in rows; pressing one comes back as an OwnerButtonPress. One
+   * with `webApp` opens that https URL as a Telegram Mini App instead (private chats only).
+   */
+  buttons?: ({ label: string; data: string; webApp?: undefined } | { label: string; webApp: string; data?: undefined })[][];
+}
+
+/** The page the owner took a call over from (takeover): plays the caller and hears the owner. */
+export interface OwnerAudioLeg {
+  /** caller audio for the owner: 16 kHz mono PCM16 */
+  sendAudio(pcm16: Int16Array): void;
+  /** how the takeover is going, for the page */
+  notify(state: TakeoverState): void;
+  /** closes the page's connection (after the call ended) */
+  close(): void;
+}
+
+export type TakeoverState =
+  | { type: "connecting" }
+  | { type: "live" }
+  | { type: "ended"; reason: string }
+  | { type: "error"; message: string };
+
+/** What the takeover page measures itself (src/web/client/takeover.ts), counted since it loaded. */
+export interface OwnerPageStats {
+  /** mic frames sent to the server */
+  sentFrames: number;
+  /** times the caller's playback ran dry mid-word (audio arrived late) */
+  underruns: number;
+  /** time the owner was muted (the mic then sends silence) */
+  mutedMs: number;
+}
+
+/** What the page's connection gets back from CallManager.takeOver. */
+export interface TakeoverHandle {
+  /** the owner's mic: 16 kHz mono PCM16 */
+  ownerAudio(pcm16: Int16Array): void;
+  /** the page's connection dropped: the call hangs up unless the owner is back within takeover.reconnect_grace_ms */
+  ownerLeft(): void;
+  /** the owner hung up on the page: the call ends, at the carrier too */
+  hangUp(): void;
+  /** the page's own audio counters (cumulative since it loaded), for the takeover's stats line */
+  pageStats(s: OwnerPageStats): void;
+  /**
+   * What this page presents to reconnect (CallManager.resumeTakeover) instead of Telegram's
+   * initData, which goes stale (init_data_max_age_s) long before a takeover ends. Valid until
+   * the next connection replaces this one or the call ends.
+   */
+  reconnectToken: string;
 }
 
 /** The owner's chat (Telegram): the recipient is fixed by the adapter. */

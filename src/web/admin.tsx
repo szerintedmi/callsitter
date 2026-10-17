@@ -28,7 +28,13 @@ export interface AdminDeps {
   debugLog?: LogBuffer;
   /** the page scripts (src/web/client), served under /assets/ */
   clientAssets: ClientAssets;
+  /** why no call can be taken over (CallManager.takeoverOff), or null; absent: no Take over button */
+  takeoverOff?: () => string | null;
 }
+
+/** Taken over: the latest takeover event is a start (takeover.failed means the agent carried on). */
+const takenOver = (events: readonly { type: string }[]) =>
+  events.findLast((e) => e.type === "takeover.started" || e.type === "takeover.failed")?.type === "takeover.started";
 
 const css = `
 :root{color-scheme:light dark;--bg:#fff;--fg:#1a1a1a;--muted:#6b6b6b;--line:#e3e3e3;--scam:#c0392b;--spam:#b9770e;--genuine:#1e8449;--card:#f3f3f3;--agent:#2f6fdb}
@@ -90,6 +96,9 @@ table.sip{font:12px/1.4 ui-monospace,monospace}table.sip th{white-space:nowrap;c
 .ev.stage .b{font-size:12px;padding-top:5px;padding-bottom:5px}.ev.stage .b b{color:var(--stage);font-weight:600}
 .ev.note .b{font-size:12px;color:var(--muted)}.ev.note.warn .b{color:var(--spam)}.ev.note.error .b{color:var(--scam)}
 .ev.end .b,.ev.summary .b{padding-top:8px}
+.ev.takeover .b{font-size:13px}.ev.takeover b{color:var(--agent)}
+.ev.takeover.live{--y:17px}.ev.takeover.live .b{margin-top:8px;padding:5px 8px;border-top:1px dashed var(--agent);color:var(--agent);font-size:13px;font-weight:600}.ev.takeover.live .b .muted{font-weight:400}
+.tag.owner,.tag.by-owner{color:var(--agent);border-color:var(--agent)}
 /* stage colour: .st turns --h (the stage's hue) into --stage */
 .st{--stage:hsl(var(--h) 42% 48%)}@media (prefers-color-scheme:dark){.st{--stage:hsl(var(--h) 45% 62%)}}
 .sdot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--stage,var(--line));margin-right:6px;vertical-align:middle}
@@ -138,7 +147,12 @@ const fmtDur = (r: CallRecord) => {
 /** Who ended the call (calls from before it was recorded only have the reason) and why. */
 const Ended: FC<{ r: CallRecord }> = ({ r }) => (
   <>
-    {r.endedBy && <span class={`tag by-${r.endedBy}`}>{r.endedBy}</span>} {r.endReason ?? ""}
+    {r.endedBy && (
+      <span class={`tag by-${r.endedBy}`} title={r.endedBy === "owner" ? "the owner took the call over and hung up" : undefined}>
+        {r.endedBy === "owner" ? "🎧 owner" : r.endedBy}
+      </span>
+    )}{" "}
+    {r.endReason ?? ""}
   </>
 );
 const VERDICTS: readonly VerdictName[] = ["scam", "spam", "genuine", "unclear"];
@@ -312,6 +326,9 @@ export function adminRoutes(d: AdminDeps) {
     const call = await d.repo.getCall(c.req.param("id"));
     if (!call) return c.notFound();
     const events = (await d.repo.listEvents(call.id)).map((e) => e.event);
+    // The Telegram button's conditions (owner-desk.ts): a live phone call, takeover set up. Hidden
+    // while taken over; call.ts hides and shows it on the live events.
+    const takeover = call.channel === "phone" && call.status !== "ended" && d.takeoverOff?.() === null;
     return c.html(
       <Layout title={`Call ${call.from || call.id}`}>
         <div data-call={call.id}>
@@ -328,6 +345,13 @@ export function adminRoutes(d: AdminDeps) {
           {call.status === "ended" && (
             <p>
               <span class="muted">Ended:</span> <Ended r={call} />
+            </p>
+          )}
+          {takeover && (
+            <p>
+              <button id="takeover" class="primary" data-href={`/calls/${encodeURIComponent(call.id)}/takeover`} hidden={takenOver(events)} title="Talk to the caller yourself (opens a new tab)">
+                🎧 Take over
+              </button>
             </p>
           )}
           {call.summary && <p>{call.summary}</p>}

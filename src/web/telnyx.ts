@@ -5,6 +5,7 @@ import type { CallManager } from "../core/call-manager";
 import type { CallSession } from "../core/call-session";
 import { logger } from "../core/log";
 import { errMsg } from "../core/orchestrator";
+import { takeoverTokenFrom } from "../core/takeover";
 import type { ConfigStore } from "../core/config";
 import type { Repo } from "../core/ports";
 import { TelnyxApiError, type TelnyxApi } from "../adapters/telnyx/api";
@@ -37,6 +38,13 @@ const INITIATED_SKIP = ["call_control_id", "client_state", "connection_id", "con
 const HANGUP_SKIP = ["call_control_id", "call_leg_id", "call_session_id", "client_state", "connection_id", "calling_party_type", "flow_destination", "from", "to", "start_time", "occurred_at"];
 
 const describe = (err: unknown) => (err instanceof TelnyxApiError ? err.summary : errMsg(err));
+
+/** A taken-over call's transferred leg is answered with A-law (Telnyx streamed it; L16 failed in the test). */
+const TAKEOVER_CODEC: Codec = "pcma";
+/** client_state `leg` of a transferred leg (takeover) */
+const TAKEOVER_LEG = "takeover";
+/** media tokens of transferred legs sign their own call ids, so they can't open the call's main stream */
+const takeoverMediaId = (callId: string) => `takeover:${callId}`;
 const log = logger("telnyx");
 const callLog = logger("call");
 const mediaLog = logger("media");
@@ -77,6 +85,11 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
         // Redelivered (or after a restart): the call exists already, so don't answer it again.
         // Webhooks for one call run in order, so this check can't race a first delivery.
         if (await d.repo.findByCallControlId(ccid)) return;
+        // A taken-over call's transferred leg (OpenAI's REFER to the takeover SIP domain): it
+        // belongs to a live call, so it's answered while draining or over a limit too.
+        const domain = d.manager.takeoverSipDomain;
+        const takeoverToken = domain ? takeoverTokenFrom(p.to, domain) : null;
+        if (takeoverToken !== null) return takeoverLeg(ccid, takeoverToken, p);
         // Draining for a deploy (or shutting down): the caller hears busy rather than being cut off later.
         if (!d.manager.accepting) {
           log.info("incoming call rejected: not accepting calls (draining)", { callControlId: ccid });
@@ -119,6 +132,8 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
       case "call.answered": {
         const callId = await resolveCallId(p);
         if (!ccid || !callId) return;
+        // A transferred leg: the SIP sideband's recording goes on through the takeover instead.
+        const takeover = decodeClientState(p.client_state)?.leg === TAKEOVER_LEG;
         const ns = d.config.get().connection.media_stream.noise_suppression;
         if (ns.enabled) {
           // A failure here must not stop the recording; the call works without it.
@@ -126,7 +141,7 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
             .suppressionStart(ccid, { engine: ns.engine, direction: ns.direction })
             .catch((err) => callLog.warn("noise suppression not started", { callId, err }));
         }
-        await d.telnyx.recordStart(ccid, encodeClientState({ callId }));
+        if (!takeover) await d.telnyx.recordStart(ccid, encodeClientState({ callId }));
         return;
       }
       case "call.hangup": {
@@ -161,6 +176,35 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
         await d.manager.saveRecording(callId, data, p.recording_urls?.mp3 ? "mp3" : "wav");
         return;
       }
+    }
+  };
+
+  /**
+   * The transferred leg of a call the owner takes over (CallManager.takeOver): the token it
+   * dialled names the call. It's answered with its own media stream (/media/takeover/…), and the
+   * call's hangups go to it from now on. A leg without a valid token is refused: the takeover
+   * domain never takes new calls.
+   */
+  const takeoverLeg = async (ccid: string, token: string, p: TelnyxWebhook["data"]["payload"]) => {
+    const callId = token ? d.manager.claimTakeoverLeg(token, ccid) : null;
+    if (!callId) {
+      log.warn(`transferred leg to ${p.to ?? "?"} with an unknown, expired or used token: rejected`, { callControlId: ccid });
+      await d.telnyx.reject(ccid, "CALL_REJECTED");
+      return;
+    }
+    callLog.info("transferred leg arrived (takeover)", { callId });
+    // Redeliveries find the call by it, and a restart's orphan sweep hangs this leg up.
+    await d.repo.updateCall(callId, { callControlId: ccid });
+    await d.manager.sipHeaders(callId, "telnyx", [...(p.sip_headers ?? []), ...(p.custom_headers ?? [])], { info: payloadInfo(p, INITIATED_SKIP) });
+    const codec = TAKEOVER_CODEC;
+    const streamToken = await mediaToken(d.mediaSecret, takeoverMediaId(callId), codec);
+    const streamUrl = `${d.publicWsBase}/media/takeover/${callId}/${codec}/${streamToken}`;
+    try {
+      await d.telnyx.answer(ccid, streamUrl, codec, encodeClientState({ callId, leg: TAKEOVER_LEG }));
+    } catch (err) {
+      callLog.warn("transferred leg: answer failed", { callId, err: describe(err) });
+      await d.telnyx.hangup(ccid).catch((e) => callLog.warn("carrier hangup failed", { callId, err: describe(e) }));
+      await d.manager.hangup(callId, `takeover: answer failed: ${describe(err)}`);
     }
   };
 
@@ -220,6 +264,53 @@ export function telnyxRoutes(d: TelnyxRoutesDeps) {
     );
     return c.text("ok", 200);
   });
+
+  // A taken-over call's transferred leg: the caller's audio goes to the owner's page and back.
+  app.get(
+    "/media/takeover/:callId/:codec/:token",
+    async (c, next) => {
+      const { callId, codec, token } = c.req.param();
+      if (!isCodec(codec) || !(await verifyMediaToken(d.mediaSecret, takeoverMediaId(callId), codec, token))) {
+        return c.text("forbidden", 403);
+      }
+      await next();
+    },
+    d.upgradeWebSocket((c) => {
+      const callId = c.req.param("callId")!;
+      const codec = c.req.param("codec") as Codec;
+      let attached = false;
+      return {
+        onOpen(_evt, ws) {
+          const media = new TelnyxMediaChannel(
+            (msg) => ws.send(msg),
+            () => ws.close(),
+            codec,
+          );
+          try {
+            d.manager.attachTakeoverLeg(callId, media, codec);
+            attached = true;
+          } catch (err) {
+            mediaLog.error("transferred leg's stream not attached", { callId, err });
+            ws.close();
+          }
+        },
+        onMessage(evt) {
+          if (!attached) return;
+          const msg = parseInbound(evt.data as string | ArrayBuffer);
+          if (msg?.event === "media" && (msg.media.track === "inbound" || !msg.media.track)) {
+            d.manager.get(callId)?.onCallerAudio(inboundToLive(msg.media.payload, codec));
+          } else if (msg?.event === "start") {
+            mediaLog.info("takeover stream started", { callId, format: msg.start.media_format ?? {} });
+          } else if (msg?.event === "error") {
+            mediaLog.error("Telnyx error (takeover stream)", { callId, payload: msg.payload });
+          }
+        },
+        onClose() {
+          if (attached) void d.manager.get(callId)?.hangup("takeover media stream closed");
+        },
+      };
+    }),
+  );
 
   app.get(
     "/media/:callId/:codec/:token",

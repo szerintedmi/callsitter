@@ -67,6 +67,31 @@ steering:
     enabled: true
     as: commentary
 
+# Take a live phone call over yourself: a "Take over" button under its status message opens a
+# page in Telegram (a Mini App; your private chat with the bot only) that plays the caller and
+# sends your microphone. The agent says handover_text first, then the call moves to you and the
+# bot stops steering it (no Jev, Luna or silence prompts; Luna's summary covers the call up to
+# the takeover). Over OpenAI SIP the call is transferred (a SIP REFER) to
+# TELNYX_TAKEOVER_SIP_DOMAIN, the Call Control app's SIP subdomain (docs/setup.md); without it
+# there's no button.
+takeover:
+  enabled: true
+  button_label: Take over
+  # Sent as commentary, so the agent says it in its own words at once.
+  handover_text: "SUPERVISOR: The owner is taking this call over now. Tell the caller in one short sentence that you're putting them through, then stay quiet."
+  # If the transfer fails, the agent carries on after saying this (as commentary).
+  failed_text: "SUPERVISOR: The owner couldn't take the call after all. Tell the caller briefly, then carry on as before."
+  # The call moves this long after the handover line at the latest, even if the agent is still talking.
+  max_handover_wait_ms: 4000
+  # OpenAI SIP: the call hangs up if Telnyx hasn't connected the transferred leg by then.
+  leg_timeout_ms: 10000
+  # The page's Telegram login (initData, signed when you tap the button) is refused once older.
+  init_data_max_age_s: 600
+  # If your page closes or loses its connection, the call hangs up unless you're back within this.
+  reconnect_grace_ms: 10000
+  # A taken-over call hangs up this long after the takeover.
+  max_seconds: 3600
+
 # Public-page calls, when TELEGRAM_PUBLIC_CHAT_ID is set (a group): Telegram allows ~20
 # messages a minute in a group, and game callers fake urgency. These replace
 # status.min_edit_interval_ms and status.urgent_alert.enabled there.
