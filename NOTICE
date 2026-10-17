@@ -7,7 +7,6 @@ The following files are NOT covered by the Apache License:
 
   - demos/calls/    recordings and transcripts of real phone calls
   - demos/posters/  stills from those recordings
-  - assets/         the CallSitter logo and icons
 
 Copyright 2026 szerintedmi. All rights reserved. They may not be copied,
 modified or redistributed without written permission. See demos/LICENSE.

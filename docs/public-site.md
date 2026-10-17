@@ -6,7 +6,7 @@ Served on the public host, the one Telnyx calls (`https://callsitter.org/`; a pr
 - `/play`: an arcade game-select screen with two games (`config/games.yaml`, scoring in `src/core/game.ts`).
 - `/bot`: a "Get your own bot" waitlist (`POST /call/waitlist`).
 - `/terms`, `/privacy`.
-- `/favicon.ico`, `/apple-touch-icon.png`: the site icon (`src/web/favicon.ts`), built from its pixel grid; the pages embed it as an SVG. `bun run brand-icons` renders it for profile pictures into `assets/`.
+- `/favicon.ico`, `/apple-touch-icon.png`: the site icon (`src/web/favicon.ts`), built from its pixel grid; the pages embed it as an SVG.
 
 **Analytics:** the pages send first-party analytics (no cookies) in batches to `POST /call/e` (`src/web/analytics.tsx`, `config/analytics.yaml`): views, clicks, plays and how long each recording was heard, with the visitor's IP, user agent and location. The admin UI shows them at `/analytics`.
 

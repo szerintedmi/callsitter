@@ -61,4 +61,4 @@ bun run dev               # http://127.0.0.1:8787/ (admin UI), config hot-reload
 
 ## License
 
-The code is [Apache-2.0](LICENSE). The call recordings in `demos/` and the logo in `assets/` are not: all rights reserved ([NOTICE](NOTICE)).
+The code is [Apache-2.0](LICENSE). The call recordings in `demos/` are not: all rights reserved ([NOTICE](NOTICE)).
