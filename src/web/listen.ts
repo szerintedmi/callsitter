@@ -89,7 +89,9 @@ export function listenRoutes(d: { clientAssets: ClientAssets; media: DemoMedia }
   return app;
 }
 
-const BUILD = Date.now().toString(36);
+export const BUILD = Date.now().toString(36);
+/** The plain pages' <body>: their script (src/web/client/site.ts) reads the base and whether analytics are on. */
+export const siteBody = (base: string, analytics?: boolean) => `<body data-base="${esc(base)}"${analytics ? ` data-analytics="1"` : ""}>`;
 const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 const json = (v: unknown) => JSON.stringify(v).replace(/</g, "\\u003c");
 
@@ -198,10 +200,10 @@ const pixelIcon = (rows: string[]) =>
     .flatMap((row, y) => [...row.matchAll(/([^.])\1*/g)].map((m) => `<rect x="${m.index}" y="${y}" width="${m[0].length}" height="1" fill="${PX[m[1]!]}"/>`))
     .join("")}</svg>`;
 
-/** "Get your own bot": not open yet, a waitlist (POST call/waitlist). Its few lines of script are inline. */
-export function botPage(base: string, o: { wastedSeconds: number }): string {
+/** "Get your own bot": not open yet, a waitlist (POST call/waitlist; src/web/client/site.ts). */
+export function botPage(base: string, o: { wastedSeconds: number; /** page analytics on (analytics.yaml) */ analytics?: boolean }): string {
   return `${head("Get your own bot · CallSitter", "Get CallSitter on your own phone: forward your calls to your own bot, get them on Telegram. Join the waitlist.", rootCss + topCss + homeCss + botCss)}
-<body>
+${siteBody(base, o.analytics)}
 <div class="rc-col">
 ${top(base, o.wastedSeconds, { botLink: false })}
 <main class="bot">
@@ -234,27 +236,7 @@ ${top(base, o.wastedSeconds, { botLink: false })}
 </main>
 ${legal(base)}
 </div>
-<script>
-(() => {
-  const $ = (id) => document.getElementById(id), form = $("wl"), input = $("wl-in"), ok = $("wl-ok"), err = $("wl-err");
-  const fail = (m) => { err.textContent = m; err.hidden = false; };
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const email = input.value.trim();
-    err.hidden = true;
-    if (!email) return input.focus();
-    ok.disabled = true;
-    try {
-      const r = await fetch(${json(`${base}call/waitlist`)}, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
-      if (r.ok) { form.hidden = true; $("wl-done").hidden = false; }
-      else fail((await r.json().catch(() => ({}))).message || "Something went wrong.");
-    } catch { fail("Couldn't send. Try again."); }
-    finally { ok.disabled = false; }
-  });
-  // Enabled only now: without the script, submitting would put the email in a URL.
-  ok.disabled = false;
-})();
-</script>
+<script src="${base}assets/site.js?v=${BUILD}"></script>
 </body>
 </html>`;
 }

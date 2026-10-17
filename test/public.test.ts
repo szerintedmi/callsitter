@@ -483,7 +483,9 @@ describe("public page (fake OpenAI)", () => {
     const html = await res.text();
     expect(html).toContain("GET YOUR OWN BOT");
     expect(html).toContain('id="wl-in" type="email"');
-    expect(html).toContain('"/call/waitlist"');
+    // the form's script (src/web/client/site.ts) posts to <base>call/waitlist and tracks the page
+    expect(html).toContain('<body data-base="/"');
+    expect(html).toContain('src="/assets/site.js?v=');
     // without the script the form can't submit: a GET would put the email in the URL
     expect(html).toContain('<form class="wl" id="wl" method="post"');
     expect(html).toContain('id="wl-ok" disabled');

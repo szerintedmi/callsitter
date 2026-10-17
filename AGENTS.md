@@ -20,4 +20,5 @@ AI call screener: Telnyx → OpenAI SIP (gpt-live-1, steered over a sideband; th
 - Every tunable goes in `config/*.yaml` with a Zod schema in `src/core/config.ts`.
 - DB schema: edit `src/adapters/storage/schema.ts`, then run `bun run db:generate`. Migrations run on startup.
 - Use Bun, not Node tooling (`bun test`, `bunx`, `bun:sqlite`; Bun loads `.env` automatically).
+- Public pages track every interaction (`src/web/client/track.ts`): a new public page needs `data-analytics` on its body and `startTracking`, and a new button `data-track="<action>"` or a `track()` call.
 - Real-call demos at `/listen`: `demos/README.md`. Their inputs stay in `data/demos/` (they name the people redacted); only redacted files go in `demos/calls/`.

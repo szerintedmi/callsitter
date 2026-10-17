@@ -126,7 +126,7 @@ describe("public page with the real calls", async () => {
     expect(games).toContain(`<header class="rc-top"><a class="rc-brand" href="/">${logo}CALLSITTER</a>`);
     expect(games).toContain('<b id="wasted">0:00:00</b>');
     expect(games).toContain('<a class="rc-own" href="/bot">GET YOUR OWN BOT</a>');
-    expect(games).toMatch(/<div class="rc-right"><button class="chip" type="button" data-chip hidden><\/button><a class="rc-own"/);
+    expect(games).toMatch(/<div class="rc-right"><button class="chip" type="button" data-chip data-track="change_name" hidden><\/button><a class="rc-own"/);
     expect(games).toContain(".rc-top{");
     expect(games).not.toContain("tel:");
     expect(games).not.toContain("4620 6827");
