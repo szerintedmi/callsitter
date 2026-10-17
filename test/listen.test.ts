@@ -20,18 +20,21 @@ const app = listenRoutes({
 const get = (path: string, init?: RequestInit) => app.request(`http://x${path}`, init);
 
 describe("listen routes", () => {
-  test("the home page: a tab per recording, the player, the bot to try and the bot page's links", () => {
+  test("the home page: the pitch with the bot page and the game, a tab per recording, the player, GitHub in the footer", () => {
     const html = realCallsPage("/", { selected: "electrician", autoplay: true, wastedSeconds: 3725 });
     for (const d of DEMOS) expect(html).toContain(`href="/listen/${d.slug}"`);
     expect(html).toContain('"selected":"electrician"');
     expect(html).toContain('"autoplay":true');
     expect(html).toContain(">1:02:05</b>");
     expect(html).toContain("REAL CALLS.");
-    expect(html).toMatch(/<a class="rc-cta" href="\/play">PLAY THE BOT <i>▶<\/i><\/a><span>Call from your browser<\/span>/);
-    expect(html).toContain('href="/bot"');
+    expect(html).toContain("LET THE BOT TAKE IT.");
+    expect(html).toContain('<a class="hero-own" href="/bot">GET YOUR OWN BOT</a>');
+    expect(html).toContain('<a class="hero-play" href="/play"><b>PLAY THE BOT</b><span>Can you fool it?</span></a>');
+    expect(html).not.toContain('class="rc-own"');
+    expect(html).toContain('<header class="rc-top solo">');
     expect(html).not.toContain("tel:");
     expect(html).not.toContain("4620 6827");
-    expect(html).toContain('href="https://github.com/szerintedmi/callsitter"');
+    expect(html).toMatch(/<footer class="rc-legal rc-foot"><a class="rc-gh" href="https:\/\/github.com\/szerintedmi\/callsitter">.*GitHub<\/a>/);
   });
 
   test("the song demo comes first, of five tabs", () => {
@@ -39,7 +42,7 @@ describe("listen routes", () => {
     expect(DEMOS[0]!.scene).toBe("areyouai");
     const html = realCallsPage("/", { selected: "areyouai", autoplay: false, wastedSeconds: 0 });
     expect(html.match(/class="rc-tab /g)).toHaveLength(5);
-    expect(html).toContain("grid-template-columns:repeat(5,1fr)");
+    expect(html).toContain('data-slug="electrician" data-notrack><i>05</i>The electrician</a>');
   });
 
   test("the recorder's page has the stage only", async () => {
@@ -133,9 +136,11 @@ describe("public page with the real calls", async () => {
     expect(games).not.toContain('id="dial"');
   });
 
-  test("the bot page: the headline and the form, no blurb, no phone number", async () => {
+  test("the bot page: the headline and the form, the game top right, the home page's footer, no phone number", async () => {
     const html = await (await page.request("http://x/bot")).text();
     expect(html).toContain("GET YOUR OWN BOT.");
+    expect(html).toContain('<div class="rc-right"><a class="rc-game" href="/play">PLAY THE BOT</a>');
+    expect(html).toContain('<footer class="rc-legal rc-foot">');
     expect(html).not.toContain("CallSitter answers your phone");
     expect(html).not.toContain('class="rc-own"');
     expect(html).not.toContain("tel:");
@@ -144,7 +149,7 @@ describe("public page with the real calls", async () => {
   test("the terms and the privacy notice, linked from every public page", async () => {
     for (const path of ["/", "/bot", "/play"]) {
       const html = await (await page.request(`http://x${path}`)).text();
-      expect(html).toContain('<p class="rc-legal"><a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p>');
+      expect(html).toContain('<a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p>');
     }
     const terms = await (await page.request("http://x/terms")).text();
     expect(terms).toContain("<h1>TERMS</h1>");

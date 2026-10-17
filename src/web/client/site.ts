@@ -33,6 +33,4 @@ if (form && input && ok && err) {
       ok.disabled = false;
     }
   });
-  // Enabled only now: without the script, submitting would put the email in a URL.
-  ok.disabled = false;
 }

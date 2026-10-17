@@ -8,7 +8,7 @@ credentials-file: /etc/cloudflared/__TUNNEL_ID__.json
 
 ingress:
   - hostname: __HOOKS_HOST__
-    path: ^/(telnyx/webhook|openai/webhook|media/.*|healthz|call(/.*)?|play|bot|terms|privacy|listen(/.*)?|favicon\.ico|apple-touch-icon\.png|assets/(public|listen)\.js)?$
+    path: ^/(telnyx/webhook|openai/webhook|media/.*|healthz|call(/.*)?|play|bot|terms|privacy|listen(/.*)?|favicon\.ico|apple-touch-icon\.png|assets/(public|listen|site)\.js)?$
     service: http://127.0.0.1:8787
   - hostname: __HOOKS_HOST__
     service: http_status:404
