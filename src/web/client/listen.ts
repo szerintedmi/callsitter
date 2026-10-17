@@ -2,9 +2,18 @@
 // transcript, Jev's verdict and a 3D scene of the two sides (listen-scene.ts). The tiles under it
 // switch calls in place. The audio's clock drives it; on the recorder's page (listen/render/<slug>)
 // there's no audio, and demos/tools/record.ts steps the clock with window.demo.seek(t), one frame
-// at a time. Everything drawn is a function of t.
+// at a time. Everything drawn is a function of t. The recorder's page takes any frame shape (a tall
+// one stacks the rooms: listen-scene.ts Layout) and, for an edited video, an edit (listen-cut.ts):
+// window.demo.edit(cut), then window.demo.frame(t) on the video's clock. A call can open with a
+// prologue (listen-story.ts): its beats are drawn over the stage (listen-prologue.ts) and steer the
+// scene's camera, on the same clock as the call that follows it.
 import * as THREE from "three";
-import { createScene, type BlunderKind, type CallScene, type Moment, type SceneKind, type SongMoment, type SongSection } from "./listen-scene";
+import { callTimeAt, resolveCut, type Cut } from "./listen-cut";
+import { EditOverlays } from "./listen-edit";
+import { fullscreen } from "./listen-fullscreen";
+import { PrologueLayer } from "./listen-prologue";
+import { createScene, type BlunderKind, type CallScene, type Layout, type Moment, type SceneKind, type SongMoment, type SongSection } from "./listen-scene";
+import { BADGE_AFTER, blinkAt, cameraAt, clearAt, shownLines, songBanner, stagingAt, type Prologue } from "./listen-story";
 import { mergeSpans, onHide, spanSeconds, spansOf, startTracking, track, type Span } from "./track";
 
 type Speaker = "caller" | "agent";
@@ -24,6 +33,10 @@ interface Config {
   poster?: boolean;
   base: string;
   site?: string;
+  /** the recorder's: a fixed layout (else from the frame's shape) */
+  layout?: Layout;
+  /** the recorder's: keep text off a tall frame's bottom fifth and right edge (Shorts' buttons and title) */
+  safe?: boolean;
 }
 interface Line {
   speaker: Speaker;
@@ -34,6 +47,10 @@ interface Line {
 /** a karaoke line: who sings it ("both": everyone) */
 interface SongLine extends Omit<Line, "speaker"> {
   speaker: Speaker | "both";
+  /** sung as a solo (staged forward) whatever its length */
+  solo?: boolean;
+  /** the bot gets up on it (and stays up) */
+  stand?: boolean;
 }
 interface Call {
   duration: number;
@@ -46,13 +63,23 @@ interface Call {
   verdicts: [number, number, number, number][];
   /** a stage at t <= 0 began before the clip: its badge is on from the start, no banner */
   stages: [number, string][];
-  /** a song after the call (areyouai): file times */
-  song?: { start: number; end: number; bpm: number; beat: number; lines: SongLine[] };
+  /** a song after the call (areyouai): file times; its banner comes `tease` s before it, the disco ball `ballIn` s */
+  song?: { start: number; end: number; bpm: number; beat: number; tease?: number; ballIn?: number; soloFrom?: number; soloMin?: number; danceFrom?: number; lines: SongLine[] };
+  /** an opening before the call: the call starts at its duration (everything here is on that clock) */
+  prologue?: Prologue;
 }
 
 declare global {
   interface Window {
-    demo?: { duration: number; seek(t: number): void };
+    demo?: {
+      duration: number;
+      /** draws call time t */
+      seek(t: number): void;
+      /** takes an edit, for frames at `fps`: the video's length */
+      edit(cut: Cut, fps: number): number;
+      /** draws video time t of the edit */
+      frame(t: number): void;
+    };
   }
 }
 
@@ -151,6 +178,10 @@ const SONG_PARTS: [number, SongSection, number][] = [
   [130.3, "end", 0.1],
 ];
 
+/** when the song's characters leave their rooms to dance together, and freeze at the end: the parts that start it */
+const TOGETHER: SongSection = "finale";
+const FREEZE: SongSection = "last";
+
 /** where the song is at t: its beat, part and loudness, or null outside it */
 function songAt(song: NonNullable<Call["song"]>, t: number, music: number): SongMoment | null {
   if (t < song.start || t > song.end + 1) return null;
@@ -174,7 +205,17 @@ function songAt(song: NonNullable<Call["song"]>, t: number, music: number): Song
     energy: prev + (e - prev) * clamp01(sectionSince / ramp),
     music,
     swap: both ? t - both.start : null,
+    bpm: song.bpm,
+    ...stagingAt(song, SONG_PARTS.map(([at, s]): [number, string] => [at, s]), t, { together: TOGETHER }),
+    together: partSince(TOGETHER, since),
+    freeze: partSince(FREEZE, since),
   };
+}
+
+/** seconds since the song's first `part` started (`since`: seconds into the song), or null if it has none */
+function partSince(part: SongSection, since: number): number | null {
+  const at = SONG_PARTS.find(([, s]) => s === part)?.[0];
+  return at === undefined ? null : since - at;
 }
 
 /** the call-flow stages worth showing: the banner when it starts, then the badge that stays */
@@ -205,6 +246,8 @@ interface Loaded {
   hangup?: number;
   /** when the end card comes up */
   endAt: number;
+  /** the prologue's drawing, if it has one */
+  prologue?: PrologueLayer;
 }
 interface Loop {
   start: number;
@@ -239,12 +282,16 @@ async function main() {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  // Drawn at the stage's real size (no upscaling, so no blur), up to 1080p.
+  // Drawn at the stage's real size and shape (no upscaling, so no blur), up to 1920 on the long side.
   const resize = () => {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.min(1920, Math.round(stageEl.clientWidth * dpr));
+    const [cw, ch] = [stageEl.clientWidth, stageEl.clientHeight];
+    const k = Math.min(window.devicePixelRatio || 1, 2, 1920 / Math.max(cw, ch, 1));
     renderer.setPixelRatio(1);
-    renderer.setSize(w, Math.round((w * 9) / 16), false);
+    renderer.setSize(Math.round(cw * k), Math.round(ch * k), false);
+    // a frame other than the player's 16:9 sizes the text up (listen.ts realCallsCss)
+    const a = cw / Math.max(ch, 1);
+    stageEl.dataset.shape = a < 0.8 ? "tall" : a < 1.4 ? "square" : "wide";
+    stageEl.classList.toggle("safe", !!cfg.safe && a < 0.8);
   };
   resize();
   await Promise.all([document.fonts.load('20px "Jersey 10"').catch(() => {}), document.fonts.load('20px "Pixelify Sans"').catch(() => {})]);
@@ -260,6 +307,7 @@ async function main() {
   async function load(slug: string): Promise<Loaded> {
     const demo = cfg.demos.find((d) => d.slug === slug) ?? cfg.demos[0]!;
     const call = await fetchCall(demo.slug);
+    cur?.prologue?.remove();
     const levels = {} as Record<Speaker, Uint8Array>;
     const active = {} as Record<Speaker, Float32Array>;
     for (const s of SPEAKERS) {
@@ -270,7 +318,7 @@ async function main() {
     const l: Loaded = {
       demo,
       call,
-      scene: createScene(renderer, demo.scene),
+      scene: createScene(renderer, demo.scene, { layout: cfg.layout }),
       levels,
       active,
       music: Uint8Array.from(atob(call.levels.music ?? ""), (ch) => ch.charCodeAt(0)),
@@ -282,6 +330,8 @@ async function main() {
       songPops: call.song ? popsOf(call.song.lines, SONG_POPS, 8) : [],
       lastWord: Math.max(...call.lines.map((x) => x.end)),
       endAt: 0,
+      // under the end card and the controls
+      prologue: call.prologue && new PrologueLayer(stageEl, call.prologue, $("rc-end")),
     };
     // The police hung up on the bot: his last line, then the click.
     const lastCaller = call.lines.filter((x) => x.speaker === "caller").at(-1);
@@ -324,6 +374,8 @@ async function main() {
     const pause = cur.pauses.find(([a, b]) => t >= a && t < b);
     const buffering = !!pause;
     const talkedOver = [...cur.blunders].reverse().find((b) => b.kind === "talkover" && t >= b.t);
+    // the prologue's camera (a layout, who it's on) and the antenna's blinks
+    const camera = call.prologue && cameraAt(call.prologue, t);
     const m: Moment = {
       t,
       level: { caller: at(cur.levels.caller, 255), agent: at(cur.levels.agent, 255) },
@@ -336,22 +388,35 @@ async function main() {
       flinch: talkedOver ? t - talkedOver.t : null,
       hangup: cur.hangup !== undefined && t >= cur.hangup ? t - cur.hangup : null,
       song,
+      focus: camera?.focus ?? focusAt(song ? call.song!.lines : call.lines, t),
+      layout: camera?.layout,
+      blink: call.prologue && blinkAt(call.prologue, t),
+      ball:
+        call.song?.ballIn && t >= call.song.start - call.song.ballIn
+          ? { since: t - (call.song.start - call.song.ballIn), lead: call.song.ballIn, beat: ((t - call.song.beat) * call.song.bpm) / 60 }
+          : null,
+      lift: camera?.lift,
     };
     scene.render(m);
     const a = scene.anchors();
+    cur.prologue?.draw(t, a);
+    stageEl.dataset.layout = scene.layout();
+    stageEl.toggleAttribute("data-song", !!song);
 
     // the stage's banner as it starts, then its badge in the corner
     const banner = $("rc-banner");
     const badge = $("rc-mode");
-    if (song) {
-      // the song: its banner, then karaoke mode in the corner
+    // the song's banner, `tease` s early (as the call says goodbye), then karaoke mode in the corner
+    const sb = call.song ? songBanner(call.song, t) : null;
+    if (sb && (song || sb.since < BADGE_AFTER || !stage)) {
       banner.textContent = `🎵 ${cur.demo.title.toUpperCase()}`;
-      badge.textContent = "🎤 KARAOKE MODE";
       banner.className = "rc-banner song";
-      badge.className = "rc-mode song";
-      const s = song.since;
-      banner.style.setProperty("--s", String(s > 3.5 ? 0 : s > 3.1 ? (3.5 - s) / 0.4 : pop(s)));
-      badge.style.setProperty("--s", String(s < 3.3 ? 0 : pop(s - 3.3)));
+      banner.style.setProperty("--s", String(sb.banner));
+      // the stage's badge stays until karaoke mode takes its place
+      const st = stage && sb.since < BADGE_AFTER ? STAGE_BANNER[stage[1]]! : undefined;
+      badge.textContent = st ? st.badge : "🎤 KARAOKE MODE";
+      badge.className = `rc-mode${st ? (st.ok ? " ok" : "") : " song"}`;
+      badge.style.setProperty("--s", String(st ? 1 : sb.badge));
     } else if (stage) {
       const st = STAGE_BANNER[stage[1]]!;
       banner.classList.remove("song");
@@ -368,6 +433,10 @@ async function main() {
       banner.style.setProperty("--s", "0");
       badge.style.setProperty("--s", "0");
     }
+    // a prologue's card or dim that clears the stage: no badge under it, back with a pop after
+    const clear = call.prologue ? clearAt(call.prologue, t) : { on: false, since: null };
+    if (clear.on) badge.style.setProperty("--s", "0");
+    else if (clear.since !== null && clear.since < 0.45 && badge.style.getPropertyValue("--s") !== "0") badge.style.setProperty("--s", String(pop(clear.since)));
 
     // beeps, blunders and emoji over the heads
     for (const s of SPEAKERS) {
@@ -411,8 +480,10 @@ async function main() {
 
     const below = phone.matches && !cfg.render;
     const names = { caller: cur.demo.caller, agent: "CALLSITTER BOT", both: "🎤 EVERYONE" };
-    const lines = call.song && t >= call.song.start ? call.song.lines : call.lines;
-    subs.show(lines, t, names, below ? $("rc-caption") : $("rc-subs"), below ? 1 : 2);
+    const lines = clear.on ? [] : call.song && t >= call.song.start ? call.song.lines : call.lines;
+    // a tall frame: bigger text, so fewer words to a line
+    // under the stage on a phone: both bubbles of a quick exchange too
+    subs.show(lines, t, names, below ? $("rc-caption") : $("rc-subs"), 2, below ? 20 : stageEl.dataset.shape === "tall" ? 14 : undefined);
     const end = clamp01((t - cur.endAt) / 0.6);
     $("rc-end").style.setProperty("--o", String(end));
     // the end card has its own buttons
@@ -427,8 +498,23 @@ async function main() {
       $("rc-site").hidden = false;
       $("rc-site").textContent = cfg.site.toUpperCase();
     }
-    // a few seconds past the audio, so the end card gets screen time
-    window.demo = { duration: Math.max(cur.call.duration, cur.endAt + 3), seek: draw };
+    let edit: { pieces: ReturnType<typeof resolveCut>["pieces"]; overlays: EditOverlays } | null = null;
+    window.demo = {
+      // a few seconds past the audio, so the end card gets screen time
+      duration: Math.max(cur.call.duration, cur.endAt + 3),
+      seek: draw,
+      edit(cut, fps) {
+        const r = resolveCut(cut, cur!.call.song, fps);
+        edit = { pieces: r.pieces, overlays: new EditOverlays(stageEl, cut.overlays ?? [], r.duration) };
+        return r.duration;
+      },
+      frame(t) {
+        if (!edit) throw new Error("no edit: call demo.edit(cut) first");
+        const callT = callTimeAt(edit.pieces, t);
+        draw(callT);
+        edit.overlays.draw(t, callT);
+      },
+    };
     draw(0);
     document.body.dataset.ready = "1";
     return;
@@ -543,6 +629,18 @@ async function main() {
     if (audio.paused) void audio.play();
     else audio.pause();
   };
+  // fullscreen: the button, a phone turned to landscape while playing, and out by ✕, Escape, Back or portrait (listen-fullscreen.ts)
+  fullscreen({
+    root: $("rc-screen"),
+    button: $("rc-fs"),
+    close: $("rc-fsx"),
+    playing,
+    changed(on, how) {
+      track("click", { action: on ? "fullscreen" : "exit_fullscreen", target: how, ...position() }, audioSlug ?? undefined);
+      resize();
+      draw(now());
+    },
+  });
   const seekBar = $("rc-seek");
   const seekTo = (e: PointerEvent) => {
     if (!cur) return;
@@ -603,6 +701,23 @@ function smooth(levels: Uint8Array, fps: number): Float32Array {
     out[i] = Math.min(1, Math.max(out[i]!, v) * 1.5);
   }
   return out;
+}
+
+/** who spoke last, 0 the caller and 1 the bot, eased over 0.6 s from the one before; lines under a second don't count */
+function focusAt(lines: SongLine[], t: number): number {
+  let from = 0;
+  let to = 0;
+  let at = -Infinity;
+  const ease = (x: number) => x * x * (3 - 2 * x);
+  for (const l of lines) {
+    if (l.start > t) break;
+    const next = l.speaker === "agent" ? 1 : l.speaker === "caller" ? 0 : to;
+    if (next === to || l.end - l.start < 1) continue;
+    from = from + (to - from) * ease(clamp01((l.start - at) / 0.6));
+    to = next;
+    at = l.start;
+  }
+  return from + (to - from) * ease(clamp01((t - at) / 0.6));
 }
 
 /** Jev's latest verdict before t, eased over half a second from the one before */
@@ -691,15 +806,17 @@ function popsOf(lines: SongLine[], rules: [RegExp, string, string?][], sameGap: 
 /** the latest line or two as chat bubbles, each word lighting up as it's said */
 class Subtitles {
   private shown = "";
+  private captionHeight = 0;
   private spans: { el: HTMLElement; t: number }[] = [];
 
   reset() {
     this.shown = "";
   }
 
-  show(lines: SongLine[], t: number, names: Record<SongLine["speaker"], string>, into: HTMLElement, max: number) {
-    const pick = lines.filter((l) => l.start <= t && t < l.end + 1.5).slice(-max);
-    const key = `${into.id}|${pick.map((l) => `${l.start}:${windowStart(l, t, max)}`).join("|")}`;
+  /** the latest line, and the ones before it in a quick exchange (shownLines), `max` at most, `keep` words of each at most */
+  show(lines: SongLine[], t: number, names: Record<SongLine["speaker"], string>, into: HTMLElement, max: number, keep = max === 1 ? 20 : 26) {
+    const pick = shownLines(lines, t, max);
+    const key = `${into.id}|${pick.map((l) => `${l.start}:${windowStart(l, t, keep)}`).join("|")}`;
     if (key !== this.shown) {
       // moved between the stage and the caption box (phone): clear the other
       if (!this.shown.startsWith(`${into.id}|`)) for (const id of ["rc-subs", "rc-caption"]) document.getElementById(id)?.replaceChildren();
@@ -713,7 +830,7 @@ class Subtitles {
         who.className = "who";
         who.textContent = names[l.speaker];
         div.append(who);
-        const from = windowStart(l, t, max);
+        const from = windowStart(l, t, keep);
         if (from > 0) div.append("… ");
         for (const [wt, text] of l.words.slice(from)) {
           const span = document.createElement("i");
@@ -725,19 +842,28 @@ class Subtitles {
         }
         into.append(div);
       }
+      // the caption box under the stage grows and shrinks smoothly with its bubbles (CSS transition on height)
+      if (into.id === "rc-caption") {
+        into.style.height = "auto";
+        const h = into.getBoundingClientRect().height;
+        into.style.height = `${this.captionHeight}px`;
+        void into.offsetHeight;
+        into.style.height = `${h}px`;
+        this.captionHeight = h;
+      }
     }
     for (const s of this.spans) s.el.classList.toggle("on", s.t <= t);
   }
 }
 
-/** long lines scroll: once past the first screenful, show from 8 words back, in steps */
-function windowStart(l: SongLine, t: number, max: number): number {
-  const keep = max === 1 ? 20 : 26;
+/** long lines scroll: once past the first `keep` words, show from 8 words back (4 in a short window), in steps */
+function windowStart(l: SongLine, t: number, keep: number): number {
   if (l.words.length <= keep) return 0;
   let i = 0;
   while (i + 1 < l.words.length && l.words[i + 1]![0] <= t) i++;
-  const step = keep - 14;
-  return i < keep - 4 ? 0 : Math.min(l.words.length - keep, Math.floor((i - 8) / step) * step);
+  const back = keep < 20 ? 4 : 8;
+  const step = keep < 20 ? keep - 8 : keep - 14;
+  return i < keep - 4 ? 0 : Math.min(l.words.length - keep, Math.floor((i - back) / step) * step);
 }
 
 function place(el: HTMLElement, [x, y]: [number, number]) {
