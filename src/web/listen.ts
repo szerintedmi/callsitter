@@ -43,7 +43,7 @@ export const DEMOS: Demo[] = [
   {
     slug: "police-scam",
     scene: "police",
-    title: "The police",
+    title: "Police. Again",
     caller: "“DCI CLAUDE TAYLOR”",
     outcome: "13 minutes of a scammer's day, gone.\nNo real details given.",
   },
@@ -125,6 +125,8 @@ const stage = `<div class="rc-stage" id="rc-stage">
 
 export const github = `<svg viewBox="0 0 16 16" width="28" height="28" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.06-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>`;
 
+const GITHUB = "https://github.com/szerintedmi/callsitter";
+
 /** "14:26:40": hours, minutes, seconds */
 const hms = (s: number) => [Math.floor(s / 3600), Math.floor(s / 60) % 60, Math.floor(s) % 60].map((n, i) => (i ? String(n).padStart(2, "0") : String(n))).join(":");
 
@@ -146,39 +148,54 @@ export const head = (title: string, description: string, css: string) => `<!doct
 
 /**
  * The public pages' top bar (home, /bot, the game at /play): the brand (home), scammer time wasted
- * (#wasted: the game page's script keeps it live), the bot page's button (not on it), GitHub.
- * `player`: the game page's player chip, first on the right (topCss; public.ts moves it on a phone).
+ * (#wasted: the game page's script keeps it live), the bot page's button (not on it), GitHub (the
+ * home page has it in its footer instead, and the bot page's button in its hero: then the counter
+ * sits on the right). `player`: the game page's player chip, first on the right (topCss; public.ts
+ * moves it on a phone).
  */
-export const top = (base: string, wastedSeconds: number, o: { botLink: boolean; player?: string }) =>
-  `<header class="rc-top"><a class="rc-brand" href="${base}">${logo}CALLSITTER</a><p class="rc-wasted">Scammer time wasted: <b id="wasted">${hms(wastedSeconds)}</b></p><div class="rc-right">${
-    o.player ?? ""
-  }${o.botLink ? `<a class="rc-own" href="${base}bot">GET YOUR OWN BOT</a>` : ""}<a class="rc-gh" href="https://github.com/szerintedmi/callsitter" aria-label="CallSitter on GitHub">${github}</a></div></header>`;
+export const top = (base: string, wastedSeconds: number, o: { botLink: boolean; github?: boolean; player?: string }) => {
+  const right = `${o.player ?? ""}${o.botLink ? `<a class="rc-own" href="${base}bot">GET YOUR OWN BOT</a>` : ""}${
+    o.github === false ? "" : `<a class="rc-gh" href="${GITHUB}" aria-label="CallSitter on GitHub">${github}</a>`
+  }`;
+  return `<header class="rc-top${right ? "" : " solo"}"><a class="rc-brand" href="${base}">${logo}CALLSITTER</a><p class="rc-wasted">Scammer time wasted: <b id="wasted">${hms(wastedSeconds)}</b></p>${
+    right ? `<div class="rc-right">${right}</div>` : ""
+  }</header>`;
+};
 
-/** The public pages' last line: the terms and the privacy notice (legal.ts; topCss). */
-export const legal = (base: string) =>
-  `<p class="rc-legal"><a href="${base}terms">Terms</a> · <a href="${base}privacy">Privacy</a></p>`;
+/** The public pages' last line: the terms and the privacy notice (legal.ts; topCss); on the home page, GitHub first. */
+export const legal = (base: string, o: { github?: boolean } = {}) => {
+  const links = `<a href="${base}terms">Terms</a> · <a href="${base}privacy">Privacy</a>`;
+  return o.github
+    ? `<footer class="rc-legal rc-foot"><a class="rc-gh" href="${GITHUB}">${github}GitHub</a><span aria-hidden="true">|</span><p>${links}</p></footer>`
+    : `<p class="rc-legal">${links}</p>`;
+};
 
-/** The home page: the recordings, and a call to try the bot from the browser (the games at /play). */
+/** The home page: the pitch with the bot page and the games (/play), then the recordings. */
 export function realCallsPage(
   base: string,
   o: { selected: string; autoplay: boolean; wastedSeconds: number; /** page analytics on (analytics.yaml) */ analytics?: boolean },
 ): string {
   const config: PlayerConfig = { demos: DEMOS, selected: o.selected, autoplay: o.autoplay, render: false, base };
   const tabs = DEMOS.map(
-    (x) => `<a class="rc-tab s-${x.scene}" href="${base}listen/${x.slug}" data-slug="${x.slug}" data-notrack>${esc(x.title)}</a>`,
+    (x, i) =>
+      `<a class="rc-tab s-${x.scene}" href="${base}listen/${x.slug}" data-slug="${x.slug}" data-notrack><i>${String(i + 1).padStart(2, "0")}</i>${esc(x.title)}</a>`,
   ).join("");
   return `${head("CallSitter", "Real calls to my phone, answered by CallSitter, the bot that wastes scammers' time.", rootCss + topCss + homeCss + realCallsCss)}
-<body${o.analytics ? ` data-analytics="1"` : ""}>
+<body class="home"${o.analytics ? ` data-analytics="1"` : ""}>
 <div class="rc-col">
-${top(base, o.wastedSeconds, { botLink: true })}
+${top(base, o.wastedSeconds, { botLink: false, github: false })}
 <main class="rc" id="rc">
-  <h1 class="rc-h"><b>REAL CALLS.</b><span>A bot answers my phone. Scammers meet their match.</span></h1>
-  <nav class="rc-tabs" aria-label="Recordings">${tabs}</nav>
-  ${stage}
-  <div class="rc-caption" id="rc-caption"></div>
-  <div class="rc-try"><a class="rc-cta" href="${base}play">PLAY THE BOT <i>▶</i></a><span>Call from your browser</span></div>
+  <section class="hero">
+    <div><p class="hero-kick">CALL SCREENING. WITH ATTITUDE.</p><h1>LET THE BOT TAKE IT.</h1><p class="hero-sub">My bot answers. Friends get through. Scammers meet their match.</p></div>
+    <div class="hero-cta"><a class="hero-own" href="${base}bot">GET YOUR OWN BOT</a><a class="hero-play" href="${base}play"><b>PLAY THE BOT <i>↗</i></b><span>Can you fool it?</span></a></div>
+  </section>
+  <h2 class="rc-h"><b>REAL CALLS.</b><span>Actual recordings from my phone.</span></h2>
+  <div class="rc-player">
+    <div>${stage}<div class="rc-caption" id="rc-caption"></div></div>
+    <nav class="rc-tabs" aria-label="Recordings">${tabs}</nav>
+  </div>
 </main>
-${legal(base)}
+${legal(base, { github: true })}
 </div>
 <audio id="rc-audio" preload="metadata" playsinline></audio>
 <script type="application/json" id="rc-config">${json(config)}</script>
@@ -301,30 +318,80 @@ export const topCss = `
 }
 `;
 
+// .rc-h is the bot page's title too; the rest is the home page's: the hero, then the stage with
+// the recordings' list on its right (under it on a narrow screen).
 const homeCss = `
 .rc{padding:0 0 16px}
 .rc-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 16px;margin:14px 0 12px;font-weight:400}
 .rc-h b{font-family:var(--disp);font-weight:400;font-size:56px;line-height:.85;letter-spacing:.03em;color:var(--amb);text-shadow:3px 3px 0 #000}
 .rc-h span{font-size:18px;color:var(--paper)}
-.rc-tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:10px}
-.rc-tab{display:flex;align-items:center;justify-content:center;min-height:42px;padding:6px 10px;text-align:center;font-family:var(--disp);font-size:24px;line-height:1;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);text-decoration:none;box-shadow:inset 0 0 0 3px var(--line)}
-.rc-tab:hover{color:var(--paper)}
-.rc-tab[aria-current]{background:var(--amb);color:var(--ink);box-shadow:4px 4px 0 #000}
-.rc-try{display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:18px}
-.rc-try span{font-size:14px;color:var(--dim)}
-.rc-cta{display:block;padding:9px 28px 11px;background:var(--red);color:var(--paper);text-decoration:none;font-family:var(--disp);font-size:40px;line-height:1;letter-spacing:.04em;box-shadow:6px 6px 0 #000}
-.rc-cta i{font-style:normal;font-size:.7em;vertical-align:.08em}
-.rc-cta:hover{transform:translate(-1px,-1px);box-shadow:7px 7px 0 #000}
-.rc-cta:active{transform:translate(2px,2px);box-shadow:2px 2px 0 #000}
+.home .rc-col{width:min(1132px,100% - 32px)}
+.rc-top.solo{grid-template-columns:1fr auto}
+.rc-top.solo .rc-wasted{justify-self:end}
+.hero{display:grid;grid-template-columns:1fr minmax(240px,296px);align-items:center;gap:20px 32px;padding:30px 0 28px;border-bottom:3px solid var(--line)}
+.hero-kick{margin:0;font-size:20px;font-weight:600;letter-spacing:.06em;color:var(--dim)}
+.hero h1{margin:6px 0 10px;font-family:var(--disp);font-weight:400;font-size:clamp(56px,7.8vw,100px);line-height:.85;letter-spacing:.03em;color:var(--amb);text-shadow:4px 4px 0 #000}
+.hero-sub{margin:0;font-size:21px;line-height:1.3}
+.hero-cta{display:flex;flex-direction:column;gap:14px}
+.hero-own,.hero-play{display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center;text-decoration:none;line-height:1}
+.hero-own{padding:13px 16px 15px;background:var(--amb);color:var(--ink);font-family:var(--disp);font-size:34px;letter-spacing:.04em;box-shadow:5px 5px 0 #000}
+.hero-play{padding:10px 16px 12px;color:var(--paper);box-shadow:inset 0 0 0 3px #a8a1b0}
+.hero-play b{font-family:var(--disp);font-weight:400;font-size:30px;letter-spacing:.04em}
+.hero-play i{font-style:normal;font-family:var(--text);font-size:.7em}
+.hero-play span{font-size:15px;color:#c8c2cf}
+.hero-own:hover{transform:translate(-1px,-1px);box-shadow:6px 6px 0 #000}
+.hero-own:active{transform:translate(2px,2px);box-shadow:2px 2px 0 #000}
+.hero-play:hover{background:var(--ink2);box-shadow:inset 0 0 0 3px var(--paper)}
+.home .rc-h{margin:22px 0 16px}
+.home .rc-h span{font-size:19px;color:#c8c2cf}
+.rc-player{display:grid;grid-template-columns:1fr minmax(220px,268px);gap:16px;align-items:stretch}
+.rc-tabs{display:flex;flex-direction:column;box-shadow:inset 0 0 0 3px var(--line)}
+.rc-tab{flex:1 1 0;display:flex;align-items:center;gap:20px;min-height:44px;padding:6px 20px;font-size:21px;line-height:1.1;color:#c8c2cf;text-decoration:none}
+.rc-tab+.rc-tab{border-top:3px solid var(--line)}
+.rc-tab i{font-style:normal;color:var(--dim);font-variant-numeric:tabular-nums}
+.rc-tab:hover{color:var(--paper);background:var(--ink2)}
+.rc-tab[aria-current]{color:var(--paper);background:var(--ink2);box-shadow:inset 6px 0 0 var(--amb)}
+.rc-tab[aria-current] i{color:var(--paper)}
+.rc-foot{display:flex;justify-content:flex-end;align-items:center;gap:20px;margin-top:8px;padding:18px 0 24px;border-top:3px solid var(--line)}
+.rc-foot,.rc-foot a{font-size:15px}
+.rc-foot p{margin:0}
+.rc-foot .rc-gh{align-items:center;gap:10px;color:var(--dim);text-decoration:none}
+.rc-foot .rc-gh svg{width:22px;height:22px}
+@media (max-width:860px){
+.hero{grid-template-columns:1fr}
+.hero-cta{flex-direction:row}
+.hero-cta a{flex:1 1 0;justify-content:center}
+.rc-player{grid-template-columns:1fr}
+.rc-tab{flex:none}
+}
 @media (max-width:640px){
 .rc{padding:0 0 24px}
-.rc-h,.rc-tabs{margin-left:16px;margin-right:16px}
+.rc-h{margin-left:16px;margin-right:16px}
 .rc-h{flex-direction:column;gap:6px;margin-top:12px;margin-bottom:12px}
 .rc-h b{font-size:48px}
 .rc-h span{font-size:15px}
-.rc-tabs{grid-template-columns:repeat(3,1fr);gap:6px}
-.rc-tab{min-height:40px;font-size:18px;padding:4px 6px}
-.rc-try{margin:20px 16px 0}
+.home .rc-col{padding:0 16px}
+.home .rc-top{padding-left:0;padding-right:0;flex-wrap:nowrap;align-items:center}
+.rc-top.solo .rc-wasted{order:0;flex:0 1 auto;margin-left:auto;max-width:9.5em;white-space:normal;font-size:12px;line-height:1.3}
+.rc-top.solo .rc-wasted b{font-size:16px;margin-left:2px;vertical-align:-1px}
+.hero{gap:14px;padding:16px 0 20px}
+.hero-kick{font-size:15px}
+.hero h1{margin:4px 0 8px;font-size:clamp(44px,14vw,64px);text-shadow:3px 3px 0 #000}
+.hero-sub{font-size:17px}
+.hero-cta{flex-direction:column;gap:10px}
+.hero-own{padding:9px 12px 11px;font-size:26px;box-shadow:4px 4px 0 #000}
+.hero-play{padding:8px 12px 10px}
+.hero-play b{font-size:24px}
+.hero-play span{font-size:13px}
+.home .rc-h{margin:16px 0 12px;gap:4px}
+.home .rc-h b{font-size:44px}
+.home .rc-h span{font-size:15px}
+.home .rc-stage{box-shadow:0 0 0 3px var(--line)}
+.home .rc-caption{padding:10px 0 0}
+.rc-player{gap:12px}
+.rc-tab{min-height:38px;padding:4px 14px;gap:16px;font-size:17px}
+.rc-tab[aria-current]{box-shadow:inset 5px 0 0 var(--amb)}
+.rc-foot{justify-content:center;gap:14px;padding:14px 0 16px}
 }
 `;
 

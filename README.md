@@ -4,9 +4,9 @@ An AI that answers my phone. Scammers get their time wasted, sales calls get a p
 
 ## Hear it on real calls
 
-| <a href="https://callsitter.org/listen/areyouai"><img src="demos/posters/areyouai.jpg" alt="Are you AI?" width="170"></a> | <a href="https://callsitter.org/listen/cold-call"><img src="demos/posters/cold-call.jpg" alt="The cold call" width="170"></a> | <a href="https://callsitter.org/listen/police-scam"><img src="demos/posters/police-scam.jpg" alt="The police" width="170"></a> | <a href="https://callsitter.org/listen/crypto-bot"><img src="demos/posters/crypto-bot.jpg" alt="Bot vs bot" width="170"></a> | <a href="https://callsitter.org/listen/electrician"><img src="demos/posters/electrician.jpg" alt="The electrician" width="170"></a> |
+| <a href="https://callsitter.org/listen/areyouai"><img src="demos/posters/areyouai.jpg" alt="Are you AI?" width="170"></a> | <a href="https://callsitter.org/listen/cold-call"><img src="demos/posters/cold-call.jpg" alt="The cold call" width="170"></a> | <a href="https://callsitter.org/listen/police-scam"><img src="demos/posters/police-scam.jpg" alt="Police. Again" width="170"></a> | <a href="https://callsitter.org/listen/crypto-bot"><img src="demos/posters/crypto-bot.jpg" alt="Bot vs bot" width="170"></a> | <a href="https://callsitter.org/listen/electrician"><img src="demos/posters/electrician.jpg" alt="The electrician" width="170"></a> |
 | :-: | :-: | :-: | :-: | :-: |
-| **Are you AI?**<br>Scam · ¾ min + the song | **The cold call**<br>Spam · 1 min | **The police**<br>Scam · 13 min | **Bot vs bot**<br>Scam · 4 min | **The electrician**<br>Genuine · 1½ min |
+| **Are you AI?**<br>Scam · ¾ min + the song | **The cold call**<br>Spam · 1 min | **Police. Again**<br>Scam · 13 min | **Bot vs bot**<br>Scam · 4 min | **The electrician**<br>Genuine · 1½ min |
 
 ## Try it
 

@@ -2,7 +2,7 @@
 
 Served on the public host, the one Telnyx calls (`https://callsitter.org/`; a preview at `/public` on the admin host).
 
-- `/`: the real-call recordings (`src/web/listen.ts`); `/listen/<slug>` opens one, playing. Adding one: [demos/README.md](../demos/README.md).
+- `/`: the pitch (to the bot page and the game), then the real-call recordings (`src/web/listen.ts`); `/listen/<slug>` opens one, playing. Adding one: [demos/README.md](../demos/README.md).
 - `/play`: an arcade game-select screen with two games (`config/games.yaml`, scoring in `src/core/game.ts`).
 - `/bot`: a "Get your own bot" waitlist (`POST /call/waitlist`).
 - `/terms`, `/privacy`.
