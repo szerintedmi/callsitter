@@ -11,7 +11,7 @@ import * as THREE from "three";
 import { callTimeAt, resolveCut, type Cut } from "./listen-cut";
 import { EditOverlays } from "./listen-edit";
 import { fullscreen } from "./listen-fullscreen";
-import { PrologueLayer } from "./listen-prologue";
+import { PrologueLayer, splitLine } from "./listen-prologue";
 import { createScene, type BlunderKind, type CallScene, type Layout, type Moment, type SceneKind, type SongMoment, type SongSection } from "./listen-scene";
 import { BADGE_AFTER, blinkAt, cameraAt, clearAt, shownLines, songBanner, stagingAt, type Prologue } from "./listen-story";
 import { mergeSpans, onHide, spanSeconds, spansOf, startTracking, track, type Span } from "./track";
@@ -408,10 +408,11 @@ async function main() {
     // the stage's banner as it starts, then its badge in the corner
     const banner = $("rc-banner");
     const badge = $("rc-mode");
+    stageEl.removeAttribute("data-banner");
     // the song's banner, `tease` s early (as the call says goodbye), then karaoke mode in the corner
     const sb = call.song ? songBanner(call.song, t) : null;
     if (sb && (song || sb.since < BADGE_AFTER || !stage)) {
-      banner.textContent = `🎵 ${cur.demo.title.toUpperCase()}`;
+      splitLine(banner, `🎵 ${cur.demo.title.toUpperCase()}`);
       banner.className = "rc-banner song";
       banner.style.setProperty("--s", String(sb.banner));
       // the stage's badge stays until karaoke mode takes its place
@@ -423,13 +424,16 @@ async function main() {
       const st = STAGE_BANNER[stage[1]]!;
       banner.classList.remove("song");
       badge.classList.remove("song");
-      banner.textContent = st.banner;
+      splitLine(banner, st.banner);
       badge.textContent = st.badge;
       banner.classList.toggle("ok", st.ok);
       badge.classList.toggle("ok", st.ok);
       // already on when the clip starts: no banner
       const s = sinceStage ?? -1;
-      banner.style.setProperty("--s", String(s < 0 || s > 3.5 ? 0 : s > 3.1 ? (3.5 - s) / 0.4 : pop(s)));
+      const bs = s < 0 || s > 3.5 ? 0 : s > 3.1 ? (3.5 - s) / 0.4 : pop(s);
+      banner.style.setProperty("--s", String(bs));
+      // a tall frame's stacked rooms: the subtitles make way for it (listen.ts shapeCss)
+      if (bs > 0) stageEl.setAttribute("data-banner", "");
       badge.style.setProperty("--s", String(s < 3.3 ? 0 : pop(s - 3.3)));
     } else {
       banner.style.setProperty("--s", "0");
@@ -483,9 +487,8 @@ async function main() {
     const below = phone.matches && !cfg.render;
     const names = { caller: cur.demo.caller, agent: "CALLSITTER BOT", both: "🎤 EVERYONE" };
     const lines = clear.on ? [] : call.song && t >= call.song.start ? call.song.lines : call.lines;
-    // a tall frame: bigger text, so fewer words to a line
-    // under the stage on a phone: both bubbles of a quick exchange too
-    subs.show(lines, t, names, below ? $("rc-caption") : $("rc-subs"), 2, below ? 20 : stageEl.dataset.shape === "tall" ? 14 : undefined);
+    // under the stage on a phone: both bubbles of a quick exchange too; a tall frame (Shorts): short runs of a line, big
+    subs.show(lines, t, names, below ? $("rc-caption") : $("rc-subs"), 2, below ? 20 : undefined, !below && stageEl.dataset.shape === "tall" ? TALL_CHUNK : undefined);
     const end = clamp01((t - cur.endAt) / 0.6);
     $("rc-end").style.setProperty("--o", String(end));
     // the end card has its own buttons
@@ -508,6 +511,11 @@ async function main() {
       edit(cut, fps) {
         const r = resolveCut(cut, cur!.call.song, fps);
         edit = { pieces: r.pieces, overlays: new EditOverlays(stageEl, cut.overlays ?? [], r.duration) };
+        const p = cur!.call.prologue;
+        if (cut.hide?.length && p && cur!.prologue) {
+          cur!.prologue.remove();
+          cur!.prologue = new PrologueLayer(stageEl, { ...p, beats: p.beats.filter((b) => !(b.type === "card" && cut.hide!.includes(b.text))) }, $("rc-end"));
+        }
         return r.duration;
       },
       frame(t) {
@@ -815,10 +823,14 @@ class Subtitles {
     this.shown = "";
   }
 
-  /** the latest line, and the ones before it in a quick exchange (shownLines), `max` at most, `keep` words of each at most */
-  show(lines: SongLine[], t: number, names: Record<SongLine["speaker"], string>, into: HTMLElement, max: number, keep = max === 1 ? 20 : 26) {
+  /**
+   * the latest line, and the ones before it in a quick exchange (shownLines), `max` at most, `keep` words of each at most;
+   * `chunk`: instead, each line in runs of at most that many words, the one being said (chunkAt)
+   */
+  show(lines: SongLine[], t: number, names: Record<SongLine["speaker"], string>, into: HTMLElement, max: number, keep = max === 1 ? 20 : 26, chunk?: number) {
     const pick = shownLines(lines, t, max);
-    const key = `${into.id}|${pick.map((l) => `${l.start}:${windowStart(l, t, keep)}`).join("|")}`;
+    const span = (l: SongLine): [number, number] => (chunk ? chunkAt(l, t, chunk) : [windowStart(l, t, keep), l.words.length]);
+    const key = `${into.id}|${pick.map((l) => `${l.start}:${span(l)[0]}`).join("|")}`;
     if (key !== this.shown) {
       // moved between the stage and the caption box (phone): clear the other
       if (!this.shown.startsWith(`${into.id}|`)) for (const id of ["rc-subs", "rc-caption"]) document.getElementById(id)?.replaceChildren();
@@ -832,9 +844,9 @@ class Subtitles {
         who.className = "who";
         who.textContent = names[l.speaker];
         div.append(who);
-        const from = windowStart(l, t, keep);
-        if (from > 0) div.append("… ");
-        for (const [wt, text] of l.words.slice(from)) {
+        const [from, to] = span(l);
+        if (from > 0 && !chunk) div.append("… ");
+        for (const [wt, text] of l.words.slice(from, to)) {
           const span = document.createElement("i");
           span.textContent = text.trimEnd();
           // what was beeped or masked: "<my name>", "*********mi"
@@ -856,6 +868,47 @@ class Subtitles {
     }
     for (const s of this.spans) s.el.classList.toggle("on", s.t <= t);
   }
+}
+
+/** a tall frame's subtitles: runs of at most this many words, like Shorts' and Reels' captions */
+const TALL_CHUNK = 6;
+
+/** words a run shouldn't end on (they lead into the next): a cut moves off them */
+const LEANS_ON = /^(a|an|the|to|of|in|on|as|and|or|but|my|your|our|I|I'm|you're|it's|is|are|was|that|with|for|real|cuz)$/i;
+const CLAUSE_END = /[.?!,…:;]\s*$/;
+
+/**
+ * The run of `l`'s words being said at t, [from, to). The line splits at its clauses (a clause of one
+ * or two words joins the next, the last the one before), and a clause longer than `size` words into
+ * even runs, each cut moved to the nearest word that doesn't lead into the next ("a", "I'm", "real"…).
+ */
+function chunkAt(l: SongLine, t: number, size: number): [number, number] {
+  const words = l.words.map(([, w]) => w.trim());
+  const clauses: [number, number][] = [];
+  let from = 0;
+  for (const [i, w] of words.entries()) {
+    if (i === words.length - 1 || (CLAUSE_END.test(w) && i + 1 - from >= 3)) {
+      clauses.push([from, i + 1]);
+      from = i + 1;
+    }
+  }
+  const last = clauses.at(-1);
+  if (clauses.length > 1 && last && last[1] - last[0] < 3) clauses.splice(-2, 2, [clauses.at(-2)![0], last[1]]);
+  const leans = (i: number) => LEANS_ON.test(words[i]!.replace(/[.?!,…:;]+$/, ""));
+  const starts: number[] = [];
+  for (const [a, b] of clauses) {
+    starts.push(a);
+    const runs = Math.ceil((b - a) / size);
+    for (let k = 1; k < runs; k++) {
+      const even = a + Math.round(((b - a) * k) / runs);
+      // the cut is before word `c`: the word before it shouldn't lean on it
+      const c = [0, 1, -1, 2, -2].map((d) => even + d).find((c) => c > starts.at(-1)! + 1 && c < b - 1 && !leans(c - 1)) ?? even;
+      starts.push(c);
+    }
+  }
+  let k = 0;
+  while (k + 1 < starts.length && l.words[starts[k + 1]!]![0] <= t) k++;
+  return [starts[k]!, starts[k + 1] ?? l.words.length];
 }
 
 /** long lines scroll: once past the first `keep` words, show from 8 words back (4 in a short window), in steps */

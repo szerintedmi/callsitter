@@ -24,6 +24,7 @@
 // with short crossfades. The cut file (src/web/client/listen-cut.ts has its types):
 //
 // cut.json {"fade": 0.04,                                 the crossfade at every cut, s (default 0.04)
+//           "hide": ["My *AI bot* picks up."],             the prologue's cards to leave out, by their text
 //           "segments": [                                 shown in order, end to end
 //             {"from": 3.2, "to": 11.5},                  a stretch of the call (its own seconds)
 //             {"from": 64.6, "to": 81, "snap": "bar"},    ends rounded to the song's bars ("beat": beats),
@@ -193,9 +194,10 @@ async function cutAudio(pieces: Piece[], duration: number, src: string, wav: str
   const graph = [
     `[0:a]asplit=${sounding.length}${sounding.map((_, i) => `[s${i}]`).join("")}`,
     ...chains,
-    `${sounding.map((_, i) => `[p${i}]`).join("")}amix=inputs=${sounding.length}:normalize=0:dropout_transition=0,apad,atrim=end=${duration}[out]`,
+    // apad=whole_dur ends the padding itself: an endless apad cut by atrim ran forever with several pieces
+    `${sounding.map((_, i) => `[p${i}]`).join("")}amix=inputs=${sounding.length}:normalize=0:dropout_transition=0,apad=whole_dur=${duration}[out]`,
   ].join(";");
-  await ffmpeg(["-i", src, "-filter_complex", graph, "-map", "[out]", "-c:a", "pcm_s16le", wav]);
+  await ffmpeg(["-i", src, "-filter_complex", graph, "-map", "[out]", "-t", String(duration), "-c:a", "pcm_s16le", wav]);
 }
 
 try {
