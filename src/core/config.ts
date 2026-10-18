@@ -541,6 +541,9 @@ export const ChannelLimits = z.strictObject({
   max_call_seconds: z.number().int().positive().nullable().default(null),
 });
 export const LimitsConfig = z.strictObject({
+  // Per-IP limits (public per caller, sign-ups, analytics) count an IPv6 client by this prefix
+  // of its address (src/core/ip.ts): it can pick a new address within its /64 at will.
+  ipv6_prefix: z.number().int().min(16).max(128).default(64),
   phone: ChannelLimits.prefault({}),
   test: ChannelLimits.prefault({}),
   public: ChannelLimits.prefault({}),

@@ -406,6 +406,10 @@ describe("public page (fake OpenAI)", () => {
     // Concurrent requests can't all slip past the per-IP limit.
     const burst = await Promise.all([1, 2, 3].map(() => call(undefined, { "cf-connecting-ip": "10.9.9.8" })));
     expect(burst.map((r) => r.status).sort()).toEqual([200, 429, 429]);
+    // IPv6 counts by its /64: another address in it is the same caller.
+    const v6 = (await (await call(undefined, { "cf-connecting-ip": "2001:db8:9:9::1" })).json()) as { callId: string };
+    await hangUp(v6.callId);
+    expect((await call(undefined, { "cf-connecting-ip": "2001:db8:9:9:abcd::2" })).status).toBe(429);
     const [won] = await Promise.all(burst.map((r) => r.json() as Promise<{ callId?: string }>)).then((b) => b.filter((x) => x.callId));
     await hangUp(won!.callId!);
     // Counted from the call list: a restart doesn't reset it.
@@ -472,10 +476,15 @@ describe("public page (fake OpenAI)", () => {
     expect((await notify({ email: "b@example.com" }, { "cf-connecting-ip": "10.7.7.5" })).status).toBe(204);
     expect((await notify({ email: "c@example.com" }, { "cf-connecting-ip": "10.7.7.5" })).status).toBe(204);
     expect((await notify({ email: "d@example.com" }, { "cf-connecting-ip": "10.7.7.5" })).status).toBe(429);
+    expect((await notify({ email: "e@example.com" }, { "cf-connecting-ip": "2001:db8:7::1" })).status).toBe(204);
+    expect((await notify({ email: "f@example.com" }, { "cf-connecting-ip": "2001:db8:7::2" })).status).toBe(204);
+    expect((await notify({ email: "g@example.com" }, { "cf-connecting-ip": "2001:db8:7:0:1::3" })).status).toBe(429);
     expect(db.select().from(notifySignups).all().map((r) => [r.email, r.reason])).toEqual([
       ["ann@example.com", null],
       ["b@example.com", null],
       ["c@example.com", null],
+      ["e@example.com", null],
+      ["f@example.com", null],
     ]);
   });
 
@@ -654,8 +663,12 @@ describe("page analytics: POST call/e", () => {
     expect((await send(ok, ip)).status).toBe(204);
     expect((await send(ok, ip)).status).toBe(429);
     expect((await send(ok, { "cf-connecting-ip": "10.9.9.3" })).status).toBe(204);
+    // IPv6: by the /64.
+    expect((await send(ok, { "cf-connecting-ip": "2001:db8:9::1" })).status).toBe(204);
+    expect((await send(ok, { "cf-connecting-ip": "2001:db8:9::2" })).status).toBe(204);
+    expect((await send(ok, { "cf-connecting-ip": "2001:db8:9:0:ffff::3" })).status).toBe(429);
     config.set(cfg);
-    expect(rows()).toHaveLength(3);
+    expect(rows()).toHaveLength(5);
   });
 
   test("the pages turn tracking on only when analytics.yaml does", async () => {

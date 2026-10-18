@@ -4,6 +4,7 @@ import { streamSSE, type SSEStreamingApi } from "hono/streaming";
 import { NO_MEDIA, type CallManager } from "../core/call-manager";
 import type { AppConfig } from "../core/config";
 import { GAMES, START, goalMet, nextPlay, playSummary, playerName, rankIn, scoreOf, type BoardEntry, type Game, type PlayState } from "../core/game";
+import { ipKey } from "../core/ip";
 import type { LimitHit } from "../core/limits";
 import { logger } from "../core/log";
 import { errMsg } from "../core/orchestrator";
@@ -356,7 +357,7 @@ export function publicRoutes(d: PublicDeps) {
         to: "public page",
         callerIp: ip,
         channel: "public",
-        caller: ip ?? "local",
+        caller: ipKey(ip ?? "local", cfg.limits.ipv6_prefix),
       });
     } catch (err) {
       log.warn("not started", { callId, err });
@@ -391,7 +392,7 @@ export function publicRoutes(d: PublicDeps) {
     }
   });
 
-  /** sign-up times by list and client IP (in memory: a restart resets it), oldest-touched first */
+  /** sign-up times by list and client IP's key (ipKey; in memory: a restart resets it), oldest-touched first */
   const signupsByIp = new Map<string, number[]>();
   let sweptAt = 0;
   /** Drops IPs with no sign-up in the last day (at most hourly), then the oldest-touched beyond the cap. */
@@ -423,7 +424,7 @@ export function publicRoutes(d: PublicDeps) {
         const email = typeof raw === "string" ? raw.trim().toLowerCase() : "";
         if (email.length > 254 || !EMAIL.test(email)) return reply(400, "email", "That doesn't look like an email.");
         const ip = c.req.header("cf-connecting-ip") ?? "local";
-        const key = `${list} ${ip}`;
+        const key = `${list} ${ipKey(ip, d.config().limits.ipv6_prefix)}`;
         const now = Date.now();
         sweepSignups(now);
         const recent = (signupsByIp.get(key) ?? []).filter((t) => t > now - DAY_MS);
