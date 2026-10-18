@@ -10,6 +10,8 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production --omit=peer
 
 FROM base
+# lame compresses finished call recordings to MP3 (src/adapters/storage/lame-compressor.ts).
+RUN apt-get update && apt-get install -y --no-install-recommends lame && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production \
     BIND_HOST=0.0.0.0 \
     PORT=8787 \

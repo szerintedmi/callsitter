@@ -4,7 +4,7 @@ import { withCarrier } from "./cost";
 import { CallGate, callSecondsCap, type Channel, type LimitHit } from "./limits";
 import { logger } from "./log";
 import { errMsg } from "./orchestrator";
-import type { BlobStore, EventBus, MediaChannel, OwnerAudioLeg, RecordingStore, RecordingWriter, Repo, TakeoverHandle, VoiceAgent } from "./ports";
+import type { BlobStore, EventBus, MediaChannel, OwnerAudioLeg, RecordingCompressor, RecordingStore, RecordingWriter, Repo, TakeoverHandle, VoiceAgent } from "./ports";
 import { bufferedRecordings } from "./recording";
 import { TakeoverTokens, takeoverUri } from "./takeover";
 import type { CallMeta, EndedBy, SipHeader } from "./types";
@@ -17,6 +17,8 @@ export type SharedDeps = Omit<CallSessionDeps, "meta" | "callControlId" | "media
   blobs: BlobStore;
   /** where recordings are written while calls run (default: in memory, then put to `blobs`) */
   recordings?: RecordingStore;
+  /** compresses finished WAV recordings to MP3 (connection.yaml recordings); without it they stay WAV */
+  compressor?: RecordingCompressor;
   /**
    * TELNYX_TAKEOVER_SIP_DOMAIN: the Call Control app's SIP subdomain a taken-over OpenAI SIP call
    * is transferred to (telegram.yaml takeover); without it, calls can't be taken over.
@@ -44,6 +46,10 @@ export const NO_MEDIA: MediaChannel = { sendAudio() {}, clear() {}, close() {} }
 /** Seconds of recording audio that may wait for storage before the recording stops (memory bound). */
 const MAX_QUEUED_RECORDING_S = 30;
 const recLog = logger("recording");
+/** The call a recording key belongs to: `recordings/<call id>[.recovered].<ext>`. */
+const recordingCallId = (key: string) => key.match(/^recordings\/(.+?)(?:\.recovered)?\.(?:wav|mp3)$/)?.[1];
+/** Where a WAV recording's MP3 goes (RecordingCompressor). */
+const mp3Key = (wav: string) => wav.replace(/\.wav$/, ".mp3");
 
 export class CallManager {
   private sessions = new Map<string, CallSession>();
@@ -64,6 +70,10 @@ export class CallManager {
   /** what a taken-over OpenAI SIP call's transferred leg dials, to be matched to its call */
   private takeoverTokens: TakeoverTokens;
   private recordings: RecordingStore;
+  /** recordings being compressed, one at a time; not waited for by stopAll (compressLeftovers finishes them) */
+  private compressing = Promise.resolve();
+  /** keys queued in `compressing`, so the startup sweep doesn't queue one twice */
+  private compressQueued = new Set<string>();
 
   constructor(private d: SharedDeps) {
     this.recordings = d.recordings ?? bufferedRecordings(d.blobs);
@@ -448,6 +458,7 @@ export class CallManager {
         const key = `recordings/${callId}.${ext}`;
         await this.d.blobs.put(key, data, ext === "mp3" ? "audio/mpeg" : "audio/wav");
         await this.recordingStored(callId, key);
+        if (ext === "wav") this.compressRecording(callId, key);
       })(),
     );
   }
@@ -488,6 +499,7 @@ export class CallManager {
             .then(() => sink.finish())
             .then(async (path) => {
               await this.recordingStored(callId, path);
+              this.compressRecording(callId, path);
               return path;
             })
             .catch(async (err) => {
@@ -505,13 +517,71 @@ export class CallManager {
    */
   async recoverRecordings() {
     for (const key of (await this.recordings.recover?.()) ?? []) {
-      const callId = key.match(/^recordings\/(.+?)(?:\.recovered)?\.wav$/)?.[1];
+      const callId = recordingCallId(key);
       const call = callId ? await this.d.repo.getCall(callId) : null;
       if (call && !call.recordingPath) {
         await this.recordingStored(call.id, key);
+        this.compressRecording(call.id, key);
         recLog.info("recovered the recording of an interrupted call", { callId: call.id, path: key });
       } else recLog.info(`recovered an interrupted recording: ${key} (${call ? "the call has another recording" : "no such call"})`, { callId: call?.id });
     }
+  }
+
+  /**
+   * Queues every WAV recording that is still its call's recording for compression: those a
+   * shutdown or crash cut off, and those from before compression. A WAV whose MP3 is already the
+   * call's recording is left alone, or deleted with delete_wav_after_mp3. Run after recoverRecordings.
+   */
+  async compressLeftovers() {
+    const compressor = this.d.compressor;
+    if (!compressor || !this.d.config().connection.recordings.mp3) return;
+    for (const key of await compressor.listWav()) {
+      const callId = recordingCallId(key);
+      const call = callId ? await this.d.repo.getCall(callId) : null;
+      if (call?.recordingPath === key) this.compressRecording(call.id, key);
+      else if (call && call.recordingPath === mp3Key(key)) {
+        if (this.d.config().connection.recordings.delete_wav_after_mp3) {
+          await compressor.remove(key);
+          recLog.info(`deleted ${key}: its MP3 is the call's recording`, { callId: call.id });
+        }
+      } else recLog.info(`not compressing ${key}: ${call ? "it isn't the call's recording" : "no such call"}`, { callId: call?.id });
+    }
+  }
+
+  /** resolves once the recordings queued for compression so far are done (or failed) */
+  async compressions() {
+    let last;
+    do await (last = this.compressing);
+    while (last !== this.compressing);
+  }
+
+  /**
+   * Queues a stored WAV recording to be compressed to MP3. Once encoded, the call's recording
+   * moves to the MP3 (the call row only: no new `recording` event), and with
+   * delete_wav_after_mp3 the WAV is deleted. A failure is logged and keeps the WAV as the call's
+   * recording; it never touches the call.
+   */
+  private compressRecording(callId: string, key: string) {
+    const compressor = this.d.compressor;
+    if (!compressor || !key.endsWith(".wav") || !this.d.config().connection.recordings.mp3 || this.compressQueued.has(key)) return;
+    this.compressQueued.add(key);
+    this.compressing = this.compressing
+      .then(async () => {
+        const mp3 = await compressor.compress(key, { kbps: this.d.config().connection.recordings.mp3_kbps });
+        // Only from this WAV: the call may have another recording by now, or the `recording`
+        // event naming this one may not be stored yet (then compressLeftovers swaps it next start).
+        const call = await this.d.repo.getCall(callId);
+        if (call?.recordingPath !== key) {
+          recLog.warn(`compressed ${key}, but the call's recording is ${call?.recordingPath ?? "not set"}: keeping the WAV`, { callId });
+          return;
+        }
+        await this.d.repo.updateCall(callId, { recordingPath: mp3 });
+        const deleteWav = this.d.config().connection.recordings.delete_wav_after_mp3;
+        if (deleteWav) await compressor.remove(key);
+        recLog.info(`recording compressed to MP3${deleteWav ? ", WAV deleted" : ""}`, { callId, path: mp3 });
+      })
+      .catch((err) => recLog.error(`compressing ${key} failed: the WAV stays`, { callId, err }))
+      .finally(() => void this.compressQueued.delete(key));
   }
 
   private async recordingStored(callId: string, path: string) {

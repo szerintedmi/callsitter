@@ -488,6 +488,16 @@ export const ConnectionConfig = z.object({
       agent_dbfs: z.number().max(0).default(-50),
     })
     .default({ caller_dbfs: -40, agent_dbfs: -50 }),
+  // Finished WAV recordings are compressed to MP3 after the call (and at startup, any left over)
+  // and the call's recording becomes the MP3. Joint stereo at a constant bitrate, keeping the
+  // sample rate. The WAV is only deleted with delete_wav_after_mp3.
+  recordings: z
+    .object({
+      mp3: z.boolean().default(true),
+      mp3_kbps: z.number().int().min(16).max(160).default(56),
+      delete_wav_after_mp3: z.boolean().default(false),
+    })
+    .default({ mp3: true, mp3_kbps: 56, delete_wav_after_mp3: false }),
 });
 
 export const CostConfig = z.object({

@@ -2,7 +2,7 @@
 
 CallSitter runs on an OVHcloud VPS (Debian 13) as one Docker container. GitHub Actions deploys each push to `main`.
 
-- **App**: `deploy/compose.yaml`, image `ghcr.io/szerintedmi/callsitter` (private) pinned by digest. It listens on `127.0.0.1:8787`, with no public ports. SQLite, recordings, greetings and log files live in `/var/lib/callsitter` (`/data` in the container).
+- **App**: `deploy/compose.yaml`, image `ghcr.io/szerintedmi/callsitter` (private) pinned by digest. It listens on `127.0.0.1:8787`, with no public ports. SQLite, recordings, greetings and log files live in `/var/lib/callsitter` (`/data` in the container). Recordings are compressed to MP3 after each call ([Recordings](#recordings)).
 - **Tunnel**: `cloudflared` runs on the host as a systemd service (`deploy/vps/cloudflared.yml`):
   - `callsitter.org` (public): the Telnyx/OpenAI webhooks, media streams, `/healthz`, the real call recordings (`/`, `/listen…`, `/assets/listen.js`), the "Get your own bot" waitlist (`/bot`) and the game (`/play`, `/call…`, `/assets/public.js`).
   - `admin.callsitter.org`: the admin UI behind Cloudflare Access. The app also verifies the Access JWT.
@@ -199,6 +199,16 @@ Reboots, e.g. after a kernel update, work the same way: `drain`, then `sudo rebo
 **Rotations**:
 - The Access service token expires; create a new one, then update both `CF_ACCESS_*` secrets.
 - To rotate the deploy key, update `DEPLOY_PUBKEY` in `deploy.conf`, re-run `bootstrap.sh`, and update `DEPLOY_SSH_KEY`.
+
+### Recordings
+
+Each call is recorded as a WAV while it runs (`recordings/<call id>.wav`, about 5.8 MB a minute). After the call it's compressed to MP3 with `lame` (`<call id>.mp3`, about 0.4 MB a minute at 56 kbps), one at a time at low priority, and the call's recording becomes the MP3: the admin page plays it. A failed compression is in the call's log and leaves the WAV as the recording. A deploy doesn't wait for compressions: on startup, a background sweep compresses every WAV that is still its call's recording (cut off by a restart, or from before compression).
+
+The WAVs are kept until `recordings.delete_wav_after_mp3` is turned on in `config/connection.yaml` (and deployed):
+- From then on, each WAV is deleted as soon as its MP3 becomes the call's recording.
+- The deploy's restart also deletes the WAVs kept before, in one go: every WAV whose call already plays the MP3. That can't be undone; the OVH backup still has them for 7 days ([Backups](#backups)). WAVs without a call, or that aren't their call's recording, are logged and left alone.
+
+`recordings.mp3: false` turns compression off (new recordings stay WAV); `mp3_kbps` sets the bitrate. The demo tools take WAVs: `demos/README.md` says how to decode an MP3.
 
 ## Backups
 
