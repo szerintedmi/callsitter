@@ -31,6 +31,6 @@ The tunnels pass only the public paths they list (`deploy/vps/cloudflared.yml`);
 
 ## Caps
 
-`config/limits.yaml → public`: 10-minute calls, 10 at once, 20 per IP a day, 100 a day and $10 a day, counted from the call list over a rolling 24 h, so a restart doesn't reset them. The spend is the ended calls' stored cost (rolling summaries included): new calls are refused once it reaches the cap, and the call that crosses it runs to its end.
+`config/limits.yaml → public`: 10-minute calls, 10 at once, 10 per IP a day, 300 a day and $20 a day, counted from the call list over a rolling 24 h, so a restart doesn't reset them. Per-IP limits (these, sign-ups, analytics) count an IPv6 client by its /64 (`ipv6_prefix`), since it can pick a new address in it at will. The spend is the ended calls' stored cost (rolling summaries included): new calls are refused once it reaches the cap, and the call that crosses it runs to its end.
 
 When the calls or the budget run out (or the page is closed, `public.yaml`), the page offers a "notify me" form (`POST /call/notify`, 5 sign-ups per IP a day). Its emails go in `notify_signups` with `list` = `notify`, the waitlist's with `list` = `waitlist`; reading them: [deploy.md](deploy.md).

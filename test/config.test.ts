@@ -29,7 +29,7 @@ describe("config", () => {
     expect(parseConfig("luna", { instructions: "x" }).limits).toEqual({ max_calls: 4, cooldown_ms: 15000 });
     expect(parseConfig("public", {})).toMatchObject({ notify_per_ip_per_day: 5 });
     const none = { max_spend_usd_per_day: null, max_calls_per_day: null, max_concurrent_calls: null, max_calls_per_caller_per_day: null, max_call_seconds: null };
-    expect(parseConfig("limits", {})).toEqual({ phone: none, test: none, public: none });
+    expect(parseConfig("limits", {})).toEqual({ ipv6_prefix: 64, phone: none, test: none, public: none });
   });
 
   test("rejects out-of-range thresholds with a readable message", () => {

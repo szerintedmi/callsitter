@@ -32,6 +32,14 @@ country_code: 44
 # Ending a call waits this long for the carrier's hangup request before closing the session anyway.
 hangup_timeout_ms: 5000
 
+# After each call (and at startup, for any left over) its WAV recording is compressed to MP3,
+# which the admin page then plays. 56 kbps joint stereo is ~0.4 MB a minute, against ~5.8 MB of
+# 24 kHz WAV.
+recordings:
+  mp3: true                    # false: no MP3s, the WAV stays the recording
+  mp3_kbps: 56                 # 16-160; phone audio gains nothing above ~64
+  delete_wav_after_mp3: false  # true: delete each WAV once its MP3 is the call's recording
+
 # What counts as speech (RMS dBFS per 20 ms frame), for the silence watchdog (call-flow.yaml)
 # and the recorded greeting. The watchdog listens to the audio because Live's caller transcripts
 # arrive 2-4 s after the words.

@@ -331,6 +331,19 @@ export interface RecordingSink {
   finish(): Promise<string>;
 }
 
+/**
+ * Compresses finished WAV recordings to MP3 next to them (`<name>.wav` → `<name>.mp3`), readable
+ * through the BlobStore like the WAV. CallManager swaps the call's recording over to it.
+ */
+export interface RecordingCompressor {
+  /** encodes the WAV at `key`, replacing an MP3 already there; resolves to the MP3's key. The WAV stays. */
+  compress(key: string, opts: { kbps: number }): Promise<string>;
+  /** deletes a recording */
+  remove(key: string): Promise<void>;
+  /** the finished WAV recordings, by key */
+  listWav(): Promise<string[]>;
+}
+
 /** What a StereoRecorder writes to: CallManager.openRecording queues these for a RecordingSink. */
 export interface RecordingWriter {
   append(pcm: Uint8Array): void;
