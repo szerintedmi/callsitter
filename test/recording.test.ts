@@ -319,6 +319,7 @@ describe("CallManager recording compression", () => {
   test("compressLeftovers queues only WAVs that are still their call's recording, once each", async () => {
     const { compressor, ops } = fakeCompressor({ wavs: ["recordings/c1.wav", "recordings/c1.recovered.wav", "recordings/gone.wav"] });
     const r = await rig(streamed(), compressor);
+    r.config.connection.recordings.delete_wav_after_mp3 = false;
     await r.repo.updateCall("c1", { recordingPath: "recordings/c1.wav" });
     await r.manager.compressLeftovers();
     await r.manager.compressLeftovers(); // already queued: not again
@@ -345,6 +346,7 @@ describe("CallManager recording compression", () => {
     mkdirSync(join(root, "recordings"));
     const { compressor, ops } = fakeCompressor();
     const r = await rig(new FsRecordingStore(root), compressor);
+    r.config.connection.recordings.delete_wav_after_mp3 = false;
     writeFileSync(join(root, "recordings/c1.wav.part"), new Uint8Array([...wavHeader(24000, 2, 0), ...frames(2, 3)]));
     await r.manager.recoverRecordings();
     await r.manager.compressions();
