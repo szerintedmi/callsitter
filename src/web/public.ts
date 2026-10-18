@@ -12,7 +12,7 @@ import type { NotifySignup, Referee, Repo } from "../core/ports";
 import { GoalWatch } from "../core/referee";
 import type { OpenAiWebRtc, WebRtcAnswer } from "../adapters/openai-live/webrtc";
 import { hostOf } from "./admin-guard";
-import type { ClientAssets } from "./admin";
+import { BUILD, serveScript, type ClientAssets } from "./assets";
 import { favicon, logo } from "./favicon";
 import { privacyPage, termsPage } from "./legal";
 import { botPage, DEMOS, findDemo, legal, realCallsPage, top, topCss } from "./listen";
@@ -112,6 +112,8 @@ export interface PublicDeps {
   clientAssets: ClientAssets;
   /** the real call recordings as the home page (listen.ts), /listen/<slug>, and the games at /play */
   realCalls?: boolean;
+  /** with realCalls: per slug, the recordings' media URL versions (DemoMedia.versions) */
+  mediaVersions?: () => Promise<Record<string, string>>;
 }
 
 const JUNK = ["scam", "spam"];
@@ -215,6 +217,7 @@ export function publicRoutes(d: PublicDeps) {
         autoplay: slug !== undefined,
         wastedSeconds: (await wasted()).seconds,
         analytics: d.config().analytics.enabled,
+        media: await d.mediaVersions?.(),
       });
     app.get("/", async (c) => c.html(await home(c.req.path.replace(/\/?$/, "/"))));
     app.get("/play", async (c) => c.html(await game(c.req.path.slice(0, c.req.path.lastIndexOf("play")))));
@@ -233,12 +236,7 @@ export function publicRoutes(d: PublicDeps) {
   app.get("/call/lobby", async (c) => c.json(await lobby(), 200, { "Cache-Control": "no-store" }));
 
   for (const name of ["public.js", "site.js"])
-    app.get(`/assets/${name}`, async (c) => {
-      const body = await d.clientAssets(name);
-      return body === undefined
-        ? c.notFound()
-        : new Response(body, { headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-cache" } });
-    });
+    app.get(`/assets/${name}`, (c) => serveScript(c, d.clientAssets, name));
 
   // POSTs only from this page: another site's script can't start calls on a visitor's behalf.
   const sameOrigin: MiddlewareHandler = async (c, next) => {
@@ -467,8 +465,6 @@ export function publicRoutes(d: PublicDeps) {
   return app;
 }
 
-/** Changes on every server start, so the page never runs a stale cached script. */
-const BUILD = Date.now().toString(36);
 
 
 // An arcade game-select screen: the scammer-time-wasted scoreboard on top, then a red half (Scam

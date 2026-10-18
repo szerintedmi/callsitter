@@ -15,7 +15,7 @@ const app = publicHostRoutes({
   config: () => ({}) as ReturnType<PublicDeps["config"]>,
   webrtc: {} as PublicDeps["webrtc"],
   clientAssets: async () => undefined,
-  demoMedia: async () => undefined,
+  demoMedia: { file: async () => undefined, versions: async () => ({}) },
 });
 const takeover = takeoverRoutes({
   manager: {} as TakeoverRoutesDeps["manager"],

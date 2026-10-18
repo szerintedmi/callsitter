@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { ClientAssets } from "./admin";
+import { BUILD, serveScript, type ClientAssets } from "./assets";
 import { favicon, logo } from "./favicon";
 
 // Real call recordings, the public site's home page: each recording with its transcript and an
@@ -67,34 +67,33 @@ export const DEMOS: Demo[] = [
 
 export const findDemo = (slug: string) => DEMOS.find((x) => x.slug === slug);
 
-/** A demo's files by name, or undefined (src/runtime/demo-media.ts). Honours Range requests: audio seeks with them. */
-export type DemoMedia = (name: string, req: Request) => Promise<Response | undefined>;
+/** The demos' files (src/runtime/demo-media.ts). */
+export interface DemoMedia {
+  /** a file by name, or undefined; honours Range requests: audio seeks with them */
+  file(name: string, req: Request): Promise<Response | undefined>;
+  /** per slug, the version its media URLs carry (?v=) */
+  versions(): Promise<Record<string, string>>;
+}
 
 export function listenRoutes(d: { clientAssets: ClientAssets; media: DemoMedia }) {
   const app = new Hono();
   app.get("/listen/media/:file", async (c) => {
     const file = c.req.param("file");
     if (!/^[a-z0-9-]+\.(mp3|json)$/.test(file) || !DEMOS.some((x) => file.startsWith(`${x.slug}.`))) return c.notFound();
-    return (await d.media(file, c.req.raw)) ?? c.notFound();
+    return (await d.media.file(file, c.req.raw)) ?? c.notFound();
   });
-  app.get("/listen/render/:slug", (c) => {
+  app.get("/listen/render/:slug", async (c) => {
     const demo = findDemo(c.req.param("slug"));
     const base = c.req.path.slice(0, c.req.path.indexOf("listen/"));
     const layout = c.req.query("layout");
     if (layout !== undefined && !LAYOUTS.includes(layout as Layout)) return c.text(`layout: one of ${LAYOUTS.join(", ")}`, 400);
     const o = { poster: c.req.query("poster") === "1", layout: layout as Layout | undefined, safe: c.req.query("safe") !== "0" };
-    return demo ? c.html(renderPage(base, demo, o)) : c.notFound();
+    return demo ? c.html(renderPage(base, demo, { ...o, media: await d.media.versions() })) : c.notFound();
   });
-  app.get("/assets/listen.js", async (c) => {
-    const body = await d.clientAssets("listen.js");
-    return body === undefined
-      ? c.notFound()
-      : new Response(body, { headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-cache" } });
-  });
+  app.get("/assets/listen.js", (c) => serveScript(c, d.clientAssets, "listen.js"));
   return app;
 }
 
-export const BUILD = Date.now().toString(36);
 /** The plain pages' <body>: their script (src/web/client/site.ts) reads the base and whether analytics are on. */
 export const siteBody = (base: string, analytics?: boolean, cls?: string) =>
   `<body data-base="${esc(base)}"${cls ? ` class="${cls}"` : ""}${analytics ? ` data-analytics="1"` : ""}>`;
@@ -119,8 +118,9 @@ export interface PlayerConfig {
   base: string;
   /** the public site, on the video's end card */
   site?: string;
-  /** the build, on the media URLs: a deploy's new files miss the browser's and Cloudflare's caches */
-  v: string;
+  /** per slug, the version on its media URLs: a hash of the files, so the browser's and Cloudflare's
+   * caches keep them until they change */
+  media: Record<string, string>;
   /** the recorder's: the rooms' layout, fixed (else from the frame's shape) */
   layout?: Layout;
   /** the recorder's: keep text off a tall frame's bottom fifth and right edge (Shorts' and Reels' title and buttons) */
@@ -192,9 +192,17 @@ export const legal = (base: string, o: { github?: boolean } = {}) => {
 /** The home page: the pitch with the bot page and the games (/play), then the recordings. */
 export function realCallsPage(
   base: string,
-  o: { selected: string; autoplay: boolean; wastedSeconds: number; /** page analytics on (analytics.yaml) */ analytics?: boolean },
+  o: {
+    selected: string;
+    autoplay: boolean;
+    wastedSeconds: number;
+    /** page analytics on (analytics.yaml) */
+    analytics?: boolean;
+    /** per slug, its media URLs' version (DemoMedia.versions) */
+    media?: Record<string, string>;
+  },
 ): string {
-  const config: PlayerConfig = { demos: DEMOS, selected: o.selected, autoplay: o.autoplay, render: false, base, v: BUILD };
+  const config: PlayerConfig = { demos: DEMOS, selected: o.selected, autoplay: o.autoplay, render: false, base, media: o.media ?? {} };
   const tabs = DEMOS.map(
     (x, i) =>
       `<a class="rc-tab s-${x.scene}" href="${base}listen/${x.slug}" data-slug="${x.slug}" data-notrack><i>${String(i + 1).padStart(2, "0")}</i>${esc(x.title)}</a>`,
@@ -296,8 +304,8 @@ ${legal(base, { github: true })}
 </html>`;
 }
 
-function renderPage(base: string, demo: Demo, o: { poster: boolean; layout?: Layout; safe: boolean }) {
-  const config: PlayerConfig = { demos: DEMOS, selected: demo.slug, autoplay: false, render: true, ...o, base, site: "callsitter.org", v: BUILD };
+function renderPage(base: string, demo: Demo, o: { poster: boolean; layout?: Layout; safe: boolean; media: Record<string, string> }) {
+  const config: PlayerConfig = { demos: DEMOS, selected: demo.slug, autoplay: false, render: true, ...o, base, site: "callsitter.org" };
   return `<!doctype html>
 <html lang="en">
 <head>

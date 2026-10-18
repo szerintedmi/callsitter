@@ -3,8 +3,7 @@ import type { UpgradeWebSocket, WSContext } from "hono/ws";
 import { logger } from "../core/log";
 import { errMsg } from "../core/orchestrator";
 import type { OwnerAudioLeg, TakeoverHandle, TakeoverState } from "../core/ports";
-import type { ClientAssets } from "./admin";
-import { BUILD } from "./listen";
+import { BUILD, serveScript, type ClientAssets } from "./assets";
 
 const log = logger("takeover");
 
@@ -75,8 +74,6 @@ type ClientMsg =
 /** a page counter, or 0 if it isn't one */
 const count = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v) : 0);
 
-const js = (body: string) => new Response(body, { headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-cache" } });
-
 /** The Telegram Mini App mount (any host): every first hello needs the owner's fresh initData. */
 export function takeoverRoutes(d: TakeoverRoutesDeps) {
   const app = new Hono();
@@ -84,10 +81,7 @@ export function takeoverRoutes(d: TakeoverRoutesDeps) {
   app.get("/takeover/:callId", (c) => c.html(page("telegram"), 200, { "Cache-Control": "no-store" }));
   // The page script and the audio worklet it shares with the test-call page.
   for (const name of ["takeover.js", "test-call-worklet.js"])
-    app.get(`/assets/${name}`, async (c) => {
-      const body = await d.clientAssets(name);
-      return body === undefined ? c.notFound() : js(body);
-    });
+    app.get(`/assets/${name}`, (c) => serveScript(c, d.clientAssets, name));
   app.get("/takeover/ws/:callId", takeoverSocket(d, { kind: "telegram", verifyInitData: d.verifyInitData, ownerUserId: d.ownerUserId }));
   return app;
 }
