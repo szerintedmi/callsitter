@@ -136,15 +136,37 @@ export function publicRoutes(d: PublicDeps) {
   /** what has run out for everyone, closed included */
   const out = async (): Promise<Out> => (d.config().public.enabled ? await d.manager.gate.exhausted("public") : "closed");
 
+  /**
+   * repo.junkCallMs for the counter on every page, read at most every 10 s (and again if the clock
+   * went back). A junk call that ends is added at once: its row is stored a moment later
+   * (persist.ts), and the next read has it.
+   */
+  let junk: { at: number; ms: number } | undefined;
+  let reading: Promise<void> | undefined;
+  const junkMs = async () => {
+    const now = Date.now();
+    if (!junk || now - junk.at > 10_000 || now < junk.at)
+      await (reading ??= d.repo
+        .junkCallMs()
+        .then((ms) => void (junk = { at: now, ms }))
+        .finally(() => (reading = undefined)));
+    return junk!.ms;
+  };
+
   d.manager.bus.subscribe((ev) => {
     if (ev.type === "call.started") {
       const scamGame = plays.get(ev.callId)?.game === "scam";
       liveCalls.set(ev.callId, { startedAt: ev.meta.startedAt, junk: scamGame, scamGame });
     }
     const lc = liveCalls.get(ev.callId);
-    // Like the call row's verdict, which counts the call once it has ended (repo.junkCallSeconds).
+    // Like the call row's verdict, which counts the call once it has ended (repo.junkCallMs).
     if (lc && ev.type === "classification") lc.junk = lc.scamGame || JUNK.includes(ev.classification.verdict);
-    if (ev.type === "call.ended") liveCalls.delete(ev.callId);
+    if (ev.type === "call.ended") {
+      liveCalls.delete(ev.callId);
+      if (lc?.junk && junk) {
+        junk = { ...junk, ms: junk.ms + ev.endedAt - lc.startedAt };
+      }
+    }
 
     if (!active.has(ev.callId)) return;
     const p = plays.get(ev.callId);
@@ -189,14 +211,14 @@ export function publicRoutes(d: PublicDeps) {
     const now = Date.now();
     const live = [...liveCalls.values()].filter((c) => c.junk);
     const liveSeconds = live.reduce((sum, c) => sum + (now - c.startedAt) / 1000, 0);
-    return { seconds: Math.round((await d.repo.junkCallSeconds()) + liveSeconds), live: live.length };
+    return { seconds: Math.round((await junkMs()) / 1000 + liveSeconds), live: live.length };
   }
 
   async function lobby(): Promise<Lobby> {
     const g = d.config().games;
     const boards = { scam: {}, get_through: {} } as Lobby["boards"];
     for (const game of GAMES) {
-      for (const goal of g[game].goals) boards[game][goal.id] = (await d.repo.scores(game, goal.id)).slice(0, g.leaderboard_size);
+      for (const goal of g[game].goals) boards[game][goal.id] = await d.repo.scores(game, goal.id, g.leaderboard_size);
     }
     return {
       games: { scam: g.scam.goals, get_through: g.get_through.goals },

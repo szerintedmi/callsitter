@@ -150,6 +150,10 @@ test("leaderboards keep every score, a player's several too; unscored games don'
     { player: "BOB", scoreMs: 25_000 },
     { player: "ANN", scoreMs: 40_000 },
   ]);
+  expect(await repo.scores("get_through", "g", 2)).toEqual([
+    { player: "BOB", scoreMs: 20_000 },
+    { player: "BOB", scoreMs: 25_000 },
+  ]);
   expect(await repo.getPlay("4")).toMatchObject({ player: "CAT", scoreMs: null, finishedAt: 1 });
 });
 

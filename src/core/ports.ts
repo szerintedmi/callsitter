@@ -278,10 +278,10 @@ export interface Repo {
   /** settles the game's score once its call has ended */
   finishPlay(callId: string, scoreMs: number | null, finishedAt: number): Promise<void>;
   getPlay(callId: string): Promise<PlayRecord | null>;
-  /** every score on a goal (a player can have several), best first */
-  scores(game: Game, goal: string): Promise<BoardEntry[]>;
-  /** total seconds of ended calls whose verdict is scam or spam, and of every "Scam me" game */
-  junkCallSeconds(): Promise<number>;
+  /** the scores on a goal (a player can have several), best first; all of them, or the first `limit` */
+  scores(game: Game, goal: string, limit?: number): Promise<BoardEntry[]>;
+  /** total milliseconds of ended calls whose verdict is scam or spam, and of every "Scam me" game */
+  junkCallMs(): Promise<number>;
   /** stores a "notify me" or waitlist sign-up; an email already on that list gets the new details and is pending (not notified) again */
   addNotifySignup(s: NotifySignup): Promise<void>;
   /** the public site's page analytics (src/core/analytics.ts) */

@@ -102,7 +102,7 @@ export class SqliteRepo implements Repo {
     return this.db.select().from(schema.plays).where(eq(schema.plays.callId, callId)).get() ?? null;
   }
 
-  async scores(game: Game, goal: string): Promise<BoardEntry[]> {
+  async scores(game: Game, goal: string, limit = -1): Promise<BoardEntry[]> {
     const p = schema.plays;
     // scam: longest wins; get_through: fastest wins. Ties: the earlier game first.
     const rows = this.db
@@ -110,11 +110,12 @@ export class SqliteRepo implements Repo {
       .from(p)
       .where(and(eq(p.game, game), eq(p.goal, goal), isNotNull(p.scoreMs)))
       .orderBy(game === "scam" ? desc(p.scoreMs) : asc(p.scoreMs), asc(p.finishedAt))
+      .limit(limit)
       .all();
     return rows.map((r) => ({ player: r.player, scoreMs: r.scoreMs! }));
   }
 
-  async junkCallSeconds() {
+  async junkCallMs() {
     const c = schema.calls;
     // A "Scam me" game is a scammer's call however Jev judged it.
     const scamGames = this.db.select({ id: schema.plays.callId }).from(schema.plays).where(eq(schema.plays.game, "scam"));
@@ -123,7 +124,7 @@ export class SqliteRepo implements Repo {
       .from(c)
       .where(and(eq(c.status, "ended"), or(inArray(c.verdict, ["scam", "spam"]), inArray(c.id, scamGames)), isNotNull(c.endedAt)))
       .get();
-    return Math.round((row?.ms ?? 0) / 1000);
+    return row?.ms ?? 0;
   }
 
   async addNotifySignup(s: NotifySignup) {
