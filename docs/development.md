@@ -59,7 +59,7 @@ One job per file. Schemas and cross-file checks are in `src/core/config.ts`; `bu
 | `luna.yaml`       | Luna: model, tools, limits, prompts.                                                                                                        |
 | `connection.yaml` | How the audio reaches the agent: OpenAI SIP, Telnyx media stream, speech levels.                                                            |
 | `cost.yaml`       | Prices: Live per minute, Luna and Jev per token.                                                                                            |
-| `limits.yaml`     | Per channel (phone, test, public): spend, calls a day, at once, per caller a day, call length. Null: no limit.                             |
+| `limits.yaml`     | Per channel (phone, test, public): spend, calls a day, at once, per caller a day, call length. Null: no limit. `ipv6_prefix`: an IPv6 client counts per IP by its /64. |
 | `telegram.yaml`   | The owner's Telegram: the status message, steering, the public group's limits.                                                             |
 | `public.yaml`     | The public page: open or closed, Luna's tools, the greeting wait, sign-ups per IP.                                                          |
 | `games.yaml`      | The games: goals, the referee, leaderboard size.                                                                                            |

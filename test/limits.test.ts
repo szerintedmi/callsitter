@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openSqlite, SqliteRepo } from "../src/adapters/storage/sqlite";
 import type { AppConfig, ChannelLimits } from "../src/core/config";
+import { ipKey } from "../src/core/ip";
 import { CallGate, callSecondsCap, type Channel } from "../src/core/limits";
 import { loadRepoConfig } from "./helpers";
 
@@ -115,6 +116,10 @@ describe("call limits", () => {
     await stored("public", { from: "public", ip: "10.1.1.1", costUsd: 0 });
     expect(await g.admit({ callId: "p", channel: "public", caller: "10.1.1.1" })).toBe("per_caller");
     expect(await g.admit({ callId: "q", channel: "public", caller: "10.1.1.2" })).toBeNull();
+    // IPv6: by the /64 (limits.yaml ipv6_prefix), as the page passes it (ipKey); stored calls keep the full address.
+    await stored("public", { from: "public", ip: "2001:db8:1:2::aaaa", costUsd: 0 });
+    expect(await g.admit({ callId: "r", channel: "public", caller: ipKey("2001:db8:1:2:ffff::1", 64) })).toBe("per_caller");
+    expect(await g.admit({ callId: "s", channel: "public", caller: ipKey("2001:db8:1:3::aaaa", 64) })).toBeNull();
   });
 
   test("a new gate on the same call list keeps the counts (a restart doesn't reset them)", async () => {

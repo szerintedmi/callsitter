@@ -9,14 +9,15 @@
 #   max_calls_per_day             calls over the last 24 h, live ones included
 #   max_concurrent_calls          calls at once
 #   max_calls_per_caller_per_day  per caller: the number (phone; withheld numbers aren't counted)
-#                                 or the client IP (public, CF-Connecting-IP)
+#                                 or the client IP (public, CF-Connecting-IP; IPv6 by ipv6_prefix)
 #   max_call_seconds              caps call-flow.yaml timing.max_call_seconds lower
+ipv6_prefix: 64                  # per-IP limits (here, public.yaml sign-ups, analytics.yaml) count an IPv6 client by this prefix: it can pick any address in its /64
 phone:
   max_spend_usd_per_day: 20      # past it, calls are declined as busy (the owner gets a Telegram line)
 public:
-  max_spend_usd_per_day: 10
-  max_calls_per_day: 100         # past it (or the spend), the page offers "notify me"
+  max_spend_usd_per_day: 20
+  max_calls_per_day: 300         # past it (or the spend), the page offers "notify me"
   max_concurrent_calls: 3
-  max_calls_per_caller_per_day: 20
+  max_calls_per_caller_per_day: 10
   max_call_seconds: 600
 test: {}                         # the owner, authenticated: a cap would only lock them out of testing
