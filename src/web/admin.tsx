@@ -7,6 +7,7 @@ import { CHANNELS, type Channel } from "../core/limits";
 import type { BlobStore, CallFilter, CallRecord, EventBus, Repo } from "../core/ports";
 import type { Verdict as VerdictName } from "../core/types";
 import type { LogBuffer } from "./debug-log";
+import { BUILD, serveScript, type ClientAssets } from "./assets";
 import { favicon } from "./favicon";
 
 /** The call list's cost tooltip: by vendor, with Luna's tokens; calls from before only have the estimate. */
@@ -17,7 +18,6 @@ function costTitle(r: CallRecord): string | undefined {
 }
 
 /** Compiled browser script by file name ("test-call.js"), or undefined; see src/runtime/client-assets.ts. */
-export type ClientAssets = (name: string) => Promise<string | undefined>;
 
 export interface AdminDeps {
   repo: Repo;
@@ -252,11 +252,6 @@ const Timeline: FC = () => (
   </div>
 );
 
-/** Changes on every server start, so the pages never run a stale cached script. */
-const BUILD = Date.now().toString(36);
-
-const js = (body: string) => new Response(body, { headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-cache" } });
-
 export function adminRoutes(d: AdminDeps) {
   const app = new Hono();
 
@@ -373,10 +368,7 @@ export function adminRoutes(d: AdminDeps) {
     return c.json(events.filter((e) => e.type === "sip.headers" || e.type === "carrier.hangup"));
   });
 
-  app.get("/assets/:name", async (c) => {
-    const body = await d.clientAssets(c.req.param("name"));
-    return body === undefined ? c.notFound() : js(body);
-  });
+  app.get("/assets/:name", (c) => serveScript(c, d.clientAssets, c.req.param("name")));
 
   app.get("/test-call", (c) =>
     c.html(

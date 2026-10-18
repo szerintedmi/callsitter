@@ -33,8 +33,8 @@ interface Config {
   poster?: boolean;
   base: string;
   site?: string;
-  /** the build, on the media URLs (a deploy busts their caches) */
-  v: string;
+  /** per slug, the version on its media URLs: a hash of the files, so they're cached until they change */
+  media: Record<string, string>;
   /** the recorder's: a fixed layout (else from the frame's shape) */
   layout?: Layout;
   /** the recorder's: keep text off a tall frame's bottom fifth and right edge (Shorts' buttons and title) */
@@ -300,7 +300,7 @@ async function main() {
 
   const cache = new Map<string, Promise<Call>>();
   const fetchCall = (slug: string) => {
-    if (!cache.has(slug)) cache.set(slug, fetch(`${cfg.base}listen/media/${slug}.json?v=${cfg.v}`).then((r) => r.json() as Promise<Call>));
+    if (!cache.has(slug)) cache.set(slug, fetch(`${cfg.base}listen/media/${slug}.json?v=${cfg.media[slug] ?? ""}`).then((r) => r.json() as Promise<Call>));
     return cache.get(slug)!;
   };
   const subs = new Subtitles();
@@ -599,7 +599,7 @@ async function main() {
     audio.pause();
     stopTail();
     cur = await load(slug);
-    audio.src = `${cfg.base}listen/media/${cur.demo.slug}.mp3?v=${cfg.v}`;
+    audio.src = `${cfg.base}listen/media/${cur.demo.slug}.mp3?v=${cfg.media[cur.demo.slug] ?? ""}`;
     audioSlug = cur.demo.slug;
     lengths.set(audioSlug, cur.call.duration);
     const next = cfg.demos[(cfg.demos.indexOf(cur.demo) + 1) % cfg.demos.length]!;

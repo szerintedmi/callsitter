@@ -51,6 +51,13 @@ Zero Trust → Access → Applications:
   - *Service Auth*, with a new service token `github-deploy`. Its Client ID and Secret become GitHub secrets. Note when it expires.
 - **Keep** the existing Access app for `admin.callsitter.org`. Production keeps its AUD.
 
+Caching → Cache Rules: **Add** a rule for the demo recordings, which Cloudflare otherwise doesn't cache (`.json`) or caches only for the default TTL:
+
+- *When*: `(http.host eq "callsitter.org" and starts_with(http.request.uri.path, "/listen/media/"))`
+- *Then*: Eligible for cache; Edge TTL *Use cache-control header if present*; Browser TTL *Respect origin*; default cache key (it keeps the query string).
+
+Their URLs carry a hash of the files (`?v=`, `src/runtime/demo-media.ts`), so the year-long cache ends when a deploy changes a recording; nothing needs purging. The page scripts (`/assets/*.js?v=<build>`) need no rule: `.js` is cached by default, and each deploy changes `v`.
+
 Don't move the public and admin hostnames yet; that's step 5.
 
 ### 2. VPS
@@ -74,6 +81,7 @@ Don't move the public and admin hostnames yet; that's step 5.
    `bootstrap.sh` sets up:
    - Docker (live-restore) and cloudflared from their apt repos;
    - unattended Debian security updates;
+   - a 2 GB swapfile (swappiness 10);
    - the `deploy` user, whose key can only run `callsitter-deploy`;
    - the directories and the nightly backup timer;
    - keys-only sshd.

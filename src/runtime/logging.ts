@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { closeSync, fstatSync, mkdirSync, openSync, readdirSync, rmSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { formatText, setLogSink, type LogLevel, type LogRecord } from "../core/log";
 import type { LogBuffer } from "../web/debug-log";
@@ -8,16 +8,30 @@ import type { LogBuffer } from "../web/debug-log";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FILE_DATE = /^(?:app|call)-(\d{4}-\d{2}-\d{2})[-.]/;
+/** files kept open (today's app file and the calls being logged); the least recently written is closed */
+const MAX_OPEN = 32;
 
 /** UTC date, e.g. 2026-09-27. */
 const dayOf = (t: number) => new Date(t).toISOString().slice(0, 10);
 
+/** whether an open file still has a name (false if it can't be checked either) */
+const linked = (fd: number) => {
+  try {
+    return fstatSync(fd).nlink > 0;
+  } catch {
+    return false;
+  }
+};
+
 /**
  * JSON Lines files in `dir`: app-<date>.jsonl gets every line, and call-<date>-<call id>.jsonl a
- * call's lines, dated by the call's first line so a call past midnight stays in one file.
+ * call's lines, dated by the call's first line so a call past midnight stays in one file. Lines are
+ * written straight to the file (no buffer, so a crash loses none) through handles kept open.
  */
 export class LogFiles {
   private callDays = new Map<string, string>();
+  /** open files by path, least recently written first */
+  private fds = new Map<string, number>();
   private failing = false;
 
   constructor(readonly dir: string) {
@@ -26,10 +40,10 @@ export class LogFiles {
 
   write(r: LogRecord) {
     const { time, ...rest } = r;
-    const line = `${JSON.stringify({ time: new Date(time).toISOString(), ...rest })}\n`;
+    const line = Buffer.from(`${JSON.stringify({ time: new Date(time).toISOString(), ...rest })}\n`);
     try {
-      appendFileSync(join(this.dir, `app-${dayOf(time)}.jsonl`), line);
-      if (r.callId) appendFileSync(this.callFile(r.callId, time), line);
+      this.append(join(this.dir, `app-${dayOf(time)}.jsonl`), line);
+      if (r.callId) this.append(this.callFile(r.callId, time), line);
       this.failing = false;
     } catch (err) {
       // Straight to stderr, once per outage: through the logger it would come back here.
@@ -45,6 +59,7 @@ export class LogFiles {
     for (const name of readdirSync(this.dir)) {
       const date = FILE_DATE.exec(name)?.[1];
       if (date && date < cutoff) {
+        this.close(join(this.dir, name));
         rmSync(join(this.dir, name), { force: true });
         gone.push(name);
       }
@@ -53,6 +68,45 @@ export class LogFiles {
     const yesterday = dayOf(now - DAY_MS);
     for (const [id, day] of this.callDays) if (day < yesterday) this.callDays.delete(id);
     return gone;
+  }
+
+  /** Closes the open files; the next line opens its file again. */
+  closeAll() {
+    for (const path of [...this.fds.keys()]) this.close(path);
+  }
+
+  private append(path: string, line: Buffer) {
+    let fd = this.fds.get(path);
+    // Deleted under us (by hand): written to, it would take the lines with it.
+    if (fd !== undefined && !linked(fd)) {
+      this.close(path);
+      fd = undefined;
+    }
+    if (fd === undefined) {
+      fd = openSync(path, "a");
+      if (this.fds.size >= MAX_OPEN) this.close(this.fds.keys().next().value!);
+    } else this.fds.delete(path);
+    this.fds.set(path, fd);
+    try {
+      for (let at = 0; at < line.length; ) {
+        const n = writeSync(fd, line, at);
+        if (n <= 0) throw new Error(`short write to ${path}`);
+        at += n;
+      }
+    } catch (err) {
+      // A failed write (a full disk) opens the file afresh on the next line.
+      this.close(path);
+      throw err;
+    }
+  }
+
+  private close(path: string) {
+    const fd = this.fds.get(path);
+    if (fd === undefined) return;
+    this.fds.delete(path);
+    try {
+      closeSync(fd);
+    } catch {}
   }
 
   private callFile(callId: string, time: number): string {

@@ -1,5 +1,5 @@
 import { basename, join } from "node:path";
-import type { ClientAssets } from "../web/admin";
+import type { ClientAssets } from "../web/assets";
 
 const CLIENT_DIR = join(import.meta.dir, "../web/client");
 /** One classic script per page, served as /assets/<name>.js; shared modules are bundled into each. */
@@ -24,5 +24,5 @@ export async function buildClient(): Promise<Map<string, string>> {
  */
 export async function clientAssets(opts: { rebuild: boolean }): Promise<ClientAssets> {
   const built = await buildClient();
-  return async (name) => (opts.rebuild ? await buildClient() : built).get(name);
+  return Object.assign(async (name: string) => (opts.rebuild ? await buildClient() : built).get(name), { rebuilds: opts.rebuild });
 }

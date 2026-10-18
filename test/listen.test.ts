@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { demoMedia } from "../src/runtime/demo-media";
+import { BUILD } from "../src/web/assets";
 import { callTimeAt, resolveCut } from "../src/web/client/listen-cut";
 import { logo } from "../src/web/favicon";
 import { DEMOS, listenRoutes, realCallsPage } from "../src/web/listen";
@@ -13,9 +14,12 @@ import { loadRepoConfig } from "./helpers";
 const asked: string[] = [];
 const app = listenRoutes({
   clientAssets: async (name) => (name === "listen.js" ? "// page" : undefined),
-  media: async (name) => {
-    asked.push(name);
-    return new Response(name);
+  media: {
+    file: async (name) => {
+      asked.push(name);
+      return new Response(name);
+    },
+    versions: async () => ({ electrician: "e1" }),
   },
 });
 const get = (path: string, init?: RequestInit) => app.request(`http://x${path}`, init);
@@ -63,6 +67,7 @@ describe("listen routes", () => {
     const config = async (q: string) => JSON.parse((await (await get(`/listen/render/areyouai${q}`)).text()).match(/id="rc-config">(.*?)<\/script>/s)![1]!);
     expect(await config("")).toMatchObject({ safe: true });
     expect((await config("")).layout).toBeUndefined();
+    expect((await config("")).media).toEqual({ electrician: "e1" });
     expect(await config("?layout=stack&safe=0")).toMatchObject({ layout: "stack", safe: false });
     expect((await get("/listen/render/areyouai?layout=diagonal")).status).toBe(400);
   });
@@ -78,8 +83,17 @@ describe("listen routes", () => {
     expect((await get("/listen/media/electrician.jpg")).status).toBe(404);
   });
 
-  test("the page script is served", async () => {
-    expect(await (await get("/assets/listen.js")).text()).toBe("// page");
+  test("the page script is served, kept for a year under this build's ?v= only", async () => {
+    const plain = await get("/assets/listen.js");
+    expect(await plain.text()).toBe("// page");
+    expect(plain.headers.get("cache-control")).toBe("no-cache");
+    expect((await get("/assets/listen.js?v=old")).headers.get("cache-control")).toBe("no-cache");
+    expect((await get(`/assets/listen.js?v=${BUILD}`)).headers.get("cache-control")).toBe("max-age=31536000, immutable");
+  });
+
+  test("a dev server's rebuilt scripts are never kept", async () => {
+    const dev = listenRoutes({ clientAssets: Object.assign(async () => "// page", { rebuilds: true }), media: { file: async () => undefined, versions: async () => ({}) } });
+    expect((await dev.request(`http://x/assets/listen.js?v=${BUILD}`)).headers.get("cache-control")).toBe("no-cache");
   });
 });
 
@@ -130,26 +144,35 @@ describe("demo media", () => {
   const req = (range?: string) => new Request("http://x/", { headers: range ? { range } : {} });
 
   test("whole file without a Range", async () => {
-    const res = (await demoMedia(file, req()))!;
+    const res = (await demoMedia.file(file, req()))!;
     expect(res.status).toBe(200);
     expect(res.headers.get("accept-ranges")).toBe("bytes");
     expect((await res.arrayBuffer()).byteLength).toBe(size);
   });
 
   test("byte ranges", async () => {
-    const mid = (await demoMedia(file, req("bytes=10-19")))!;
+    const mid = (await demoMedia.file(file, req("bytes=10-19")))!;
     expect(mid.status).toBe(206);
     expect(mid.headers.get("content-range")).toBe(`bytes 10-19/${size}`);
     expect((await mid.arrayBuffer()).byteLength).toBe(10);
-    const tail = (await demoMedia(file, req("bytes=-5")))!;
+    const tail = (await demoMedia.file(file, req("bytes=-5")))!;
     expect(tail.headers.get("content-range")).toBe(`bytes ${size - 5}-${size - 1}/${size}`);
-    const open = (await demoMedia(file, req(`bytes=${size - 3}-`)))!;
+    const open = (await demoMedia.file(file, req(`bytes=${size - 3}-`)))!;
     expect((await open.arrayBuffer()).byteLength).toBe(3);
-    expect((await demoMedia(file, req(`bytes=${size}-`)))!.status).toBe(416);
+    expect((await demoMedia.file(file, req(`bytes=${size}-`)))!.status).toBe(416);
   });
 
   test("missing files", async () => {
-    expect(await demoMedia("nope.mp3", req())).toBeUndefined();
+    expect(await demoMedia.file("nope.mp3", req())).toBeUndefined();
+  });
+
+  test("kept for a year under the recording's version, an hour under any other", async () => {
+    const v = (await demoMedia.versions())[DEMOS[0]!.slug];
+    expect(v).toMatch(/^[0-9a-f]{12}$/);
+    const cache = async (url: string) => (await demoMedia.file(file, new Request(url)))!.headers.get("cache-control");
+    expect(await cache(`http://x/?v=${v}`)).toBe("public, max-age=31536000, immutable");
+    expect(await cache("http://x/?v=old")).toBe("public, max-age=3600");
+    expect(await cache("http://x/")).toBe("public, max-age=3600");
   });
 });
 
@@ -157,7 +180,7 @@ describe("public page with the real calls", async () => {
   const config = await loadRepoConfig();
   const page = publicRoutes({
     manager: { bus: { subscribe: () => () => {} }, gate: { exhausted: async () => null } } as unknown as PublicDeps["manager"],
-    repo: { scores: async () => [], junkCallSeconds: async () => 0 } as unknown as PublicDeps["repo"],
+    repo: { scores: async () => [], junkCallMs: async () => 0 } as unknown as PublicDeps["repo"],
     referee: {} as PublicDeps["referee"],
     config: () => config,
     webrtc: {} as PublicDeps["webrtc"],

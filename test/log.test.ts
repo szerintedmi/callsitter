@@ -75,8 +75,12 @@ describe("fromConsole", () => {
 
 describe("LogFiles", () => {
   let dir: string;
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
-  const make = () => new LogFiles((dir = mkdtempSync(join(tmpdir(), "callsitter-logs-"))));
+  let made: LogFiles | undefined;
+  afterEach(() => {
+    made?.closeAll();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const make = () => (made = new LogFiles((dir = mkdtempSync(join(tmpdir(), "callsitter-logs-")))));
   const lines = (name: string) =>
     readFileSync(join(dir, name), "utf8")
       .trim()
@@ -118,5 +122,29 @@ describe("LogFiles", () => {
     expect(files.prune(30, now).sort()).toEqual(["app-2026-08-27.jsonl", "call-2026-08-01-c9.jsonl"]);
     expect(readdirSync(dir).sort()).toEqual(["app-2026-08-28.jsonl", "call-2026-09-27-c1.jsonl", "notes.txt"]);
     expect(files.prune(30, now + DAY)).toEqual(["app-2026-08-28.jsonl"]);
+  });
+
+  test("more calls than open files: every line still lands in its call's file", () => {
+    const files = make();
+    for (let round = 0; round < 2; round++)
+      for (let i = 0; i < 40; i++) files.write({ time: T, level: "info", scope: "call", callId: `c${i}`, msg: `line ${round}` });
+    for (let i = 0; i < 40; i++) expect(lines(`call-2026-09-27-c${i}.jsonl`).map((l) => l.msg)).toEqual(["line 0", "line 1"]);
+    expect(lines("app-2026-09-27.jsonl")).toHaveLength(80);
+  });
+
+  test("a file deleted by hand is created afresh on the next line", () => {
+    const files = make();
+    files.write({ time: T, level: "info", scope: "startup", msg: "old" });
+    rmSync(join(dir, "app-2026-09-27.jsonl"));
+    files.write({ time: T, level: "info", scope: "startup", msg: "again" });
+    expect(lines("app-2026-09-27.jsonl").map((l) => l.msg)).toEqual(["again"]);
+  });
+
+  test("a pruned file that is written again is created afresh", () => {
+    const files = make();
+    files.write({ time: T, level: "info", scope: "startup", msg: "old" });
+    expect(files.prune(0, T + 2 * DAY)).toEqual(["app-2026-09-27.jsonl"]);
+    files.write({ time: T, level: "info", scope: "startup", msg: "again" });
+    expect(lines("app-2026-09-27.jsonl").map((l) => l.msg)).toEqual(["again"]);
   });
 });

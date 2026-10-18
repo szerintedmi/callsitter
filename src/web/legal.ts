@@ -1,7 +1,8 @@
 // The terms and the privacy notice (/terms, /privacy; public.ts): two short plain pages in the public
 // pages' look (listen.ts head, top). They name nobody: "I" am whoever runs the site, reachable through
 // the GitHub repository. Every statement here follows what the code does; change them together.
-import { BUILD, head, legal, rootCss, siteBody, top, topCss } from "./listen";
+import { BUILD } from "./assets";
+import { head, legal, rootCss, siteBody, top, topCss } from "./listen";
 
 const REPO = "https://github.com/szerintedmi/callsitter";
 const UPDATED = "16 October 2026";

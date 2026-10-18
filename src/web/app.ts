@@ -76,8 +76,8 @@ export function createApp(d: AppDeps) {
  * Everything the public host serves besides the webhooks and icons: the pages, their scripts and
  * the endpoints those call. The tunnels only pass the paths they list (test/tunnel.test.ts).
  */
-export function publicHostRoutes(d: Omit<PublicDeps, "realCalls"> & { demoMedia?: DemoMedia }) {
-  const pub = publicRoutes({ ...d, realCalls: !!d.demoMedia });
+export function publicHostRoutes(d: Omit<PublicDeps, "realCalls" | "mediaVersions"> & { demoMedia?: DemoMedia }) {
+  const pub = publicRoutes({ ...d, realCalls: !!d.demoMedia, mediaVersions: d.demoMedia?.versions });
   if (d.demoMedia) pub.route("/", listenRoutes({ clientAssets: d.clientAssets, media: d.demoMedia }));
   pub.route("/", analyticsRoutes({ repo: d.repo, config: d.config }));
   return pub;

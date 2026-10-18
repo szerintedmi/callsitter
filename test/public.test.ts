@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { upgradeWebSocket, websocket } from "hono/bun";
 import type { ServerWebSocket } from "bun";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -14,6 +14,7 @@ import { TelnyxVerifier } from "../src/adapters/telnyx/signature";
 import { CallManager } from "../src/core/call-manager";
 import { ConfigStore, type AppConfig, type ChannelLimits } from "../src/core/config";
 import { MemoryEventBus } from "../src/core/event-bus";
+import type { CallEvent } from "../src/core/types";
 import { CallGate } from "../src/core/limits";
 import { attachPersistence } from "../src/core/persist";
 import { createApp } from "../src/web/app";
@@ -384,7 +385,36 @@ describe("public page (fake OpenAI)", () => {
     await repo.createPlay({ callId: "game-scam", game: "scam", goal: "police", player: "ANN", createdAt: 1_000 });
     await add("game-through", "public", "unclear", 50);
     await repo.createPlay({ callId: "game-through", game: "get_through", goal: "plumber", player: "ANN", createdAt: 1_000 });
-    expect(((await (await fetch(`${base()}/call/lobby`)).json()) as any).wasted).toEqual({ seconds: before + 760, live: 0 });
+    // Read at most every 10 s: these rows were stored without events, so only the next read has them.
+    setSystemTime(Date.now() + 11_000);
+    try {
+      expect(((await (await fetch(`${base()}/call/lobby`)).json()) as any).wasted).toEqual({ seconds: before + 760, live: 0 });
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test("scammer time wasted counts a junk call that ends at once, before its row is read again", async () => {
+    const wasted = async () => ((await (await fetch(`${base()}/call/lobby`)).json()) as any).wasted;
+    const before = (await wasted()).seconds;
+    const startedAt = Date.now() - 120_000;
+    await repo.createCall({ id: "junk", callControlId: "junk", from: "+447700900009", to: "me", divertedFrom: null, channel: "phone", startedAt });
+    bus.publish({ type: "call.started", callId: "junk", at: 0, meta: { startedAt } } as unknown as CallEvent);
+    bus.publish({ type: "classification", callId: "junk", at: 1, classification: { verdict: "spam" } } as unknown as CallEvent);
+    expect((await wasted()).live).toBe(1);
+    bus.publish({ type: "call.ended", callId: "junk", at: 2, endedAt: startedAt + 120_000, reason: "hangup", costUsd: 0, lunaCalls: 0, jevTicks: 0 });
+    expect(await wasted()).toEqual({ seconds: before + 120, live: 0 });
+    // and the stored row agrees once it's read again
+    await until(async () => (await repo.getCall("junk"))?.status === "ended");
+    const read = spyOn(repo, "junkCallMs");
+    setSystemTime(Date.now() + 11_000);
+    try {
+      expect(await wasted()).toEqual({ seconds: before + 120, live: 0 });
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      setSystemTime();
+      read.mockRestore();
+    }
   });
 
   test("turns calls away: busy, per IP, over budget, closed", async () => {
