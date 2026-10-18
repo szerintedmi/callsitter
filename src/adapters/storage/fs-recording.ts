@@ -78,7 +78,8 @@ export class FsRecordingStore implements RecordingStore {
       return [];
     }
     const keys: string[] = [];
-    for (const name of names.filter((n) => n.endsWith(PART))) {
+    // Only WAVs: other files being written here (an MP3 being encoded) aren't recordings to finish.
+    for (const name of names.filter((n) => n.endsWith(".wav" + PART))) {
       const part = join(dir, name);
       if (!(await finishPart(part))) continue;
       // Never over a finished recording of the same name: that one stays the call's.

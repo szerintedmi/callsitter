@@ -1,14 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { FsBlobStore } from "../src/adapters/storage/fs-blob";
 import { FsRecordingStore } from "../src/adapters/storage/fs-recording";
+import { LameCompressor } from "../src/adapters/storage/lame-compressor";
 import { openSqlite, SqliteRepo } from "../src/adapters/storage/sqlite";
 import { CallManager } from "../src/core/call-manager";
 import { MemoryEventBus } from "../src/core/event-bus";
 import { attachPersistence } from "../src/core/persist";
-import type { RecordingStore } from "../src/core/ports";
+import type { RecordingCompressor, RecordingStore } from "../src/core/ports";
 import type { CallEvent } from "../src/core/types";
 import { wavHeader } from "../src/core/wav";
 import { loadRepoConfig, scripted } from "./helpers";
@@ -78,6 +80,18 @@ describe("FsRecordingStore", () => {
     expect(await new FsRecordingStore(tmp()).recover()).toEqual([]); // no recordings dir yet
   });
 
+  test("recover() leaves files that aren't WAVs alone (an MP3 being encoded)", async () => {
+    const root = tmp();
+    mkdirSync(join(root, "recordings"));
+    const mp3 = new Uint8Array([0xff, 0xf3, 0x64, 0xc4, ...frames(8, 3)]);
+    writeFileSync(join(root, "recordings/c5.mp3.part"), mp3);
+    writeFileSync(join(root, "recordings/c5.mp3.encoding"), mp3);
+    expect(await new FsRecordingStore(root).recover()).toEqual([]);
+    expect([...readFileSync(join(root, "recordings/c5.mp3.part"))]).toEqual([...mp3]);
+    expect([...readFileSync(join(root, "recordings/c5.mp3.encoding"))]).toEqual([...mp3]);
+    expect(existsSync(join(root, "recordings/c5.mp3"))).toBe(false);
+  });
+
   test("recover() never replaces a finished recording of the same name", async () => {
     const root = tmp();
     mkdirSync(join(root, "recordings"));
@@ -117,7 +131,7 @@ describe("FsRecordingStore", () => {
   });
 });
 
-async function rig(recordings: RecordingStore) {
+async function rig(recordings: RecordingStore, compressor?: RecordingCompressor) {
   const config = await loadRepoConfig();
   const repo = new SqliteRepo(openSqlite(":memory:"));
   const bus = new MemoryEventBus();
@@ -135,9 +149,10 @@ async function rig(recordings: RecordingStore) {
     repo,
     blobs: { put: async (k) => k, get: async () => null },
     recordings,
+    compressor,
   });
   await manager.registerIncoming({ callId: "c1", callControlId: "cc1", from: "+441", to: "+442", channel: "phone" });
-  return { manager, repo, persistence, events };
+  return { manager, repo, persistence, events, config };
 }
 
 describe("CallManager recordings", () => {
@@ -219,5 +234,187 @@ describe("CallManager recordings", () => {
     await r.persistence.flush();
     expect((await r.repo.getCall("c1"))?.recordingPath).toBe("recordings/c1.wav");
     expect(existsSync(join(root, "recordings/gone.wav"))).toBe(true); // kept, though no call has it
+  });
+});
+
+/** A compressor that logs what it's asked to do; `fail` makes compress() reject, `gate` holds it. */
+function fakeCompressor(opts: { wavs?: string[]; fail?: boolean; gate?: Promise<void> } = {}) {
+  const ops: string[] = [];
+  const compressor: RecordingCompressor = {
+    async compress(key, { kbps }) {
+      ops.push(`compress ${key} ${kbps}`);
+      await opts.gate;
+      await Bun.sleep(1); // encoding takes a while: the `recording` event is stored by then
+      if (opts.fail) throw new Error("lame exited with 1");
+      return key.replace(/\.wav$/, ".mp3");
+    },
+    async remove(key) {
+      ops.push(`remove ${key}`);
+    },
+    listWav: async () => opts.wavs ?? [],
+  };
+  return { compressor, ops };
+}
+
+const streamed = (): RecordingStore => ({ open: (key) => ({ append: async () => {}, finish: async () => key }) });
+
+describe("CallManager recording compression", () => {
+  for (const deleteWav of [false, true]) {
+    test(`after the call: the WAV is compressed and the call's recording moves to the MP3 (delete_wav_after_mp3: ${deleteWav})`, async () => {
+      const { compressor, ops } = fakeCompressor();
+      const r = await rig(streamed(), compressor);
+      r.config.connection.recordings.delete_wav_after_mp3 = deleteWav;
+      const w = r.manager.openRecording("c1", 24000, 2);
+      w.append(frames(1, 1));
+      expect(await w.finish()).toBe("recordings/c1.wav");
+      await r.manager.compressions();
+      // The WAV goes only after the call's recording is the MP3.
+      expect(ops).toEqual(["compress recordings/c1.wav 56", ...(deleteWav ? ["remove recordings/c1.wav"] : [])]);
+      await r.persistence.flush();
+      expect((await r.repo.getCall("c1"))?.recordingPath).toBe("recordings/c1.mp3");
+      // One `recording` event (the WAV's): the swap only updates the call row.
+      expect(r.events.filter((e) => e.type === "recording")).toHaveLength(1);
+    });
+  }
+
+  test("stopAll doesn't wait for compression", async () => {
+    let release!: () => void;
+    const { compressor, ops } = fakeCompressor({ gate: new Promise((res) => (release = res)) });
+    const r = await rig(streamed(), compressor);
+    const w = r.manager.openRecording("c1", 24000, 2);
+    w.append(frames(1, 1));
+    await w.finish();
+    await r.manager.stopAll("deploy");
+    expect(ops).toEqual(["compress recordings/c1.wav 56"]);
+    release();
+    await r.manager.compressions();
+  });
+
+  test("a failed encode keeps the WAV as the call's recording and doesn't touch the call", async () => {
+    const { compressor, ops } = fakeCompressor({ fail: true });
+    const r = await rig(streamed(), compressor);
+    const w = r.manager.openRecording("c1", 24000, 2);
+    w.append(frames(1, 1));
+    await w.finish();
+    await r.manager.compressions();
+    expect(ops).toEqual(["compress recordings/c1.wav 56"]);
+    await r.persistence.flush();
+    expect((await r.repo.getCall("c1"))?.recordingPath).toBe("recordings/c1.wav");
+    expect(r.events.some((e) => e.type === "recording.failed")).toBe(false);
+  });
+
+  test("the WAV stays if the call's recording is another one by the time it's encoded", async () => {
+    const { compressor, ops } = fakeCompressor();
+    const r = await rig(streamed(), compressor);
+    await r.repo.updateCall("c1", { recordingPath: "recordings/c1.recovered.wav" });
+    // Telnyx WAVs are compressed too.
+    await r.manager.saveRecording("c1", new ArrayBuffer(4), "wav");
+    await r.persistence.flush();
+    await r.repo.updateCall("c1", { recordingPath: "recordings/other.mp3" });
+    await r.manager.compressions();
+    expect(ops).toEqual(["compress recordings/c1.wav 56"]);
+    expect((await r.repo.getCall("c1"))?.recordingPath).toBe("recordings/other.mp3");
+  });
+
+  test("compressLeftovers queues only WAVs that are still their call's recording, once each", async () => {
+    const { compressor, ops } = fakeCompressor({ wavs: ["recordings/c1.wav", "recordings/c1.recovered.wav", "recordings/gone.wav"] });
+    const r = await rig(streamed(), compressor);
+    await r.repo.updateCall("c1", { recordingPath: "recordings/c1.wav" });
+    await r.manager.compressLeftovers();
+    await r.manager.compressLeftovers(); // already queued: not again
+    await r.manager.compressions();
+    expect(ops).toEqual(["compress recordings/c1.wav 56"]);
+    expect((await r.repo.getCall("c1"))?.recordingPath).toBe("recordings/c1.mp3");
+  });
+
+  for (const deleteWav of [false, true]) {
+    test(`compressLeftovers doesn't re-encode a WAV whose MP3 is the call's recording (delete_wav_after_mp3: ${deleteWav})`, async () => {
+      const { compressor, ops } = fakeCompressor({ wavs: ["recordings/c1.wav"] });
+      const r = await rig(streamed(), compressor);
+      r.config.connection.recordings.delete_wav_after_mp3 = deleteWav;
+      await r.repo.updateCall("c1", { recordingPath: "recordings/c1.mp3" });
+      await r.manager.compressLeftovers();
+      await r.manager.compressions();
+      expect(ops).toEqual(deleteWav ? ["remove recordings/c1.wav"] : []);
+      expect((await r.repo.getCall("c1"))?.recordingPath).toBe("recordings/c1.mp3");
+    });
+  }
+
+  test("a recovered recording is compressed after it becomes the call's", async () => {
+    const root = tmp();
+    mkdirSync(join(root, "recordings"));
+    const { compressor, ops } = fakeCompressor();
+    const r = await rig(new FsRecordingStore(root), compressor);
+    writeFileSync(join(root, "recordings/c1.wav.part"), new Uint8Array([...wavHeader(24000, 2, 0), ...frames(2, 3)]));
+    await r.manager.recoverRecordings();
+    await r.manager.compressions();
+    expect(ops).toEqual(["compress recordings/c1.wav 56"]);
+    expect((await r.repo.getCall("c1"))?.recordingPath).toBe("recordings/c1.mp3");
+  });
+
+  test("connection.yaml recordings.mp3: false keeps the WAVs", async () => {
+    const { compressor, ops } = fakeCompressor({ wavs: ["recordings/c1.wav"] });
+    const r = await rig(streamed(), compressor);
+    r.config.connection.recordings.mp3 = false;
+    await r.repo.updateCall("c1", { recordingPath: "recordings/c1.wav" });
+    const w = r.manager.openRecording("c1", 24000, 2);
+    await w.finish();
+    await r.manager.compressLeftovers();
+    await r.manager.compressions();
+    expect(ops).toEqual([]);
+  });
+});
+
+describe.skipIf(!Bun.which("lame"))("LameCompressor (needs lame installed)", () => {
+  test("encodes a WAV to an MP3 next to it, lists and removes WAVs", async () => {
+    const root = tmp();
+    mkdirSync(join(root, "recordings"));
+    // 0.5 s of a 24 kHz stereo square-ish wave
+    const pcm = new Int16Array(12000 * 2).map((_, i) => ((i >> 6) & 1 ? 8000 : -8000));
+    writeFileSync(join(root, "recordings/c1.wav"), new Uint8Array([...wavHeader(24000, 2, pcm.byteLength), ...new Uint8Array(pcm.buffer)]));
+    writeFileSync(join(root, "recordings/c2.wav.part"), new Uint8Array(44));
+    const c = new LameCompressor(root);
+    expect(await c.listWav()).toEqual(["recordings/c1.wav"]);
+    expect(await c.compress("recordings/c1.wav", { kbps: 56 })).toBe("recordings/c1.mp3");
+    const mp3 = readFileSync(join(root, "recordings/c1.mp3"));
+    expect(mp3.length).toBeGreaterThan(1000);
+    expect(mp3.length).toBeLessThan(pcm.byteLength / 8);
+    expect(existsSync(join(root, "recordings/c1.mp3.encoding"))).toBe(false);
+    // The blob store serves it as MP3.
+    expect((await new FsBlobStore(root).get("recordings/c1.mp3"))?.contentType).toStartWith("audio/mpeg");
+    await c.remove("recordings/c1.wav");
+    expect(await c.listWav()).toEqual([]);
+  });
+
+  test("a WAV lame can't read rejects and leaves no MP3", async () => {
+    const root = tmp();
+    mkdirSync(join(root, "recordings"));
+    writeFileSync(join(root, "recordings/bad.wav"), "not a wav at all");
+    const c = new LameCompressor(root);
+    await expect(c.compress("recordings/bad.wav", { kbps: 56 })).rejects.toThrow("lame exited");
+    expect(existsSync(join(root, "recordings/bad.mp3"))).toBe(false);
+    expect(existsSync(join(root, "recordings/bad.mp3.encoding"))).toBe(false);
+  });
+
+  test("a restart during an encode: recovery leaves the MP3 alone and the next encode replaces it", async () => {
+    const root = tmp();
+    mkdirSync(join(root, "recordings"));
+    const pcm = new Int16Array(12000 * 2).map((_, i) => ((i >> 6) & 1 ? 8000 : -8000));
+    writeFileSync(join(root, "recordings/c1.wav"), new Uint8Array([...wavHeader(24000, 2, pcm.byteLength), ...new Uint8Array(pcm.buffer)]));
+    const c = new LameCompressor(root);
+    await c.compress("recordings/c1.wav", { kbps: 56 });
+    // Interrupted: half the encoder's output, under its temporary name.
+    const mp3 = readFileSync(join(root, "recordings/c1.mp3"));
+    rmSync(join(root, "recordings/c1.mp3"));
+    const cut = mp3.subarray(0, mp3.length >> 1);
+    writeFileSync(join(root, "recordings/c1.mp3.encoding"), cut);
+    // Startup: WAV recovery doesn't touch it (it would have put a WAV header over the MP3)...
+    expect(await new FsRecordingStore(root).recover()).toEqual([]);
+    expect([...readFileSync(join(root, "recordings/c1.mp3.encoding"))]).toEqual([...cut]);
+    expect(existsSync(join(root, "recordings/c1.mp3"))).toBe(false);
+    // ...and the sweep's encode starts over.
+    expect(await c.compress("recordings/c1.wav", { kbps: 56 })).toBe("recordings/c1.mp3");
+    expect([...readFileSync(join(root, "recordings/c1.mp3"))]).toEqual([...mp3]);
+    expect(existsSync(join(root, "recordings/c1.mp3.encoding"))).toBe(false);
   });
 });

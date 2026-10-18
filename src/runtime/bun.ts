@@ -9,6 +9,7 @@ import { OpenAiSip } from "../adapters/openai-live/sip";
 import { OpenAiWebRtc } from "../adapters/openai-live/webrtc";
 import { FsBlobStore } from "../adapters/storage/fs-blob";
 import { FsRecordingStore } from "../adapters/storage/fs-recording";
+import { LameCompressor } from "../adapters/storage/lame-compressor";
 import { openSqlite, SqliteRepo } from "../adapters/storage/sqlite";
 import { TelegramBot } from "../adapters/telegram/bot";
 import { TelnyxApi } from "../adapters/telnyx/api";
@@ -179,6 +180,7 @@ const manager = new CallManager({
   repo,
   blobs,
   recordings: new FsRecordingStore(env.DATA_DIR),
+  compressor: new LameCompressor(env.DATA_DIR),
 });
 
 const app = createApp({
@@ -215,6 +217,8 @@ const app = createApp({
 // sweeping for calls whose media never connected.
 await manager.reapOrphans(0, "server restarted");
 await manager.recoverRecordings().catch((err) => logger("recording").error("recovering recordings failed", { err }));
+// In the background, one at a time: WAVs a shutdown kept from being compressed (and older ones).
+void manager.compressLeftovers().catch((err) => logger("recording").error("compressing leftover recordings failed", { err }));
 setInterval(() => void manager.reapOrphans(60_000, "no media connected within 60 s").catch((err) => logger("calls").error("reaping orphans failed", { err })), 30_000);
 
 const listening = new AbortController();
