@@ -74,6 +74,7 @@ Don't move the public and admin hostnames yet; that's step 5.
    `bootstrap.sh` sets up:
    - Docker (live-restore) and cloudflared from their apt repos;
    - unattended Debian security updates;
+   - a 2 GB swapfile (swappiness 10);
    - the `deploy` user, whose key can only run `callsitter-deploy`;
    - the directories and the nightly backup timer;
    - keys-only sshd.

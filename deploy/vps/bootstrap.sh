@@ -104,6 +104,20 @@ install -d -m 0755 /etc/systemd/system-generators
 ln -sfn /dev/null /etc/systemd/system-generators/systemd-ssh-generator
 echo 'kernel.printk = 3 4 1 3' >/etc/sysctl.d/90-callsitter-console.conf
 sysctl -q -p /etc/sysctl.d/90-callsitter-console.conf
+# A swapfile cushions short memory spikes, so the OOM killer doesn't pick sshd or cloudflared; low
+# swappiness keeps the app's memory in RAM (swapping would stall call audio). The container has its
+# own memory limit (deploy/compose.yaml).
+# Rebuilt whenever it isn't active: an interrupted run can leave a file without a swap header.
+if ! swapon --show=NAME --noheadings | grep -qx /swapfile; then
+  rm -f /swapfile
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile >/dev/null
+  swapon /swapfile
+fi
+grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab
+echo 'vm.swappiness = 10' >/etc/sysctl.d/90-callsitter-swap.conf
+sysctl -q -p /etc/sysctl.d/90-callsitter-swap.conf
 # systemd-resolved answers LLMNR (port 5355) on all interfaces by default; nothing here needs it.
 if systemctl is-active --quiet systemd-resolved; then
   install -d -m 0755 /etc/systemd/resolved.conf.d

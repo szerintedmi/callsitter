@@ -31,6 +31,9 @@ services:
       retries: 3
     # Deploys drain calls first; this covers wrap-up (Luna summaries, recordings) on a plain stop.
     stop_grace_period: 90s
+    # It uses ~50 MB; a leak gets the container killed and restarted rather than the host's sshd or
+    # cloudflared (bootstrap.sh adds swap for short spikes).
+    mem_limit: 1g
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     logging:
