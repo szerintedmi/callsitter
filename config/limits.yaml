@@ -16,7 +16,7 @@ phone:
 public:
   max_spend_usd_per_day: 10
   max_calls_per_day: 100         # past it (or the spend), the page offers "notify me"
-  max_concurrent_calls: 3
+  max_concurrent_calls: 10
   max_calls_per_caller_per_day: 20
   max_call_seconds: 600
 test: {}                         # the owner, authenticated: a cap would only lock them out of testing

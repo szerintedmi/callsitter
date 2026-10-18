@@ -26,11 +26,11 @@ The tunnels pass only the public paths they list (`deploy/vps/cloudflared.yml`);
 
 - The browser talks to gpt-live-1 over **WebRTC**: the server exchanges the SDP offer with `POST /v1/live/sessions` and attaches a sideband, as for a SIP call ([voice-webrtc](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live)). The API key and the prompt stay on the server.
 - The page's data channel is locked down (`client.data_channel`): it can't send client events, so a visitor can't append instructions. It only receives `session.closed`.
-- Luna's tools are live (`public.yaml → tools`). The call gets a Telegram status message (in `TELEGRAM_PUBLIC_CHAT_ID`'s group, if set) and can be steered. Calls are recorded and listed in the `public` channel with the visitor's IP (`CF-Connecting-IP`).
+- Luna's tools are live (`public.yaml → tools`). The call gets a Telegram status message (in `TELEGRAM_PUBLIC_CHAT_ID`'s group, if set) and can be steered. In the group the message has no transcript, and its edits share about 18 messages a minute with the other public calls (`telegram.yaml → public`), so with many calls at once each updates less often. Calls are recorded and listed in the `public` channel with the visitor's IP (`CF-Connecting-IP`).
 - The admin test call uses a WebSocket relay instead, to exercise the path real calls took over the media stream; the public page is the only WebRTC caller.
 
 ## Caps
 
-`config/limits.yaml → public`: 10-minute calls, 3 at once, 20 per IP a day, 100 a day and $10 a day, counted from the call list over a rolling 24 h, so a restart doesn't reset them. The spend is the ended calls' stored cost (rolling summaries included): new calls are refused once it reaches the cap, and the call that crosses it runs to its end.
+`config/limits.yaml → public`: 10-minute calls, 10 at once, 20 per IP a day, 100 a day and $10 a day, counted from the call list over a rolling 24 h, so a restart doesn't reset them. The spend is the ended calls' stored cost (rolling summaries included): new calls are refused once it reaches the cap, and the call that crosses it runs to its end.
 
 When the calls or the budget run out (or the page is closed, `public.yaml`), the page offers a "notify me" form (`POST /call/notify`, 5 sign-ups per IP a day). Its emails go in `notify_signups` with `list` = `notify`, the waitlist's with `list` = `waitlist`; reading them: [deploy.md](deploy.md).

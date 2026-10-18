@@ -131,11 +131,14 @@ describe("config", () => {
   });
 
   test("telegram.public: defaults, and applied over status in the public chat's view", async () => {
-    expect(parseConfig("telegram", {}).public).toEqual({ min_edit_interval_ms: 10_000, urgent_alert: false });
+    expect(parseConfig("telegram", {}).public).toEqual({ min_edit_interval_ms: 10_000, max_messages_per_minute: 18, transcript: false, urgent_alert: false });
+    expect(parseConfig("telegram", {}).status).toMatchObject({ max_messages_per_minute: null, transcript: true });
     expect(() => parseConfig("telegram", { public: { min_edit_interval_ms: 500 } })).toThrow(ConfigError);
     const cfg = await loadRepoConfig();
     const view = publicChatConfig(cfg);
     expect(view.telegram.status.min_edit_interval_ms).toBe(cfg.telegram.public.min_edit_interval_ms);
+    expect(view.telegram.status.max_messages_per_minute).toBe(cfg.telegram.public.max_messages_per_minute);
+    expect(view.telegram.status.transcript).toBe(false);
     expect(view.telegram.status.urgent_alert.enabled).toBe(false);
     expect(view.telegram.status.urgent_alert.min_urgency).toBe(cfg.telegram.status.urgent_alert.min_urgency);
     expect(view.telegram.steering).toBe(cfg.telegram.steering);

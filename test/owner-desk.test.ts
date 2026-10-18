@@ -14,6 +14,8 @@ async function rig(
     steer?: (callId: string, text: string, as: LiveAppend) => OwnerSteerResult;
     canSteer?: boolean;
     failSends?: number;
+    /** thrown by the next edits, one each */
+    editErrors?: Error[];
     accepts?: (meta: CallMeta) => boolean;
     takeoverUrl?: (callId: string) => string | undefined;
     /** shared with another desk (another chat) */
@@ -43,6 +45,8 @@ async function rig(
       return id;
     },
     async edit(id, text, layout) {
+      const err = o.editErrors?.shift();
+      if (err) throw err;
       edits.push({ id, text, ...(layout ? { layout } : {}) });
     },
     async answerButton(pressId, notice) {
@@ -237,6 +241,111 @@ describe("owner desk: the call's status message", () => {
     r.start("c1");
     await settle();
     expect(r.sent).toEqual([]);
+  });
+});
+
+describe("owner desk: the chat's message budget", () => {
+  const stage = (r: Awaited<ReturnType<typeof rig>>, callId: string, s: string) => r.bus.publish({ type: "stage", callId, at: 1, stage: s });
+
+  test("max_messages_per_minute is shared by the chat's calls: due edits wait their turn, ended calls first", async () => {
+    const r = await rig();
+    r.config.telegram.status.max_messages_per_minute = 4;
+    r.start("c1");
+    r.start("c2");
+    r.start("c3");
+    await settle();
+    expect(r.sent).toHaveLength(3);
+    stage(r, "c1", "clarify");
+    stage(r, "c2", "clarify");
+    await settle();
+    // One slot left: c1's edit takes it, c2's waits.
+    expect(r.edits.map((e) => e.id)).toEqual([100]);
+    r.bus.publish({ type: "call.ended", callId: "c3", at: 5000, endedAt: 0, reason: "caller hung up", costUsd: 0, lunaCalls: 0, jevTicks: 0 });
+    await settle();
+    expect(r.edits).toHaveLength(1);
+    // A minute on, the ended call's final edit goes before c2's.
+    r.advance(60_000);
+    stage(r, "c2", "genuine");
+    await settle();
+    expect(r.edits.map((e) => e.id)).toEqual([100, 102, 101]);
+    expect(r.edits[1]!.text).toContain("✅ Call ended");
+    expect(r.lastEdit()).toContain("stage: genuine");
+  });
+
+  test("an edit that changes nothing gives its slot back to the next waiting one", async () => {
+    const r = await rig();
+    r.config.telegram.status.max_messages_per_minute = 2;
+    r.start("c1");
+    await settle();
+    r.bus.publish({ type: "call.ended", callId: "c1", at: 5000, endedAt: 0, reason: "caller hung up", costUsd: 0, lunaCalls: 0, jevTicks: 0 });
+    await settle();
+    r.start("c2");
+    await settle();
+    // c1's update has nothing to show (an ended call's message hides it); both wait.
+    r.bus.publish({ type: "takeover.live", callId: "c1", at: 1 });
+    stage(r, "c2", "clarify");
+    await settle();
+    r.advance(30_000);
+    r.start("c3");
+    await settle();
+    // A minute on there's room for one: c1 takes it, finds nothing to send, and hands it to c2.
+    r.advance(30_000);
+    r.bus.publish({ type: "takeover.live", callId: "c3", at: 1 });
+    await settle();
+    expect(r.edits.map((e) => e.id)).toEqual([100, 101]);
+  });
+
+  test("a call that ends while its edit waits moves ahead of live calls", async () => {
+    const r = await rig();
+    r.config.telegram.status.max_messages_per_minute = 3;
+    r.start("c1");
+    r.start("c2");
+    r.start("c3");
+    await settle();
+    stage(r, "c1", "clarify");
+    stage(r, "c2", "clarify");
+    await settle();
+    expect(r.edits).toEqual([]);
+    r.bus.publish({ type: "call.ended", callId: "c2", at: 5000, endedAt: 0, reason: "caller hung up", costUsd: 0, lunaCalls: 0, jevTicks: 0 });
+    await settle();
+    r.advance(60_000);
+    stage(r, "c1", "genuine");
+    await settle();
+    expect(r.edits.map((e) => e.id)).toEqual([101, 100]);
+  });
+
+  test("a 429 holds the chat's edits for retry_after, then the failed edit goes again", async () => {
+    const tooFast = Object.assign(new Error("Telegram editMessageText failed: 429 Too Many Requests"), { retryAfterMs: 5000 });
+    const r = await rig({ editErrors: [tooFast] });
+    r.start("c1");
+    r.start("c2");
+    await settle();
+    stage(r, "c1", "clarify");
+    await settle();
+    expect(r.edits).toEqual([]);
+    stage(r, "c2", "clarify");
+    await settle();
+    expect(r.edits).toEqual([]);
+    r.advance(5000);
+    stage(r, "c2", "genuine");
+    await settle();
+    expect(r.edits.map((e) => e.id).sort()).toEqual([100, 101]);
+    expect(r.edits.find((e) => e.id === 100)!.text).toContain("stage: clarify");
+  });
+
+  test("without status.transcript, lines don't edit the message or show in it", async () => {
+    const r = await rig();
+    r.config.telegram.status.transcript = false;
+    r.start("c1");
+    await settle();
+    r.bus.publish({ type: "transcript", callId: "c1", entry: { seq: 1, speaker: "caller", text: "Hi, it's the bank.", at: 1000, final: true } });
+    await settle();
+    expect(r.edits).toEqual([]);
+    stage(r, "c1", "waste_time");
+    await settle();
+    expect(r.lastEdit()).toContain("stage: waste time");
+    expect(r.lastEdit()).not.toContain("Transcript");
+    expect(r.lastEdit()).not.toContain("the bank");
   });
 });
 
