@@ -406,7 +406,10 @@ export interface TakeoverHandle {
   reconnectToken: string;
 }
 
-/** The owner's chat (Telegram): the recipient is fixed by the adapter. */
+/**
+ * The owner's chat (Telegram): the recipient is fixed by the adapter. When it's sending too fast,
+ * send and edit throw an error with `retryAfterMs`: how long to wait before the next.
+ */
 export interface OwnerChat {
   /** sends a message (plain text) and returns its id */
   send(text: string, opts?: { replyTo?: number; silent?: boolean; layout?: MessageLayout }): Promise<number>;

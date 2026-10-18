@@ -18,6 +18,8 @@ const log = logger("owner");
 // A desk serves one chat. With `accepts`, it only takes the calls that match (public-page calls
 // can have a chat of their own); each desk keeps its own message ids, since Telegram numbers
 // messages per chat, so "the newest live call" means the newest one in that chat.
+// A chat can cap its messages a minute, all calls together (status.max_messages_per_minute):
+// status edits that are due take turns for the room, ended calls' final ones first.
 
 export interface OwnerDeskDeps {
   bus: EventBus;
@@ -42,6 +44,8 @@ export interface OwnerDeskDeps {
   takeoverUrl?: (callId: string) => string | undefined;
 }
 
+/** status.max_messages_per_minute counts over this window */
+const BUDGET_WINDOW_MS = 60_000;
 /** Telegram's limit for a message's text */
 const MAX_CHARS = 4096;
 /** status messages kept for editing this long after the call ends (Luna's summary comes later) */
@@ -108,6 +112,13 @@ export class OwnerDesk {
   /** status messages, Luna's messages and replies about a call → the call */
   private messages = new Map<number, string>();
   private unsubscribe: () => void;
+  /** when this chat's messages and edits went out, over the last BUDGET_WINDOW_MS */
+  private sentAt: number[] = [];
+  /** calls whose edit is due, waiting for room in the chat (status.max_messages_per_minute) */
+  private waiting: CallView[] = [];
+  private pumpTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Telegram asked us to wait (a 429's retry_after) until then */
+  private pausedUntil = 0;
 
   constructor(private d: OwnerDeskDeps) {
     this.unsubscribe = d.bus.subscribe((ev) => this.onEvent(ev));
@@ -115,7 +126,7 @@ export class OwnerDesk {
 
   /** Sends a message about a call, so replies to it steer that call. */
   private async sendFor(callId: string, text: string, opts: Parameters<OwnerChat["send"]>[1]): Promise<number> {
-    const id = await this.d.chat.send(text, opts);
+    const id = await this.send(text, opts);
     this.track(id, callId);
     return id;
   }
@@ -123,6 +134,23 @@ export class OwnerDesk {
   /** Whether calls get status messages (telegram.yaml status.enabled). */
   get showsStatus(): boolean {
     return this.d.config().telegram.status.enabled;
+  }
+
+  /** Sends a message at once; it counts against status.max_messages_per_minute. */
+  private send(text: string, opts?: Parameters<OwnerChat["send"]>[1]): Promise<number> {
+    this.sentAt.push(this.d.clock.now());
+    return this.d.chat.send(text, opts).catch((err) => {
+      this.backOff(err);
+      throw err;
+    });
+  }
+
+  /** Telegram said we're sending too fast: no status edits until it says. */
+  private backOff(err: unknown): boolean {
+    const ms = (err as { retryAfterMs?: unknown } | null)?.retryAfterMs;
+    if (typeof ms !== "number") return false;
+    this.pausedUntil = Math.max(this.pausedUntil, this.d.clock.now() + ms);
+    return true;
   }
 
   private track(messageId: number, callId: string) {
@@ -154,6 +182,8 @@ export class OwnerDesk {
       case "transcript":
         if (!ev.entry.final || !ev.entry.text) return;
         v.lines.set(ev.entry.seq, { speaker: ev.entry.speaker, text: ev.entry.text, at: ev.entry.at });
+        // Kept for the urgent alert, but no edit for it.
+        if (!this.d.config().telegram.status.transcript) return;
         break;
       case "call.ended":
         v.ended = { reason: ev.reason, at: ev.at };
@@ -228,7 +258,7 @@ export class OwnerDesk {
   private declined(callId: string, from: string, reason: string) {
     const link = this.d.callLink?.(callId);
     const text = `📵 Declined call · ${from || "unknown caller"} · ${reason.replace(/^declined: /, "")}${link ? `\n${link}` : ""}`;
-    this.d.chat.send(text).catch((err) => log.warn("declined call message not sent", { callId, err }));
+    this.send(text).catch((err) => log.warn("declined call message not sent", { callId, err }));
   }
 
   private open(callId: string, from: string, channel: CallMeta["channel"], startedAt: number) {
@@ -272,48 +302,97 @@ export class OwnerDesk {
     const wait = Math.max(0, v.lastEditAt + this.d.config().telegram.status.min_edit_interval_ms - this.d.clock.now());
     v.editTimer = setTimeout(() => {
       v.editTimer = null;
-      this.queueEdit(v);
+      this.due(v);
     }, wait);
   }
 
-  private queueEdit(v: CallView) {
-    v.editing = v.editing.then(() => this.edit(v));
+  /** The call's edit is due: it waits its turn for room in the chat, an ended call's first. */
+  private due(v: CallView) {
+    const at = this.waiting.indexOf(v);
+    // A call that ended while it waited moves up too.
+    if (at >= 0 && v.ended) this.waiting.splice(at, 1);
+    if (at < 0 || v.ended) {
+      const live = v.ended ? this.waiting.findIndex((w) => !w.ended) : -1;
+      if (live < 0) this.waiting.push(v);
+      else this.waiting.splice(live, 0, v);
+    }
+    this.pump();
   }
 
-  private async edit(v: CallView) {
+  /** Starts the waiting edits there's room for, and comes back when there's room for more. */
+  private pump() {
+    if (this.pumpTimer) clearTimeout(this.pumpTimer);
+    this.pumpTimer = null;
+    const now = this.d.clock.now();
+    const max = this.d.config().telegram.status.max_messages_per_minute;
+    while (this.sentAt.length && this.sentAt[0]! <= now - BUDGET_WINDOW_MS) this.sentAt.shift();
+    while (this.waiting.length && now >= this.pausedUntil && (max === null || this.sentAt.length < max)) {
+      // The slot is taken now, so the edits started together can't overrun it; an edit that
+      // turns out to change nothing gives it back.
+      const slot = now;
+      this.sentAt.push(slot);
+      this.queueEdit(this.waiting.shift()!, slot);
+    }
+    if (!this.waiting.length) return;
+    const full = max !== null && this.sentAt.length >= max;
+    const at = Math.max(this.pausedUntil, full ? this.sentAt[0]! + BUDGET_WINDOW_MS : 0);
+    this.pumpTimer = setTimeout(() => this.pump(), Math.max(0, at - now));
+  }
+
+  private queueEdit(v: CallView, slot?: number) {
+    v.editing = v.editing
+      .then(() => this.edit(v))
+      .then((sent) => {
+        const i = sent || slot === undefined ? -1 : this.sentAt.indexOf(slot);
+        if (i < 0) return;
+        this.sentAt.splice(i, 1);
+        if (this.waiting.length) this.pump();
+      });
+  }
+
+  /** Brings the status message up to date; false if it didn't need its slot in the budget. */
+  private async edit(v: CallView): Promise<boolean> {
     const id = await v.message;
     if (id === null) {
       // The status message was never sent (Telegram failed): send it now instead of editing.
+      // Sending counts itself.
       v.lastEditAt = this.d.clock.now();
       const sent = await this.sendStatus(v);
       if (sent !== null) v.message = Promise.resolve(sent);
-      return;
+      return false;
     }
     const next = this.render(v);
     const shown = JSON.stringify(next);
-    if (shown === v.shown) return;
+    if (shown === v.shown) return false;
     v.lastEditAt = this.d.clock.now();
     try {
       await this.d.chat.edit(id, next.text, next.layout);
       v.shown = shown;
     } catch (err) {
       log.warn("status message not updated", { callId: v.callId, err });
+      // Sending too fast: it goes again once Telegram allows.
+      if (this.backOff(err)) this.due(v);
     }
+    return true;
   }
 
   /** Sends every pending edit now (shutdown). */
   async flush() {
+    if (this.pumpTimer) clearTimeout(this.pumpTimer);
+    this.pumpTimer = null;
     for (const v of this.views.values()) {
       if (!v.editTimer) continue;
       clearTimeout(v.editTimer);
       v.editTimer = null;
       this.queueEdit(v);
     }
+    for (const v of this.waiting.splice(0)) this.queueEdit(v);
     await Promise.all([...this.views.values()].map((v) => v.editing));
   }
 
   detach() {
     this.unsubscribe();
+    if (this.pumpTimer) clearTimeout(this.pumpTimer);
     for (const v of this.views.values()) {
       if (v.editTimer) clearTimeout(v.editTimer);
       if (v.dropTimer) clearTimeout(v.dropTimer);
@@ -324,7 +403,7 @@ export class OwnerDesk {
   async onMessage(m: OwnerMessage) {
     if (this.d.clock.now() - m.date > this.d.config().telegram.steering.stale_after_ms) return;
     const reply = (text: string) =>
-      this.d.chat.send(text, { replyTo: m.messageId }).catch((err) => log.warn("reply not sent", { err }));
+      this.send(text, { replyTo: m.messageId }).catch((err) => log.warn("reply not sent", { err }));
     const text = m.text?.trim();
     if (!text) return void (await reply("Only text messages can steer a call."));
     const hangUp = /^\/hangup(@\S+)?$/i.test(text);
@@ -495,7 +574,7 @@ export class OwnerDesk {
     const sep = "\n\n";
     let text = before.join(sep);
     const collapsed: { offset: number; length: number }[] = [];
-    if (v.lines.size) {
+    if (v.lines.size && this.d.config().telegram.status.transcript) {
       // Newest first, as many as fit: the collapsed quote shows the latest lines.
       const title = `${sep}💬 Transcript, newest first\n`;
       const rest = after.length ? sep + after.join(sep) : "";

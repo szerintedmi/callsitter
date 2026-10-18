@@ -10,6 +10,11 @@ status:
   enabled: true
   # Telegram allows about one message per second in a chat, edits included.
   min_edit_interval_ms: 3000
+  # Messages and edits a minute in the chat, all calls together: a due edit waits its turn, the
+  # final one (Luna's summary) first. null: no cap.
+  max_messages_per_minute: null
+  # The transcript in the status message (the call page always has it).
+  transcript: true
   # Edits don't notify, so an urgent call (Jev's urgency ≥ min_urgency) also gets a reply to its
   # status message, once per call, which does. Not when Jev says scam or spam with at least
   # unless_junk: scams sound urgent too. With luna, Luna's rolling summary can also ask for it
@@ -93,8 +98,12 @@ takeover:
   max_seconds: 3600
 
 # Public-page calls, when TELEGRAM_PUBLIC_CHAT_ID is set (a group): Telegram allows ~20
-# messages a minute in a group, and game callers fake urgency. These replace
-# status.min_edit_interval_ms and status.urgent_alert.enabled there.
+# messages a minute in a group, and game callers fake urgency. These replace the same status
+# keys (urgent_alert: status.urgent_alert.enabled) there. With up to limits.yaml
+# public.max_concurrent_calls at once, each call's edits slow down to share the cap; without the
+# transcript, a call's message only changes with its verdict, stage or Luna's summary.
 public:
   min_edit_interval_ms: 10000
+  max_messages_per_minute: 18
+  transcript: false
   urgent_alert: false

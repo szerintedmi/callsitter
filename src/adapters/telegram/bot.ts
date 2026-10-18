@@ -100,8 +100,14 @@ export class TelegramBot implements OwnerChat {
     } catch (err) {
       throw new Error(`Telegram ${method} failed: ${this.redact(errMsg(err))}`);
     }
-    const out = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string; result?: T };
-    if (!res.ok || !out.ok) throw new Error(`Telegram ${method} failed: ${res.status} ${this.redact(out.description ?? "")}`.trim());
+    const out = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string; result?: T; parameters?: { retry_after?: number } };
+    if (!res.ok || !out.ok) {
+      const err = new Error(`Telegram ${method} failed: ${res.status} ${this.redact(out.description ?? "")}`.trim());
+      // Too many requests: Telegram says how long to wait (OwnerChat).
+      const retryAfter = out.parameters?.retry_after;
+      if (typeof retryAfter === "number") Object.assign(err, { retryAfterMs: retryAfter * 1000 });
+      throw err;
+    }
     return out.result as T;
   }
 

@@ -16,7 +16,7 @@ Optional: without it there are no status messages, rolling summaries or steering
 - Create a bot with [@BotFather](https://t.me/BotFather) and put its token in `TELEGRAM_BOT_TOKEN`.
 - Message the bot from the owner's account, then read `message.chat.id` from `https://api.telegram.org/bot<token>/getUpdates` into `TELEGRAM_CHAT_ID` (a bot can't message someone who hasn't started a chat with it). Only that chat is heard.
 - The app long-polls `getUpdates`, so no public URL is needed. Only one process can poll a bot, so dev needs its own bot.
-- Optional: public-page calls can go to a group with `TELEGRAM_PUBLIC_CHAT_ID` (blank: everything goes to `TELEGRAM_CHAT_ID`). Add the bot to the group, send a message there, and read the negative chat id from `getUpdates`; if Telegram upgrades it to a supergroup, the id changes to `-100…`. The group gets fewer edits and no urgent alerts (`telegram.yaml → public`), since a group allows about 20 messages a minute.
+- Optional: public-page calls can go to a group with `TELEGRAM_PUBLIC_CHAT_ID` (blank: everything goes to `TELEGRAM_CHAT_ID`). Add the bot to the group, send a message there, and read the negative chat id from `getUpdates`; if Telegram upgrades it to a supergroup, the id changes to `-100…`. The group gets fewer edits, shared across its calls, no transcript and no urgent alerts (`telegram.yaml → public`), since a group allows about 20 messages a minute.
 - In a group, replies to the bot and its buttons work as they are. For a plain message to steer the newest public call (or a bare `/hangup`), turn privacy mode off (@BotFather → `/setprivacy` → Disable, then re-add the bot) or make the bot an admin.
 - `/help` to the bot explains steering.
 

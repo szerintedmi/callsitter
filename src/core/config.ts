@@ -606,6 +606,11 @@ export const TelegramConfig = z.object({
       enabled: z.boolean().default(true),
       // Telegram allows about one message per second in a chat, edits included.
       min_edit_interval_ms: z.number().int().min(1000).default(3000),
+      // Messages and edits a minute in the chat, all calls together: a due status edit waits for
+      // room (null: no cap).
+      max_messages_per_minute: z.number().int().min(1).nullable().default(null),
+      // the transcript in the status message
+      transcript: z.boolean().default(true),
       // A notifying reply to the status message when Jev says the call is urgent, once per call,
       // unless Jev's scam + spam probability is at least unless_junk; with luna, also when Luna's
       // rolling summary says so (luna.yaml progress: alert).
@@ -683,11 +688,13 @@ export const TelegramConfig = z.object({
       max_seconds: z.number().int().min(60).default(3600),
     })
     .prefault({}),
-  // Public-page calls' chat (TELEGRAM_PUBLIC_CHAT_ID), in place of status.min_edit_interval_ms and
-  // status.urgent_alert there: a group allows ~20 messages a minute, and game callers fake urgency.
+  // Public-page calls' chat (TELEGRAM_PUBLIC_CHAT_ID), in place of the same status.* keys there:
+  // a group allows ~20 messages a minute, and game callers fake urgency.
   public: z
     .object({
       min_edit_interval_ms: z.number().int().min(1000).default(10_000),
+      max_messages_per_minute: z.number().int().min(1).nullable().default(18),
+      transcript: z.boolean().default(false),
       urgent_alert: z.boolean().default(false),
     })
     .prefault({}),
@@ -703,6 +710,8 @@ export function publicChatConfig(cfg: AppConfig): AppConfig {
       status: {
         ...status,
         min_edit_interval_ms: pub.min_edit_interval_ms,
+        max_messages_per_minute: pub.max_messages_per_minute,
+        transcript: pub.transcript,
         urgent_alert: { ...status.urgent_alert, enabled: status.urgent_alert.enabled && pub.urgent_alert },
       },
     },
