@@ -3,6 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 import type { FC } from "hono/jsx";
 import { isBot, parseBeacon, RateLimiter, type Count, type PageEventRecord } from "../core/analytics";
 import type { AppConfig } from "../core/config";
+import { ipKey } from "../core/ip";
 import { logger } from "../core/log";
 import type { Repo } from "../core/ports";
 import { fmtTime, Layout } from "./admin";
@@ -37,7 +38,7 @@ export function analyticsRoutes(d: AnalyticsDeps) {
     const userAgent = c.req.header("user-agent");
     if (isBot(userAgent)) return c.body(null, 204);
     const ip = c.req.header("cf-connecting-ip");
-    if (!limiter.allow(ip ?? "local", Date.now())) return c.text("slow down", 429);
+    if (!limiter.allow(ipKey(ip ?? "local", d.config().limits.ipv6_prefix), Date.now())) return c.text("slow down", 429);
     // sendBeacon posts text/plain: the body is read as JSON whatever its type.
     let raw: unknown;
     try {

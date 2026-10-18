@@ -1,4 +1,5 @@
 import type { AppConfig, ChannelLimits } from "./config";
+import { ipKey } from "./ip";
 import { logger } from "./log";
 import type { CallRecord, Clock, Repo } from "./ports";
 
@@ -91,7 +92,8 @@ export class CallGate {
    */
   private check(ch: Channel, lim: ChannelLimits, rows: CallRecord[], now: number, caller: string | undefined, extra: number): LimitHit | null {
     if (caller !== undefined && lim.max_calls_per_caller_per_day !== null) {
-      const ids = new Set(rows.filter((r) => r.startedAt >= now - DAY_MS && callerOf(r) === caller).map((r) => r.id));
+      const v6Prefix = this.d.config().limits.ipv6_prefix;
+      const ids = new Set(rows.filter((r) => r.startedAt >= now - DAY_MS && callerOf(r, v6Prefix) === caller).map((r) => r.id));
       for (const [id, a] of this.active) if (a.channel === ch && a.caller === caller) ids.add(id);
       if (ids.size > lim.max_calls_per_caller_per_day) return "per_caller";
     }
@@ -119,8 +121,8 @@ export class CallGate {
   }
 }
 
-/** the caller a stored call is counted for: the client IP on the public page, else the number */
-const callerOf = (r: CallRecord) => (r.channel === "public" ? (r.callerIp ?? "local") : r.from);
+/** the caller a stored call is counted for: the client IP's key (ipKey) on the public page, else the number */
+const callerOf = (r: CallRecord, v6Prefix: number) => (r.channel === "public" ? ipKey(r.callerIp ?? "local", v6Prefix) : r.from);
 
 function spent(rows: CallRecord[], now: number): number {
   return rows.reduce((sum, r) => sum + (r.status === "ended" && (r.endedAt ?? 0) >= now - DAY_MS ? (r.costUsd ?? 0) : 0), 0);

@@ -101,7 +101,7 @@ export class CallManager {
   /**
    * Registers an incoming call, unless a limit of its channel (limits.yaml) turns it away: then it
    * isn't registered and the limit is returned. `caller` is who it counts for per caller (the
-   * number, or the public page's client IP); none: not counted.
+   * number, or the public page's client IP as ipKey keys it); none: not counted.
    */
   async registerIncoming(c: {
     callId: string;
