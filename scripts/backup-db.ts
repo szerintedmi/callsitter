@@ -21,6 +21,7 @@ rmSync(tmp, { force: true });
 // Not readonly: a WAL database needs its -shm, which a read-only connection can't create.
 const db = new Database(src, { readwrite: true, create: false });
 try {
+  db.run("PRAGMA busy_timeout = 5000;");
   db.run("VACUUM INTO ?", [tmp]);
 } finally {
   db.close();

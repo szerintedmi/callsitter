@@ -14,7 +14,11 @@ import * as schema from "./schema";
 export function openSqlite(path: string, migrationsFolder = "./drizzle"): BunSQLiteDatabase<typeof schema> {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const sqlite = new Database(path, { create: true });
+  // Waits out another connection's brief locks (WAL checkpoints, a backup's) instead of failing at once.
+  sqlite.run("PRAGMA busy_timeout = 5000;");
   sqlite.run("PRAGMA journal_mode = WAL;");
+  // With WAL: no fsync per commit; an app crash loses nothing, a power cut at most the last commits.
+  sqlite.run("PRAGMA synchronous = NORMAL;");
   sqlite.run("PRAGMA foreign_keys = ON;");
   const db = drizzle(sqlite, { schema });
   migrate(db, { migrationsFolder });
