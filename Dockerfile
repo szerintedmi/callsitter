@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Production image (deploy/compose.yaml, docs/deploy.md). The Bun version must match .bun-version
 # (CI checks it); the digest pins the exact image.
-FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS base
+FROM oven/bun:1.4.4-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3e0b5af1db187d9a4 AS base
 WORKDIR /app
 
 FROM base AS deps
@@ -10,8 +10,10 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production --omit=peer
 
 FROM base
-# lame compresses finished call recordings to MP3 (src/adapters/storage/lame-compressor.ts).
-RUN apt-get update && apt-get install -y --no-install-recommends lame && rm -rf /var/lib/apt/lists/*
+# lame compresses finished call recordings to MP3 (src/adapters/storage/lame-compressor.ts). The
+# upgrade picks up Debian fixes released since the base image was built.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends lame && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production \
     BIND_HOST=0.0.0.0 \
     PORT=8787 \
