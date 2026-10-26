@@ -86,7 +86,7 @@ Don't move the public and admin hostnames yet; that's step 5.
    - the directories and the nightly backup timer;
    - keys-only sshd.
 
-   It's safe to re-run after changing `deploy/vps`. It doesn't upgrade installed packages, and it restarts cloudflared only when its config changed, which drops SSH sessions and calls going through the tunnel.
+   It's safe to re-run after changing `deploy/vps`. It doesn't upgrade installed packages, and it restarts cloudflared only when `cloudflared.yml` or `cloudflared.service` changed (comments included). That drops SSH sessions and calls going through the tunnel.
 
 5. Test SSH through the tunnel from the laptop. Add this to `~/.ssh/config`:
 
@@ -176,7 +176,7 @@ Dependabot (`.github/dependabot.yml`) opens grouped PRs every week, for the acti
 
 - `vendor-sdks` (`openai`, `@typesafe-ai/sdk`): the tests fake these vendors, so run `bun run eval` on the branch before merging.
 - Base image: the Bun version in the Dockerfile is also the version CI uses. Debian package fixes come in with the `apt-get upgrade` in the image build. That layer is cached until the base image digest changes.
-- Not covered: `CLOUDFLARED_VERSION` in `deploy.yml`. Update that by hand.
+- Not covered: `CLOUDFLARED_VERSION` and `CLOUDFLARED_SHA256` in `deploy.yml`. Update them by hand to the version the VPS runs (`cloudflared --version`); the checksum is in the release notes.
 
 ### Investigating from the laptop
 
@@ -213,7 +213,14 @@ Each run that does something sends a line to the main Telegram chat (`TELEGRAM_C
 
 To do it now rather than wait for the night: `sudo systemctl start --no-block callsitter-maintain` (it outlives this SSH session), then follow `journalctl -fu callsitter-maintain`.
 
-**Tunnel routes** (`deploy/vps/cloudflared.yml`, e.g. the public page's paths) aren't deployed by a push. Copy `deploy/vps` to the VPS and re-run `sudo ./callsitter-vps/bootstrap.sh` between calls (`drain` first): it restarts cloudflared, which drops calls and this SSH session.
+**Changes to `deploy/vps`** (scripts, units, and tunnel routes in `cloudflared.yml`, e.g. the public page's paths) aren't deployed by a push. Between calls (`drain` first), replace the copy on the VPS and re-run the bootstrap:
+
+```sh
+ssh callsitter-vps 'rm -rf callsitter-vps' && scp -r deploy/vps callsitter-vps:callsitter-vps
+ssh callsitter-vps 'sudo ./callsitter-vps/bootstrap.sh'
+```
+
+Remove the old copy first: `scp -r` into an existing directory puts the files in `callsitter-vps/vps/`, and the bootstrap would install the old ones. If the tunnel restarts, it drops this SSH session and the bootstrap stops there; reconnect and run it again to finish.
 
 **Rotations**:
 - The Access service token expires; create a new one, then update both `CF_ACCESS_*` secrets.

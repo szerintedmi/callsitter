@@ -74,8 +74,8 @@ jobs:
     permissions:
       packages: read # the job's GITHUB_TOKEN lets the VPS pull the image once
     env:
-      CLOUDFLARED_VERSION: 2026.9.3
-      CLOUDFLARED_SHA256: 77e26d8d900e0b8469f416239d14b5f296525fdf79fee6f511ef55609e3fbac2
+      CLOUDFLARED_VERSION: 2026.10.4
+      CLOUDFLARED_SHA256: ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42
       SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
       SSH_USER: ${{ vars.DEPLOY_SSH_USER || 'deploy' }}
       IMAGE_REF: ${{ needs.image.outputs.ref }}
