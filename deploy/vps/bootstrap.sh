@@ -2,7 +2,7 @@
 # Prepares a fresh OVH VPS (Debian 13) for CallSitter; safe to re-run (docs/deploy.md). Copy this
 # directory to the VPS and run it as root from there:
 #
-#   sudo ./bootstrap.sh                      Docker, cloudflared, deploy user, dirs, backups, hardening
+#   sudo ./bootstrap.sh                      Docker, cloudflared, deploy user, dirs, backups, maintenance, hardening
 #   sudo ./bootstrap.sh lock-ssh --confirm   after SSH through the tunnel works: sshd on loopback only
 #   sudo ./bootstrap.sh unlock-ssh           undo lock-ssh (from the OVH KVM console if the tunnel is down)
 #
@@ -87,10 +87,11 @@ curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings
 echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' \
   >/etc/apt/sources.list.d/cloudflared.list
 apt-get update -q
-apt-get install -yq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin cloudflared
+# --no-upgrade: a re-run doesn't restart them under live calls; the maintenance timer upgrades them.
+apt-get install -yq --no-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin cloudflared
 
-# Debian security updates only (the default origins); no automatic reboots. Docker and
-# cloudflared are upgraded by hand, between calls (docs/deploy.md → Maintenance).
+# Debian security updates only (the default origins), without reboots. Docker, cloudflared and
+# reboots are left to the nightly maintenance timer, which waits for a moment without calls.
 cat >/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
@@ -199,11 +200,14 @@ else
   warn "tunnel not set up yet: set TUNNEL_ID in $CONF, copy the credentials to /etc/cloudflared/<TUNNEL_ID>.json, re-run"
 fi
 
-log "nightly backup timer"
-put "$HERE/callsitter-backup.service" /etc/systemd/system/callsitter-backup.service 0644 || true
-put "$HERE/callsitter-backup.timer" /etc/systemd/system/callsitter-backup.timer 0644 || true
+log "nightly backup and maintenance timers"
+for unit in callsitter-backup.service callsitter-backup.timer callsitter-maintain.service \
+  callsitter-maintain.timer callsitter-maintain-boot.service; do
+  put "$HERE/$unit" "/etc/systemd/system/$unit" 0644 || true
+done
 systemctl daemon-reload
-systemctl enable --now callsitter-backup.timer
+systemctl enable --now callsitter-backup.timer callsitter-maintain.timer
+systemctl enable callsitter-maintain-boot.service
 
 log "done"
 echo "Listening TCP sockets (only sshd should be public; the app is on 127.0.0.1:8787):"

@@ -1,0 +1,12 @@
+# After the 02:30 SQLite copy and the 03:00 OVH backup. maintain waits up to MAINTAIN_WAIT (2 h)
+# for a moment without calls.
+[Unit]
+Description=CallSitter nightly host maintenance
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 UTC
+# A missed run waits for the next night rather than running at boot, in the day.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

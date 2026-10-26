@@ -1,0 +1,10 @@
+[Unit]
+Description=CallSitter host maintenance: cloudflared and Docker upgrades, reboots (between calls)
+After=docker.service cloudflared.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/callsitter-deploy maintain
+# 75: deferred, calls never paused for long enough; the next night tries again.
+SuccessExitStatus=75
+TimeoutStartSec=3h

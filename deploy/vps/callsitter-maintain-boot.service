@@ -1,0 +1,12 @@
+[Unit]
+Description=CallSitter: report a maintenance reboot to Telegram
+After=docker.service cloudflared.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/callsitter-deploy maintain --after-boot
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=multi-user.target

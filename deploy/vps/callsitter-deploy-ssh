@@ -3,5 +3,9 @@
 # key can run nothing but callsitter-deploy. The requested words are passed on unexpanded
 # (no globbing) and callsitter-deploy validates them; stdin (the registry token) passes through.
 set -f
+# Host maintenance (upgrades, reboots) is for the timer and you, not the deploy key.
+case $SSH_ORIGINAL_COMMAND in
+  maintain*) echo "maintain isn't allowed over the deploy key" >&2; exit 1 ;;
+esac
 # shellcheck disable=SC2086
 exec sudo -n /usr/local/bin/callsitter-deploy $SSH_ORIGINAL_COMMAND

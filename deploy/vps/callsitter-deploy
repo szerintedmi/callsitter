@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploys and operates CallSitter on the VPS (docs/deploy.md). Installed to /usr/local/bin by
 # bootstrap.sh and run as root: by the GitHub Actions deploy key (through callsitter-deploy-ssh and
-# sudo), by you over SSH, and by the nightly backup timer.
+# sudo), by you over SSH, and by the nightly backup and maintenance timers.
 #
 #   deploy <IMAGE_REPO>@sha256:<digest>   pull (registry token on stdin, optional), drain calls,
 #                                         back up the DB, replace the container, wait for healthy;
@@ -10,8 +10,12 @@
 #   status                                current release, container state, active calls
 #   drain | resume                        stop / restart taking calls (e.g. around host maintenance)
 #   backup                                nightly SQLite copy to /var/lib/callsitter/backups
+#   maintain [--check]                    nightly: upgrade cloudflared and Docker, and reboot if the
+#                                         OS asks for it, once no call is live (--check: report only)
+#   maintain --after-boot                 at boot: report a maintenance reboot to Telegram
 #
-# Exit 75: calls didn't end within DRAIN_WAIT seconds; nothing changed, try again later.
+# Exit 75: calls didn't end within DRAIN_WAIT seconds (maintain: MAINTAIN_WAIT); nothing changed,
+# try again later.
 set -euo pipefail
 umask 077
 
@@ -23,6 +27,9 @@ GHCR_USER=${GHCR_USER:-github-actions}
 DRAIN_WAIT=${DRAIN_WAIT:-1260}
 KEEP_RELEASES=${KEEP_RELEASES:-5}
 KEEP_BACKUPS=${KEEP_BACKUPS:-10}
+MAINTAIN_WAIT=${MAINTAIN_WAIT:-7200}
+# Upgraded by `maintain`, between calls; unattended-upgrades only installs Debian security updates.
+HOST_PKGS=(cloudflared docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 
 DIR=/opt/callsitter
 RELEASES=$DIR/releases        # image refs, oldest first; the last line is the current release
@@ -30,6 +37,7 @@ COMPOSES=$DIR/compose.d       # each release's compose.yaml, by digest
 DRAINED=""                            # set while the old container is draining
 BACKUPS=/var/lib/callsitter/backups   # /data/backups in the container
 FAILED_LOGS=$DIR/failed               # logs of releases that never became healthy (root-only)
+REBOOT_MARK=$DIR/maintain-reboot      # what a maintenance reboot followed, for the boot report
 APP_UID=1000                          # the image's `bun` user, which writes /data
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
@@ -43,10 +51,11 @@ current() { if [[ -s $RELEASES ]]; then tail -n1 "$RELEASES"; fi; }
 previous() { if [[ -s $RELEASES ]]; then tac "$RELEASES" | awk '!seen[$0]++' | sed -n 2p; fi; }
 revision() { docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1" 2>/dev/null || true; }
 
-lock() {
+try_lock() {
   exec 9>/run/callsitter-deploy.lock
-  flock -n 9 || die "another callsitter-deploy is running"
+  flock -n 9
 }
+lock() { try_lock || die "another callsitter-deploy is running"; }
 
 # Points compose.yaml and .env at a release; the compose file comes from the release's image.
 activate() {
@@ -186,6 +195,117 @@ cmd_backup() {
   control_backup "nightly-$(date -u +%a).db"
 }
 
+# One line to the owner's Telegram chat (TELEGRAM_* in callsitter.env), and to the journal.
+notify() {
+  local env=/etc/callsitter/callsitter.env token chat
+  log "$*"
+  token=$(sed -n 's/^TELEGRAM_BOT_TOKEN=//p' "$env" 2>/dev/null | tail -n1 | tr -d "\"'")
+  chat=$(sed -n 's/^TELEGRAM_CHAT_ID=//p' "$env" 2>/dev/null | tail -n1 | tr -d "\"'")
+  [[ -n $token && -n $chat ]] || return 0
+  # The token goes in on stdin rather than the command line, where ps would show it.
+  printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$token" |
+    curl -fsS -m 20 -o /dev/null -K - --data-urlencode "chat_id=$chat" \
+      --data-urlencode "text=VPS maintenance: $*" || log "Telegram notification failed"
+}
+
+# HOST_PKGS (and dependencies) with a newer version, as "name old→new" lines.
+pending_upgrades() {
+  apt-get -s install --only-upgrade "${HOST_PKGS[@]}" 2>/dev/null |
+    sed -n 's/^Inst \([^ ]*\) \[\([^]]*\)\] (\([^ ]*\).*/\1 \2→\3/p'
+}
+
+active_calls() { control status 2>/dev/null | sed -n 's/.*"activeCalls":\([0-9]*\).*/\1/p'; }
+
+# Waits up to MAINTAIN_WAIT for a moment with no live calls, then takes the lock and drains, so new
+# calls are only rejected for the maintenance itself. Exit 75 if that moment never came.
+drain_when_idle() {
+  local end=$((SECONDS + MAINTAIN_WAIT)) rc
+  while ((SECONDS < end)); do
+    if [[ $(active_calls) == 0 ]] && try_lock; then
+      rc=0
+      # A call that started just now still gets 2 minutes to end; otherwise resume and keep waiting.
+      control drain --wait 120 --ttl 900 || rc=$?
+      ((rc == 0)) && return 0
+      ((rc == 75)) || die "drain failed (exit $rc)"
+      flock -u 9
+    fi
+    sleep 30
+  done
+  return 75
+}
+
+cmd_maintain() {
+  case ${1:-} in
+    "" | --check) ;;
+    --after-boot) after_boot; return ;;
+    *) die "usage: maintain [--check | --after-boot]" ;;
+  esac
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq || die "apt-get update failed"
+  # Not local: the EXIT trap reports $summary.
+  local upgrades reboot=""
+  upgrades=$(pending_upgrades)
+  if [[ -f /var/run/reboot-required ]]; then reboot=1; fi
+  if [[ -z $upgrades && -z $reboot ]]; then log "nothing to do"; return; fi
+  summary="$(paste -sd, - <<<"$upgrades" | sed 's/,/, /g')${reboot:+${upgrades:+; }reboot required}"
+  log "pending: $summary"
+  [[ ${1:-} == --check ]] && return
+
+  trap 'rc=$?
+    if [[ -n $DRAINED ]]; then control resume >/dev/null 2>&1 || true; fi
+    ((rc == 0 || rc == 75)) || notify "failed (exit $rc) during: $summary. sudo journalctl -u callsitter-maintain"' EXIT
+  if running; then
+    log "waiting up to ${MAINTAIN_WAIT}s for no live calls"
+    local rc=0
+    drain_when_idle || rc=$?
+    if ((rc == 75)); then notify "deferred to tomorrow, calls never paused: $summary"; exit 75; fi
+    DRAINED=1
+  else
+    lock
+  fi
+
+  if [[ -n $upgrades ]]; then
+    log "upgrading ${HOST_PKGS[*]}"
+    apt-get install -yq --only-upgrade -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confold \
+      "${HOST_PKGS[@]}"
+    if [[ -f /var/run/reboot-required ]]; then reboot=1; fi
+  fi
+
+  if [[ -n $reboot ]]; then
+    printf '%s\n' "$summary" >"$REBOOT_MARK"
+    notify "rebooting after: $summary. A 'back up' message follows once the app is healthy."
+    # The drain ends with the container. Resuming now would only let calls start and be cut.
+    DRAINED=""
+    systemctl reboot
+    return
+  fi
+
+  # Docker's own upgrade restarts dockerd (live-restore keeps the container); cloudflared's doesn't.
+  if grep -q '^cloudflared ' <<<"$upgrades"; then systemctl restart cloudflared; fi
+  sleep 5
+  systemctl is-active --quiet cloudflared || die "cloudflared isn't running after the upgrade"
+  if [[ -n $DRAINED ]]; then
+    for _ in {1..30}; do running && break; sleep 2; done
+    control resume >/dev/null
+    DRAINED=""
+  fi
+  notify "upgraded $summary; taking calls again"
+}
+
+# After a maintenance reboot (callsitter-maintain-boot.service): reports how the host came back.
+after_boot() {
+  [[ -f $REBOOT_MARK ]] || return 0
+  local health="" cid
+  for _ in {1..60}; do
+    cid=$(compose ps -q callsitter 2>/dev/null || true)
+    [[ -n $cid ]] && health=$(docker inspect -f '{{.State.Health.Status}}' "$cid" 2>/dev/null || true)
+    [[ $health == healthy ]] && break
+    sleep 5
+  done
+  notify "back up after rebooting for: $(cat "$REBOOT_MARK"). Kernel $(uname -r), app ${health:-not running}, cloudflared $(systemctl is-active cloudflared || true)"
+  rm -f "$REBOOT_MARK"
+}
+
 case ${1:-} in
   deploy) shift; cmd_deploy "$@" ;;
   rollback) cmd_rollback ;;
@@ -193,5 +313,6 @@ case ${1:-} in
   drain) cmd_drain ;;
   resume) cmd_resume ;;
   backup) cmd_backup ;;
-  *) die "usage: callsitter-deploy deploy <image@sha256:…> | rollback | status | drain | resume | backup" ;;
+  maintain) shift; cmd_maintain "$@" ;;
+  *) die "usage: callsitter-deploy deploy <image@sha256:…> | rollback | status | drain | resume | backup | maintain" ;;
 esac
