@@ -80,13 +80,13 @@ Don't move the public and admin hostnames yet; that's step 5.
 
    `bootstrap.sh` sets up:
    - Docker (live-restore) and cloudflared from their apt repos;
-   - unattended Debian security updates;
+   - unattended Debian security updates, and a nightly maintenance timer for Docker, cloudflared and reboots ([Maintenance](#maintenance));
    - a 2 GB swapfile (swappiness 10);
    - the `deploy` user, whose key can only run `callsitter-deploy`;
    - the directories and the nightly backup timer;
    - keys-only sshd.
 
-   It's safe to re-run after changing `deploy/vps`. It restarts cloudflared only when its config changed, and that drops SSH sessions and calls going through the tunnel.
+   It's safe to re-run after changing `deploy/vps`. It doesn't upgrade installed packages, and it restarts cloudflared only when its config changed, which drops SSH sessions and calls going through the tunnel.
 
 5. Test SSH through the tunnel from the laptop. Add this to `~/.ssh/config`:
 
@@ -165,6 +165,8 @@ Run these on the VPS (`ssh callsitter-vps`):
 | Go back to the release that ran before this one (twice toggles back) | `sudo callsitter-deploy rollback` |
 | Deploy a specific image (already on the VPS) | `sudo callsitter-deploy deploy ghcr.io/szerintedmi/callsitter@sha256:… </dev/null` |
 | Stop / restart taking calls | `sudo callsitter-deploy drain` / `sudo callsitter-deploy resume` |
+| Pending host upgrades or reboot (changes nothing) | `sudo callsitter-deploy maintain --check` |
+| Last maintenance runs | `sudo journalctl -u callsitter-maintain -u callsitter-maintain-boot -n 50` |
 
 Rolling back to an older commit can also be done by reverting on `main`, which deploys the revert. Neither way undoes migrations.
 
@@ -198,17 +200,18 @@ The public page's "notify me" sign-ups (emails left once the day's calls or budg
 
 `config/` is baked into the image (`Dockerfile`; `deploy/compose.yaml` doesn't mount it), so changing a limit takes a push to `main` (a deploy). Leave a key out, or set it to null, for no limit.
 
-**Maintenance**: Docker and cloudflared aren't upgraded automatically, because restarting either can drop calls. Drain first:
+### Maintenance
 
-```sh
-sudo callsitter-deploy drain
-sudo apt-get update && sudo apt-get install --only-upgrade docker-ce docker-ce-cli containerd.io docker-compose-plugin
-# cloudflared carries this SSH session: upgrade it detached, then reconnect
-sudo systemd-run --unit=cf-upgrade sh -c 'apt-get install -y --only-upgrade cloudflared && systemctl restart cloudflared'
-sudo callsitter-deploy resume     # after reconnecting
-```
+unattended-upgrades installs Debian security updates daily, but never reboots. Docker, cloudflared and reboots are left to `callsitter-maintain.timer`, because restarting any of them drops live calls (and cloudflared carries SSH). Each night at 04:00 UTC, `callsitter-deploy maintain`:
 
-Reboots, e.g. after a kernel update, work the same way: `drain`, then `sudo reboot`. The container starts again on boot.
+1. Checks for newer cloudflared and Docker packages, and for `/var/run/reboot-required` (e.g. a kernel update). If there's none, it stops.
+2. Waits for a moment with no live calls, for up to `MAINTAIN_WAIT` (2 h, `deploy.conf`), then drains. New calls get busy only while the work runs, about a minute. If calls never pause, it defers to the next night.
+3. Upgrades the packages, and restarts cloudflared if it changed. Docker's upgrade restarts dockerd; live-restore keeps the container running.
+4. Reboots if the OS asks for it, or else resumes taking calls. After a reboot, the container starts by itself, and `callsitter-maintain-boot.service` reports once the app is healthy.
+
+Each run that does something sends a line to the main Telegram chat (`TELEGRAM_CHAT_ID`): upgraded, deferred, rebooting, back up after the reboot, or failed. If a "rebooting" message isn't followed by "back up" within a few minutes, check the VPS from OVH's console. A failed run resumes calls before it exits. The deploy key can't run `maintain`, and a deploy that lands during the run fails ("another callsitter-deploy is running"); re-run it.
+
+To do it now rather than wait for the night: `sudo systemctl start --no-block callsitter-maintain` (it outlives this SSH session), then follow `journalctl -fu callsitter-maintain`.
 
 **Tunnel routes** (`deploy/vps/cloudflared.yml`, e.g. the public page's paths) aren't deployed by a push. Copy `deploy/vps` to the VPS and re-run `sudo ./callsitter-vps/bootstrap.sh` between calls (`drain` first): it restarts cloudflared, which drops calls and this SSH session.
 
