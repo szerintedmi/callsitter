@@ -170,6 +170,14 @@ Run these on the VPS (`ssh callsitter-vps`):
 
 Rolling back to an older commit can also be done by reverting on `main`, which deploys the revert. Neither way undoes migrations.
 
+### Dependency updates
+
+Dependabot (`.github/dependabot.yml`) opens grouped PRs every week, for the actions, the npm packages and the Bun base image. A release must be 7 days old before it's proposed. Merging a PR deploys it.
+
+- `vendor-sdks` (`openai`, `@typesafe-ai/sdk`): the tests fake these vendors, so run `bun run eval` on the branch before merging.
+- Base image: the Bun version in the Dockerfile is also the version CI uses. Debian package fixes come in with the `apt-get upgrade` in the image build. That layer is cached until the base image digest changes.
+- Not covered: `CLOUDFLARED_VERSION` in `deploy.yml`. Update that by hand.
+
 ### Investigating from the laptop
 
 `bun run prod …` (`scripts/prod.ts`) copies production data into `data/prod/` over `ssh callsitter-vps`, using your login's sudo. It changes nothing on the VPS.

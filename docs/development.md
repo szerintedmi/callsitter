@@ -19,7 +19,7 @@ Commands are in the [README](../README.md#run). Setup of Telnyx, Telegram, the t
 - `luna`: Luna's rolling update for the owner (`run: progress`), graded by the judge.
 - Options: `--kind jev|live|luna`, `--runs 3` for borderline results, `-v` to print every reply, `--config <dir>` to try a changed copy of `config/`, `--check` to validate the cases only.
 - Results go to `evals/.out/<time>.json`, each live run's audio to `evals/.out/<time>/<case>-<run>.wav` (left: the caller's spoken turn, right: the agent).
-- About a minute (live cases run in real time). Run it after changing a prompt or `jev.yaml`; add a case when a test call shows a new failure.
+- About a minute (live cases run in real time). Run it after changing a prompt or `jev.yaml`, and on a Dependabot `vendor-sdks` PR; add a case when a test call shows a new failure.
 
 ## Test calls
 

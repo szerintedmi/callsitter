@@ -1,0 +1,38 @@
+# Weekly version updates (docs/deploy.md → Dependency updates). Merging deploys, so each PR waits
+# out a cooldown first: a release must be a week old before it's proposed.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    ignore:
+      # 0.7.0 fails every systemOne call on Bun ("Body already used", #48).
+      - dependency-name: "@typesafe-ai/sdk"
+        versions: ["0.7.x"]
+    groups:
+      # The tests fake these vendors: run `bun run eval` before merging (docs/development.md → Evals).
+      vendor-sdks:
+        patterns: ["openai", "@typesafe-ai/sdk"]
+      packages:
+        patterns: ["*"]
+
+  # The Bun base image (tag and digest). CI takes its Bun version from the Dockerfile.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
