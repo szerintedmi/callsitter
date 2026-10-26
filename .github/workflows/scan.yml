@@ -1,0 +1,52 @@
+# Weekly check for known vulnerabilities with a fix available (docs/deploy.md → Vulnerability scan):
+# the npm packages, and the image built from main, which is what production runs. A failed run
+# emails you; fix it by rebuilding without cache or by updating the package.
+name: Scan
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Bump by hand (Dependabot doesn't see `docker run`); pick a release at least a week old.
+  TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Bun version from the Dockerfile
+        id: bun
+        run: |
+          version=$(sed -nE 's/^FROM oven\/bun:([0-9.]+)-slim@sha256:.*/\1/p' Dockerfile)
+          test -n "$version" || { echo "::error::No pinned oven/bun:<version>-slim@sha256 base image in Dockerfile"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ steps.bun.outputs.version }}
+      - run: bun install --frozen-lockfile
+      - run: bun audit --audit-level=high
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      packages: read
+    steps:
+      # deploy.yml tags each main build sha-<commit>; scheduled runs see main's latest commit.
+      - name: Trivy (high and critical, fixable only)
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+        run: |
+          docker run --rm -e TRIVY_USERNAME -e TRIVY_PASSWORD "$TRIVY_IMAGE" image \
+            --no-progress --skip-version-check --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$IMAGE"

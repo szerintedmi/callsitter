@@ -226,6 +226,14 @@ The WAVs are kept until `recordings.delete_wav_after_mp3` is turned on in `confi
 
 `recordings.mp3: false` turns compression off (new recordings stay WAV); `mp3_kbps` sets the bitrate. The demo tools take WAVs: `demos/README.md` says how to decode an MP3.
 
+### Vulnerability scan
+
+`.github/workflows/scan.yml` runs every Monday (or from *Actions → Scan → Run workflow*). It fails, and GitHub emails you, on a high or critical vulnerability that has a fix:
+- `bun audit` over the npm packages.
+- Trivy over the image built from `main`'s latest commit, which is what production runs: Debian packages and `node_modules`.
+
+To fix a Debian package: run *Actions → Deploy → Run workflow* with *no_cache* ticked. The image build's `apt-get upgrade` is otherwise cached until the base image changes. To fix an npm package: bump it (or wait for Dependabot). The Trivy version in `scan.yml` is bumped by hand.
+
 ## Backups
 
 | What | Where | When |
