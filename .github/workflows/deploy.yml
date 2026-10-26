@@ -7,6 +7,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      no_cache:
+        description: Rebuild every layer (picks up Debian fixes for an unchanged base image)
+        type: boolean
+        default: false
 
 # One deploy at a time; a newer push waits (the VPS script also takes a lock).
 concurrency:
@@ -56,6 +61,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          no-cache: ${{ inputs.no_cache == true }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
