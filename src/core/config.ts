@@ -176,7 +176,9 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 export function fillCurrentTime(text: string, ms: number): string {
   if (!text.includes(CURRENT_TIME)) return text;
   const p = Object.fromEntries(UK_TIME.formatToParts(ms).map((x) => [x.type, x.value]));
-  const time = `${p.weekday} ${p.year}-${MONTHS[Number(p.month) - 1]}-${p.day} ${p.hour}:${p.minute} ${p.timeZoneName}`;
+  // Some ICU builds (Bun on macOS) name winter time "GMT+0"; Linux, like production, says "GMT".
+  const zone = p.timeZoneName === "GMT+0" ? "GMT" : p.timeZoneName;
+  const time = `${p.weekday} ${p.year}-${MONTHS[Number(p.month) - 1]}-${p.day} ${p.hour}:${p.minute} ${zone}`;
   return text.replaceAll(CURRENT_TIME, time);
 }
 
