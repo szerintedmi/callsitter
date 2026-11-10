@@ -38,8 +38,11 @@ export async function runLiveCase(c: LiveCase, cfg: AppConfig, s: Settings, apiK
     cfg,
     apiKey,
     from: c.from,
-    history: items.map((i) => ("told" in i ? { told: stageText(cfg, i.told).text } : i)),
-    told: c.told.map((stage) => stageText(cfg, stage)),
+    // A case's `told` goes in like a `told:` line at the end of the history. Appended once the
+    // session had started, Live replied to the history at once (e.g. "Ready." to "have you got
+    // a pen?"), the caller's audio talked over it, and in half the runs it never answered the
+    // caller's turn (2026-11-10: every early reply was in a case with `told`, none without).
+    history: [...items, ...c.told.map((t) => ({ told: t }))].map((i) => ("told" in i ? { told: stageText(cfg, i.told).text } : i)),
     afterCaller: c.after_caller.map((t) => (t === "help" ? helpText(cfg.flow, stage) : stageText(cfg, t))),
     help: helpText(cfg.flow, stage),
     callerAudio,
@@ -143,7 +146,6 @@ interface Conversation {
   from: string;
   /** `told` lines go in as developer messages: Live takes appends only once the session has started */
   history: (Line | { told: string })[];
-  told: { as: LiveAppend; text: string }[];
   afterCaller: { as: LiveAppend; text: string }[];
   /** what answers Live's request for help, in the stage the texts put the call in */
   help: TellLive;
@@ -223,7 +225,6 @@ function converse(o: Conversation): Promise<{ text: string; delegated: boolean; 
       const ev = JSON.parse(String(m.data)) as ServerEvent;
       switch (ev.type) {
         case "session.started":
-          for (const t of o.told) send({ type: APPEND_EVENT[t.as], delegation_id: null, content: t.text });
           start = Date.now();
           wav = new WavBuffer(24000, 2);
           rec = new StereoRecorder(24000, start, wav);
