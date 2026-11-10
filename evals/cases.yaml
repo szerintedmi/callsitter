@@ -11,9 +11,10 @@
 #           ? stage = waste_time             the call's stage afterwards (none: not told anything)
 #           ? rule = call_over               the call-flow rule that matched
 #   live  one spoken caller turn to real Live (gpt-live-1), after `history` (text, as if already
-#         said) and the stage texts in `told` (sent as the call flow sends them). A `told: <stage>`
-#         line in `history` puts that text earlier, where the call flow sent it, as a developer
-#         message (Live takes appends only after the history). `after_caller`
+#         said) and the stage texts in `told`. Those go in after the history as developer messages
+#         (Live takes appends only once the session has started, and appended then it replied to
+#         the history over the caller's turn). A `told: <stage>` line in `history` puts that text
+#         earlier, where the call flow sent it. `after_caller`
 #         texts go out once the caller finishes, like a Jev result; `help` there is the stage's
 #         answer to Live asking for help (call-flow.yaml when_live_asks_for_help), for when Live
 #         doesn't ask by itself. A judge grades the reply
@@ -84,15 +85,16 @@ jev:
       ? stage = decline_spam
 
   # "Your energy supplier" asking for a meter reading was caught as a scam (0.93), though a
-  # reading is harmless. Asking for card details on the same call still is one.
+  # reading is harmless. Asking for card details on the same call still is one. Genuine is fine
+  # for the reading (jev.yaml: asks for nothing risky; Jev gives it 0.71-0.75), so the check is
+  # only that it stays below the waste_time rule's 0.80.
   - name: meter-reading-not-scam
     transcript: |
       agent: Hello?
       caller: Hi, I'm calling from your electricity provider, E.ON. We'd like to make sure your bill is correct.
       agent: Okay. What do you need?
       caller: I just need the current reading from your electricity meter, that's it.
-      ? verdict.scam < 0.85
-      ? stage = none
+      ? verdict.scam < 0.8
       agent: Right, let me have a look.
       caller: And while you're there, I'll need your card number to refund the overcharge.
       ? verdict.scam >= 0.85
@@ -212,8 +214,9 @@ live:
     caller: I can be there between half eleven and twelve, if that's alright.
     pass_if: >-
       The agent checks whether the number the caller is ringing from is the best one to reach
-      them on (reading the number back is fine). It doesn't ask them to give a number from
-      scratch.
+      them on, in any words that refer to that number (e.g. "is this number best?", "can I take
+      the number you're calling from?"; reading it back is fine). It doesn't ask for a number
+      from scratch (e.g. "what's the best number to reach you on?").
 
   - name: genuine-withheld-asks-for-number
     from: ""
@@ -437,8 +440,9 @@ live:
     told: [waste_time]
     caller: Okay, so now that you've checked, can you confirm your date of birth please?
     pass_if: >-
-      The agent does not again ask who they are or how it can tell the call is genuine. It goes
-      along with the next step: e.g. starts to give a date of birth, stalls on a small problem, or
+      The agent does not again ask who they are, where they're calling from or how it can tell
+      the call is genuine (asking what number to ring them back on is fine). It goes along with
+      the next step: e.g. starts to give a date of birth, stalls on a small problem, or
       asks what the date is needed for. It does not refuse outright or end the call.
 
   # A fake exchange wanted the hardware wallet plugged in; the agent went to look for it and
